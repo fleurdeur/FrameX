@@ -3,6 +3,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,11 +26,13 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Search
@@ -52,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,12 +63,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.model.AudioBand
 import com.example.data.model.CustomEffectPresetDocument
@@ -72,6 +81,7 @@ import com.example.data.model.EffectNode
 import com.example.data.model.Layer
 import com.example.engine.EffectCategory
 import com.example.engine.EffectDefinition
+import com.example.engine.EffectThumbnailPreviewer
 import com.example.engine.EffectsCatalog
 import com.example.ui.components.AmPrimaryCtaButton
 import com.example.ui.components.AmSegmentChip
@@ -84,8 +94,8 @@ import com.example.ui.theme.DeepBlack
 import com.example.ui.theme.ElectricBlue
 import com.example.ui.theme.NeonPink
 import com.example.ui.theme.OutlineSubtle
-import com.example.ui.theme.PanelDark
 import com.example.ui.theme.SurfaceDark
+import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.viewmodel.UiState
 import kotlin.math.sin
@@ -103,6 +113,7 @@ fun EffectsBrowserScreen(
     onRemoveEffectNode: (String) -> Unit,
     onSaveChainAsPreset: (String) -> Unit,
     onApplyCloudPreset: (CustomEffectPresetDocument) -> Unit,
+    onOpenEffectInspector: (String) -> Unit = {},
     onBack: () -> Unit
 ) {
     val filteredEffects by remember(searchQuery, selectedCategory) {
@@ -119,6 +130,10 @@ fun EffectsBrowserScreen(
     }
 
     var highlightedEffect by remember { mutableStateOf(EffectsCatalog.allEffects.first()) }
+    val layerSig = remember(selectedLayer) { EffectThumbnailPreviewer.layerSignature(selectedLayer) }
+    val addedByEffectId = remember(selectedLayer?.effects) {
+        selectedLayer?.effects?.associateBy { it.effectId }.orEmpty()
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -138,8 +153,11 @@ fun EffectsBrowserScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (selectedLayer != null) "${selectedLayer.name} • ${selectedLayer.effects.size} stacked"
-                            else "Select a layer to stack GPU shaders",
+                            text = if (selectedLayer != null) {
+                                "Live Low-Res Preview: ${selectedLayer.name} • ${selectedLayer.effects.size} stacked"
+                            } else {
+                                "Select a layer to preview & stack GPU shaders"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = AmTealBright
                         )
@@ -225,7 +243,7 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            // Alight Motion Active Effect Strip Stack
+            // Alight Motion Active Effect Strip Stack (with direct Delete & Inspect)
             if (selectedLayer != null && selectedLayer.effects.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -236,6 +254,7 @@ fun EffectsBrowserScreen(
                     selectedLayer.effects.forEach { node ->
                         AmActiveEffectStripCard(
                             node = node,
+                            onInspect = { onOpenEffectInspector(node.id) },
                             onUpdate = onUpdateEffectNode,
                             onRemove = { onRemoveEffectNode(node.id) }
                         )
@@ -243,7 +262,7 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            // Alight Motion Featured "+ STANDARD SETTINGS" Quick-Apply Bar
+            // Alight Motion Featured "+ STANDARD SETTINGS" Bar with Selected Layer Live Preview!
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                 shape = RoundedCornerShape(12.dp),
@@ -255,9 +274,16 @@ fun EffectsBrowserScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    AmEffectThumbnailBox(
+                        selectedLayer = selectedLayer,
+                        layerSig = layerSig,
+                        effect = highlightedEffect,
+                        accent = AmTealBright,
+                        sizeDp = 50.dp
+                    )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = highlightedEffect.name,
@@ -273,7 +299,6 @@ fun EffectsBrowserScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
                     AmPrimaryCtaButton(
                         text = "+ STANDARD",
                         icon = Icons.Default.Add,
@@ -283,9 +308,9 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            // Alight Motion Adaptive Rounded-Square Effect Icon Grid
+            // Alight Motion Adaptive Rounded-Square Effect Icon Grid with Low-Res Layer+Effect Thumbnails
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 86.dp),
+                columns = GridCells.Adaptive(minSize = 90.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
@@ -295,12 +320,19 @@ fun EffectsBrowserScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(filteredEffects, key = { it.id }) { fx ->
+                    val existingNode = addedByEffectId[fx.id]
                     AmEffectGridTile(
                         effect = fx,
+                        selectedLayer = selectedLayer,
+                        layerSig = layerSig,
                         isHighlighted = highlightedEffect.id == fx.id,
+                        addedNode = existingNode,
                         onTap = {
                             highlightedEffect = fx
                             onAddEffect(fx)
+                        },
+                        onRemoveAdded = existingNode?.let { node ->
+                            { onRemoveEffectNode(node.id) }
                         }
                     )
                 }
@@ -310,44 +342,50 @@ fun EffectsBrowserScreen(
 }
 
 @Composable
-private fun AmEffectGridTile(
+private fun AmEffectThumbnailBox(
+    selectedLayer: Layer?,
+    layerSig: String,
     effect: EffectDefinition,
-    isHighlighted: Boolean,
-    onTap: () -> Unit
+    accent: Color,
+    sizeDp: Dp
 ) {
-    val accent = when (effect.category) {
-        EffectCategory.DESKTOP_HOMAGES -> ElectricBlue
-        EffectCategory.NODE_PROCEDURAL -> AudioCyan
-        EffectCategory.ALIGHT_STAPLES -> AmTeal
-        EffectCategory.VIRAL_SOCIAL -> NeonPink
+    val context = LocalContext.current
+    val immediateCached = remember(layerSig, effect.id) {
+        EffectThumbnailPreviewer.getCachedImmediate(layerSig, effect.id)
+    }
+    val thumbBitmap by produceState<ImageBitmap?>(
+        initialValue = immediateCached,
+        key1 = layerSig,
+        key2 = effect.id
+    ) {
+        if (value == null) {
+            value = EffectThumbnailPreviewer.generateLowResEffectThumbnail(
+                context = context,
+                selectedLayer = selectedLayer,
+                effect = effect
+            )
+        }
     }
 
-    Column(
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(102.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isHighlighted) AmTeal.copy(alpha = 0.14f) else SurfaceDark)
-            .border(
-                width = 1.dp,
-                color = if (isHighlighted) AmTeal else OutlineSubtle,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable(onClick = onTap)
-            .padding(6.dp)
-            .testTag("effect_tile_${effect.id}"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .size(sizeDp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(DeepBlack)
+            .border(0.8.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(9.dp))
+            .testTag("effect_thumb_${effect.id}"),
+        contentAlignment = Alignment.Center
     ) {
-        // Alight Motion Square Vector Shader Preview Box
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(DeepBlack)
-                .border(0.8.dp, accent.copy(alpha = 0.55f), RoundedCornerShape(9.dp)),
-            contentAlignment = Alignment.Center
-        ) {
+        val bmp = thumbBitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp,
+                contentDescription = "${effect.name} preview on ${selectedLayer?.name ?: "sample layer"}",
+                contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.Low,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
             Canvas(modifier = Modifier.size(28.dp)) {
                 val cx = size.width * 0.5f
                 val cy = size.height * 0.5f
@@ -379,29 +417,119 @@ private fun AmEffectGridTile(
                 }
             }
         }
+    }
+}
 
-        Text(
-            text = effect.name,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
+@Composable
+private fun AmEffectGridTile(
+    effect: EffectDefinition,
+    selectedLayer: Layer?,
+    layerSig: String,
+    isHighlighted: Boolean,
+    addedNode: EffectNode?,
+    onTap: () -> Unit,
+    onRemoveAdded: (() -> Unit)?
+) {
+    val accent = when (effect.category) {
+        EffectCategory.DESKTOP_HOMAGES -> ElectricBlue
+        EffectCategory.NODE_PROCEDURAL -> AudioCyan
+        EffectCategory.ALIGHT_STAPLES -> AmTeal
+        EffectCategory.VIRAL_SOCIAL -> NeonPink
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(114.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isHighlighted || addedNode != null) AmTeal.copy(alpha = 0.14f) else SurfaceDark)
+            .border(
+                width = 1.dp,
+                color = when {
+                    addedNode != null -> AmTealBright
+                    isHighlighted -> AmTeal
+                    else -> OutlineSubtle
+                },
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(onClick = onTap)
+            .padding(6.dp)
+            .testTag("effect_tile_${effect.id}")
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Live Low-Quality Layer + Effect Thumbnail Preview!
+            AmEffectThumbnailBox(
+                selectedLayer = selectedLayer,
+                layerSig = layerSig,
+                effect = effect,
+                accent = accent,
+                sizeDp = 54.dp
+            )
+
+            Text(
+                text = effect.name,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        // Quick Delete badge when this effect is already stacked on the selected layer
+        if (addedNode != null && onRemoveAdded != null) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .clip(CircleShape)
+                    .background(NeonPink)
+                    .clickable(onClick = onRemoveAdded)
+                    .testTag("browser_grid_remove_${addedNode.id}")
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DeleteOutline,
+                    contentDescription = "Remove ${effect.name} from layer",
+                    tint = Color.White,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .clip(CircleShape)
+                    .background(AmTeal)
+                    .padding(3.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Effect applied",
+                    tint = DeepBlack,
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun AmActiveEffectStripCard(
     node: EffectNode,
+    onInspect: () -> Unit,
     onUpdate: (EffectNode) -> Unit,
     onRemove: () -> Unit
 ) {
     Card(
         modifier = Modifier
-            .width(256.dp)
-            .border(1.dp, OutlineSubtle, RoundedCornerShape(10.dp)),
+            .width(262.dp)
+            .border(1.dp, AmTeal.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+            .clickable(onClick = onInspect),
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceDark)
     ) {
@@ -411,25 +539,38 @@ private fun AmActiveEffectStripCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = onInspect)
+                ) {
                     Icon(
                         imageVector = Icons.Default.DragHandle,
                         contentDescription = null,
-                        tint = TextSecondary,
+                        tint = AmTealBright,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = node.displayName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Column {
+                        Text(
+                            text = node.displayName,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Tap for 5 Params • ◆ Keyframes & Curve ▸",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmTealBright
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { onUpdate(node.copy(enabled = !node.enabled)) },
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(30.dp)
                 ) {
                     Icon(
                         imageVector = if (node.enabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
@@ -438,12 +579,17 @@ private fun AmActiveEffectStripCard(
                         modifier = Modifier.size(16.dp)
                     )
                 }
-                IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier
+                        .size(30.dp)
+                        .testTag("browser_delete_effect_${node.id}")
+                ) {
                     Icon(
                         imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "Delete effect",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(16.dp)
+                        contentDescription = "Delete ${node.displayName}",
+                        tint = NeonPink,
+                        modifier = Modifier.size(17.dp)
                     )
                 }
             }

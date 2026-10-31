@@ -45,15 +45,18 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.model.Layer
 import com.example.data.model.LayerType
 import com.example.data.model.Project
+import com.example.data.preferences.PreviewQuality
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
 import com.example.engine.FramePollutionGlRenderer
+import com.example.engine.HardwareVideoPreviewEngine
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.KeyframeAmber
 import com.example.ui.theme.OutlineSubtle
 import com.example.ui.theme.PlayheadRed
 import com.example.ui.theme.SurfaceDark
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -61,6 +64,7 @@ import kotlin.math.roundToInt
 /**
  * Zero-Lag 60FPS Alight Motion Preview Stage:
  * - Hardware OpenGL ES 2.0 per-layer quad compositor with VSync-locked continuous playback
+ * - RAM Pre-render frame cache 1-draw-call fast-path + PreviewQuality resolution scaling
  * - Real imported VIDEO & IMAGE aspect-accurate rendering + async frame decode wakeup
  * - Interactive Alight Motion Selected Layer Bounding Box Gizmo:
  *   8 White/Teal resize handles, rotation stem, custom Pivot crosshair (pivotX, pivotY),
@@ -71,6 +75,12 @@ fun GlPreviewCanvas(
     project: Project,
     playheadMs: Long,
     isPlaying: Boolean = false,
+    previewQuality: PreviewQuality = PreviewQuality.HALF,
+    previewFpsCap: Int = 60,
+    isLooping: Boolean = true,
+    projectRevision: Long = 0L,
+    usePlaybackCache: Boolean = true,
+    onRenderStatsUpdate: ((fps: Int, frameMs: Float) -> Unit)? = null,
     audioSnapshot: AudioSpectrumSnapshot,
     canvasZoom: Float,
     canvasPanX: Float,
@@ -82,12 +92,15 @@ fun GlPreviewCanvas(
     show3DGridOverlay: Boolean = false,
     onViewportGesture: (zoom: Float, panX: Float, panY: Float) -> Unit,
     onDragSelectedLayer: ((dxProjPx: Float, dyProjPx: Float) -> Unit)? = null,
+    onScaleAndRotateSelectedLayer: ((scalePctDelta: Float, rotDegDelta: Float) -> Unit)? = null,
+    onSelectLayerOnCanvas: ((layerId: String) -> Unit)? = null,
+    previewFrameSampler: PreviewFrameSampler? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
 
-    var glViewRef = remember { arrayOfNulls<GLSurfaceView>(1) }
+    val glViewRef = remember { arrayOfNulls<GLSurfaceView>(1) }
     val renderer = remember(context) {
         FramePollutionGlRenderer(
             appContext = context.applicationContext,
@@ -121,22 +134,48 @@ fun GlPreviewCanvas(
         }
     }
 
+    // Request immediate dirty render when PreviewQuality changes while paused
+    LaunchedEffect(previewQuality, projectRevision) {
+        renderer.previewQuality = previewQuality
+        renderer.projectRevision = projectRevision
+        if (!isPlaying) {
+            glView.requestRender()
+        }
+    }
+
+    // Lightweight telemetry poll when HUD callback is attached
+    LaunchedEffect(onRenderStatsUpdate, isPlaying) {
+        if (onRenderStatsUpdate != null) {
+            while (true) {
+                onRenderStatsUpdate(renderer.liveFps, renderer.lastFrameRenderMs)
+                delay(500L)
+            }
+        }
+    }
+
     SideEffect {
         renderer.currentProject = project
+        renderer.previewQuality = previewQuality
+        renderer.previewFpsCap = previewFpsCap
+        renderer.isLooping = isLooping
+        renderer.projectRevision = projectRevision
+        renderer.usePlaybackCache = usePlaybackCache
         renderer.audioSnapshot = audioSnapshot
         renderer.cameraYawDeg = cameraYawDeg
         renderer.cameraPitchDeg = cameraPitchDeg
         renderer.cameraDistance = cameraDistance
         renderer.show3DGridOverlay = show3DGridOverlay
+        previewFrameSampler?.glViewProvider = { glViewRef[0] }
         if (!isPlaying) {
             renderer.playheadMs = playheadMs
             glView.requestRender()
         } else {
-            // Keep VSync anchor gently drift-corrected if user scrubbed during playback
+            // Keep VSync anchor drift-corrected only on genuine loop wraps or scrub jumps (> 300ms)
             val nowNano = System.nanoTime()
-            val expectedMs = (renderer.playbackAnchorMs + (nowNano - renderer.playbackAnchorNano) / 1_000_000L) %
-                project.durationMs.coerceAtLeast(1L)
-            if (abs(expectedMs - playheadMs) > 220L) {
+            val dur = project.durationMs.coerceAtLeast(1L)
+            val rawExpected = renderer.playbackAnchorMs + (nowNano - renderer.playbackAnchorNano) / 1_000_000L
+            val expectedMs = if (isLooping) rawExpected % dur else rawExpected.coerceAtMost(dur)
+            if (abs(expectedMs - playheadMs) > 300L) {
                 renderer.playbackAnchorMs = playheadMs
                 renderer.playbackAnchorNano = nowNano
             }
@@ -146,6 +185,10 @@ fun GlPreviewCanvas(
     DisposableEffect(glView) {
         glView.onResume()
         onDispose {
+            HardwareVideoPreviewEngine.detachRendererSurfaces(renderer.rendererToken)
+            glView.queueEvent {
+                renderer.releaseGlResources()
+            }
             glView.onPause()
         }
     }
@@ -156,8 +199,13 @@ fun GlPreviewCanvas(
     val selectedLayer = remember(project.layers, selectedLayerId) {
         project.layers.firstOrNull { it.id == selectedLayerId }
     }
+    val currentProject by rememberUpdatedState(project)
+    val currentPlayheadMs by rememberUpdatedState(playheadMs)
+    val currentAudioSnapshot by rememberUpdatedState(audioSnapshot)
     val currentSelected by rememberUpdatedState(selectedLayer)
     val currentDragCallback by rememberUpdatedState(onDragSelectedLayer)
+    val currentScaleRotateCallback by rememberUpdatedState(onScaleAndRotateSelectedLayer)
+    val currentSelectLayerCallback by rememberUpdatedState(onSelectLayerOnCanvas)
     val currentViewportCallback by rememberUpdatedState(onViewportGesture)
     val currentProjectWidth by rememberUpdatedState(project.width.coerceAtLeast(1))
     val currentZoom by rememberUpdatedState(canvasZoom)
@@ -174,9 +222,10 @@ fun GlPreviewCanvas(
 
         val rawW = if (containerAspect > aspect) availH * aspect else availW
         val rawH = if (containerAspect > aspect) availH else availW / aspect
-        val frameW = (rawW - 14.dp).coerceAtLeast(48.dp)
-        val frameH = (rawH - 14.dp).coerceAtLeast(48.dp)
+        val frameW = (rawW - 2.dp).coerceAtLeast(48.dp)
+        val frameH = (rawH - 2.dp).coerceAtLeast(48.dp)
         val frameWidthPx = with(density) { frameW.toPx().coerceAtLeast(1f) }
+        val frameHeightPx = with(density) { frameH.toPx().coerceAtLeast(1f) }
 
         Box(
             modifier = Modifier
@@ -186,30 +235,143 @@ fun GlPreviewCanvas(
                     scaleX = canvasZoom
                     scaleY = canvasZoom
                 }
-                .shadow(10.dp, RoundedCornerShape(3.dp))
-                .clip(RoundedCornerShape(3.dp))
-                .border(1.dp, Color(0xFF2B3140), RoundedCornerShape(3.dp))
+                .shadow(8.dp, RoundedCornerShape(2.dp))
+                .clip(RoundedCornerShape(2.dp))
+                .border(0.8.dp, Color(0xFF2B3140), RoundedCornerShape(2.dp))
                 .pointerInput(Unit) {
                     awaitEachGesture {
+                        var gestureMode = 0 // 0=move, 1=scaleCorner, 2=rotateKnob
+                        var totalMoved = 0f
+                        var initialDownPos = Offset.Zero
+                        var downRecorded = false
+
                         do {
                             val event = awaitPointerEvent()
                             val pressed = event.changes.filter { it.pressed }
+                            if (!downRecorded && pressed.size == 1) {
+                                downRecorded = true
+                                initialDownPos = pressed[0].position
+                                val sel = currentSelected
+                                if (sel != null && sel.visible && sel.type != LayerType.AUDIO &&
+                                    currentPlayheadMs in sel.startTimeMs..sel.endTimeMs
+                                ) {
+                                    val projW = currentProject.width.coerceAtLeast(1).toFloat()
+                                    val projH = currentProject.height.coerceAtLeast(1).toFloat()
+                                    val scaleToCanvas = frameWidthPx / projW
+                                    val tr = AnimationEvaluator.evaluateWorldTransform(
+                                        sel, currentProject.layers, currentPlayheadMs, currentAudioSnapshot,
+                                        applyActiveCamera = sel.type != LayerType.CAMERA
+                                    )
+                                    val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
+                                    val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
+                                    val (bw, bh) = computeLayerProjBounds(sel, projW, projH)
+                                    val hw = (bw * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(16f)
+                                    val hh = (bh * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(14f)
+                                    // Inverse-rotate touch point around layer center to check gizmo handles
+                                    val rad = -Math.toRadians(tr.rotZ.toDouble())
+                                    val dx = initialDownPos.x - cx
+                                    val dy = initialDownPos.y - cy
+                                    val lx = (dx * kotlin.math.cos(rad) - dy * kotlin.math.sin(rad)).toFloat()
+                                    val ly = (dx * kotlin.math.sin(rad) + dy * kotlin.math.cos(rad)).toFloat()
+
+                                    val rotDist = kotlin.math.hypot(lx, ly - (-hh - 22f))
+                                    val cornerDist = minOf(
+                                        kotlin.math.hypot(abs(lx) - hw, abs(ly) - hh),
+                                        kotlin.math.hypot(abs(lx) - hw, ly),
+                                        kotlin.math.hypot(lx, abs(ly) - hh)
+                                    )
+                                    if (rotDist <= 26f && currentScaleRotateCallback != null) {
+                                        gestureMode = 2
+                                    } else if (cornerDist <= 24f && currentScaleRotateCallback != null) {
+                                        gestureMode = 1
+                                    }
+                                }
+                            }
+
                             if (pressed.size >= 2) {
                                 val zoom = event.calculateZoom()
                                 val pan = event.calculatePan()
                                 if (zoom != 1f || pan != Offset.Zero) {
+                                    totalMoved += pan.getDistance() + abs(zoom - 1f) * 100f
                                     currentViewportCallback(zoom, pan.x, pan.y)
                                     event.changes.forEach { if (it.positionChanged()) it.consume() }
                                 }
-                            } else if (pressed.size == 1 && currentSelected != null && currentSelected?.type != LayerType.AUDIO && currentDragCallback != null) {
+                            } else if (pressed.size == 1) {
                                 val pan = event.calculatePan()
                                 if (pan != Offset.Zero) {
-                                    val pxToProj = currentProjectWidth.toFloat() / (frameWidthPx * currentZoom.coerceAtLeast(0.2f))
-                                    currentDragCallback?.invoke(pan.x * pxToProj, pan.y * pxToProj)
-                                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                    totalMoved += pan.getDistance()
+                                    val sel = currentSelected
+                                    if (sel != null && sel.type != LayerType.AUDIO) {
+                                        when (gestureMode) {
+                                            2 -> {
+                                                // Rotate around layer center
+                                                val projW = currentProject.width.coerceAtLeast(1).toFloat()
+                                                val scaleToCanvas = frameWidthPx / projW
+                                                val tr = AnimationEvaluator.evaluateWorldTransform(
+                                                    sel, currentProject.layers, currentPlayheadMs, currentAudioSnapshot,
+                                                    applyActiveCamera = sel.type != LayerType.CAMERA
+                                                )
+                                                val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
+                                                val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
+                                                val curPos = pressed[0].position
+                                                val prevPos = curPos - pan
+                                                val a1 = kotlin.math.atan2(prevPos.y - cy, prevPos.x - cx)
+                                                val a2 = kotlin.math.atan2(curPos.y - cy, curPos.x - cx)
+                                                var degDelta = Math.toDegrees((a2 - a1).toDouble()).toFloat()
+                                                if (degDelta > 180f) degDelta -= 360f
+                                                if (degDelta < -180f) degDelta += 360f
+                                                currentScaleRotateCallback?.invoke(0f, degDelta)
+                                            }
+                                            1 -> {
+                                                // Scale outward/inward from layer center
+                                                val projW = currentProject.width.coerceAtLeast(1).toFloat()
+                                                val scaleToCanvas = frameWidthPx / projW
+                                                val tr = AnimationEvaluator.evaluateWorldTransform(
+                                                    sel, currentProject.layers, currentPlayheadMs, currentAudioSnapshot,
+                                                    applyActiveCamera = sel.type != LayerType.CAMERA
+                                                )
+                                                val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
+                                                val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
+                                                val curPos = pressed[0].position
+                                                val prevPos = curPos - pan
+                                                val dPrev = kotlin.math.hypot(prevPos.x - cx, prevPos.y - cy).coerceAtLeast(8f)
+                                                val dCur = kotlin.math.hypot(curPos.x - cx, curPos.y - cy).coerceAtLeast(8f)
+                                                val pctDelta = ((dCur - dPrev) / 1.4f)
+                                                currentScaleRotateCallback?.invoke(pctDelta, 0f)
+                                            }
+                                            else -> {
+                                                val pxToProj = currentProjectWidth.toFloat() / (frameWidthPx * currentZoom.coerceAtLeast(0.2f))
+                                                currentDragCallback?.invoke(pan.x * pxToProj, pan.y * pxToProj)
+                                            }
+                                        }
+                                        event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                    }
                                 }
                             }
                         } while (event.changes.any { it.pressed })
+
+                        // Tap-to-Select Layer directly on Canvas when user taps without dragging!
+                        if (downRecorded && totalMoved < 8f && currentSelectLayerCallback != null) {
+                            val projW = currentProject.width.coerceAtLeast(1).toFloat()
+                            val projH = currentProject.height.coerceAtLeast(1).toFloat()
+                            val scaleToCanvas = frameWidthPx / projW
+                            val hitLayer = currentProject.layers.asReversed().firstOrNull { cand ->
+                                if (!cand.visible || cand.type == LayerType.AUDIO || cand.type == LayerType.CAMERA) return@firstOrNull false
+                                if (currentPlayheadMs !in cand.startTimeMs..cand.endTimeMs) return@firstOrNull false
+                                val tr = AnimationEvaluator.evaluateWorldTransform(
+                                    cand, currentProject.layers, currentPlayheadMs, currentAudioSnapshot, applyActiveCamera = true
+                                )
+                                val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
+                                val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
+                                val (bw, bh) = computeLayerProjBounds(cand, projW, projH)
+                                val hw = (bw * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(18f)
+                                val hh = (bh * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(18f)
+                                abs(initialDownPos.x - cx) <= hw && abs(initialDownPos.y - cy) <= hh
+                            }
+                            if (hitLayer != null) {
+                                currentSelectLayerCallback?.invoke(hitLayer.id)
+                            }
+                        }
                     }
                 }
         ) {
@@ -359,7 +521,7 @@ private fun computeLayerProjBounds(layer: Layer, projW: Float, projH: Float): Pa
         LayerType.VIDEO, LayerType.IMAGE -> {
             val mw = layer.mediaWidth.takeIf { it > 0 }?.toFloat() ?: projW
             val mh = layer.mediaHeight.takeIf { it > 0 }?.toFloat() ?: projH
-            val fitScale = min((projW * 0.85f) / mw, (projH * 0.85f) / mh)
+            val fitScale = min(projW / mw, projH / mh)
             Pair(mw * fitScale, mh * fitScale)
         }
         LayerType.SHAPE -> {

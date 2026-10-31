@@ -2,21 +2,14 @@
 
 package com.example.ui.screens
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
@@ -25,10 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ShowChart
-import androidx.compose.material.icons.automirrored.filled.TrendingUp
-import androidx.compose.material.icons.filled.Functions
-import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,73 +29,90 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AnimatableProperty
+import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
 import com.example.data.model.PropertyTarget
-import com.example.engine.AnimationEvaluator
+import com.example.engine.EffectsCatalog
+import com.example.ui.components.AmControllableCurveEditor
+import com.example.ui.components.AmKeyframeCluster
 import com.example.ui.components.AmSegmentChip
-import com.example.ui.components.AmSubToolRailButton
 import com.example.ui.theme.AmBgDark
-import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
-import com.example.ui.theme.DeepBlack
-import com.example.ui.theme.NeonPink
 import com.example.ui.theme.OutlineSubtle
-import com.example.ui.theme.PlayheadWhite
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextSecondary
 import kotlin.math.abs
-import kotlin.math.hypot
 
+/**
+ * Full-Screen Alight Motion + KeyFlow Easing & Value Graph Editor!
+ * Supports BOTH Layer Transform Properties AND Added Effect Parameters (all 5 slots per effect),
+ * with 100% controllable overshoot Bezier handles, Step/Hold curves, Copy/Paste Curve,
+ * Multi-Keyframe Value Graph dragging, and Procedural Math Expressions!
+ */
 @Composable
 fun GraphEditorScreen(
     selectedLayer: Layer?,
     selectedProperty: PropertyTarget,
+    selectedEffectId: String? = null,
+    selectedEffectSlot: EffectParamSlot = EffectParamSlot.PRIMARY,
+    initialTargetsEffect: Boolean = false,
+    hasCopiedCurve: Boolean = false,
     playheadMs: Long,
     onSelectProperty: (PropertyTarget) -> Unit,
-    onUpdateBezierHandles: (outX: Float, outY: Float, inX: Float, inY: Float) -> Unit,
-    onUpdateExpression: (String) -> Unit,
+    onSelectEffect: (String) -> Unit = {},
+    onSelectEffectSlot: (EffectParamSlot) -> Unit = {},
+    onToggleKeyframe: (isEffect: Boolean) -> Unit = {},
+    onJumpKeyframe: (forward: Boolean, isEffect: Boolean) -> Unit = { _, _ -> },
+    onUpdateBezierHandles: (outX: Float, outY: Float, inX: Float, inY: Float, holdStep: Boolean, isEffect: Boolean) -> Unit,
+    onCopyCurve: (isEffect: Boolean) -> Unit = {},
+    onPasteCurve: (isEffect: Boolean) -> Unit = {},
+    onDragKeyframeNode: (kfId: String, newTimeMs: Long, newValue: Float, isEffect: Boolean) -> Unit = { _, _, _, _ -> },
+    onScrubPlayhead: (Long) -> Unit = {},
+    onUpdateExpression: (String, isEffect: Boolean) -> Unit,
     onBack: () -> Unit
 ) {
-    val prop = selectedLayer?.propertyFor(selectedProperty)
-    val sortedKfs = prop?.keyframes?.sortedBy { it.timeMs }.orEmpty()
-    val segIdx = (sortedKfs.indexOfLast { it.timeMs <= playheadMs }.coerceAtLeast(0))
-        .coerceAtMost((sortedKfs.size - 2).coerceAtLeast(0))
-    val activeOut = sortedKfs.getOrNull(segIdx)
-    val activeIn = sortedKfs.getOrNull(segIdx + 1)
+    val layerEffects = selectedLayer?.effects.orEmpty()
+    var editingEffectMode by remember(initialTargetsEffect, layerEffects.size) {
+        mutableStateOf(initialTargetsEffect && layerEffects.isNotEmpty())
+    }
+    val activeFx = remember(layerEffects, selectedEffectId) {
+        layerEffects.firstOrNull { it.id == selectedEffectId } ?: layerEffects.firstOrNull()
+    }
+    val activeFxSpecs = remember(activeFx?.effectId) {
+        activeFx?.let { EffectsCatalog.findById(it.effectId).paramSpecs() }.orEmpty()
+    }
+    val activeFxSpec = activeFxSpecs.firstOrNull { it.slot == selectedEffectSlot } ?: activeFxSpecs.firstOrNull()
 
-    var p1x by remember(selectedProperty, segIdx, activeOut?.outTangentX) {
-        mutableFloatStateOf(activeOut?.outTangentX ?: 0.25f)
+    val activeProp: AnimatableProperty = when {
+        editingEffectMode && activeFx != null -> activeFx.propertyFor(selectedEffectSlot)
+        selectedLayer != null -> selectedLayer.propertyFor(selectedProperty)
+        else -> AnimatableProperty(0f)
     }
-    var p1y by remember(selectedProperty, segIdx, activeOut?.outTangentY) {
-        mutableFloatStateOf(activeOut?.outTangentY ?: 0.1f)
+    val minDomain = if (editingEffectMode && activeFxSpec != null) activeFxSpec.minVal else selectedProperty.minVal
+    val maxDomain = if (editingEffectMode && activeFxSpec != null) activeFxSpec.maxVal else selectedProperty.maxVal
+    val activeTitle = if (editingEffectMode && activeFx != null && activeFxSpec != null) {
+        "${activeFx.displayName} • ${activeFxSpec.label}"
+    } else {
+        selectedProperty.label
     }
-    var p2x by remember(selectedProperty, segIdx, activeIn?.inTangentX) {
-        mutableFloatStateOf(activeIn?.inTangentX ?: 0.25f)
+
+    var expressionText by remember { mutableStateOf(activeProp.expression) }
+    LaunchedEffect(selectedLayer?.id, selectedProperty, activeFx?.id, selectedEffectSlot, editingEffectMode, activeProp.expression) {
+        expressionText = activeProp.expression
     }
-    var p2y by remember(selectedProperty, segIdx, activeIn?.inTangentY) {
-        mutableFloatStateOf(activeIn?.inTangentY ?: 1.0f)
-    }
-    var expressionText by remember(selectedLayer?.id, selectedProperty) {
-        mutableStateOf(prop?.expression ?: "")
-    }
-    var curveMode by remember { mutableIntStateOf(1) } // 0=Linear, 1=Bezier, 2=Overshoot, 3=Expr
+
+    val hasKfAtPlayhead = activeProp.keyframes.any { abs(it.timeMs - playheadMs) <= 25L }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -121,14 +127,27 @@ fun GraphEditorScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Easing & Bezier Graph",
+                            text = "Curve & Value Graph Editor",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${selectedProperty.label} • cubic-bezier(${String.format("%.2f", p1x)}, ${String.format("%.2f", p1y)}, ${String.format("%.2f", p2x)}, ${String.format("%.2f", p2y)})",
+                            text = "${selectedLayer?.name ?: "No Layer"} • $activeTitle (${activeProp.keyframes.size} ◆)",
                             style = MaterialTheme.typography.labelSmall,
                             color = AmTealBright
+                        )
+                    }
+                },
+                actions = {
+                    if (selectedLayer != null) {
+                        AmKeyframeCluster(
+                            hasKeyframeAtPlayhead = hasKfAtPlayhead,
+                            keyframeCount = activeProp.keyframes.size,
+                            onPrevKeyframe = { onJumpKeyframe(false, editingEffectMode) },
+                            onToggleKeyframe = { onToggleKeyframe(editingEffectMode) },
+                            onNextKeyframe = { onJumpKeyframe(true, editingEffectMode) },
+                            modifier = Modifier.padding(end = 8.dp),
+                            diamondTestTag = "graph_keyframe_diamond_toggle"
                         )
                     }
                 },
@@ -143,206 +162,125 @@ fun GraphEditorScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Property Selector Strip
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                PropertyTarget.entries.forEach { target ->
+            // 1. TARGET SOURCE SWITCHER: LAYER TRANSFORM vs ADDED EFFECTS
+            if (layerEffects.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 520.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     AmSegmentChip(
-                        label = target.label,
-                        selected = selectedProperty == target,
-                        onClick = { onSelectProperty(target) }
+                        label = "Layer Transform",
+                        selected = !editingEffectMode,
+                        onClick = { editingEffectMode = false }
+                    )
+                    AmSegmentChip(
+                        label = "Effect Properties (${layerEffects.size})",
+                        selected = editingEffectMode,
+                        onClick = {
+                            editingEffectMode = true
+                            if (activeFx != null && selectedEffectId == null) {
+                                onSelectEffect(activeFx.id)
+                            }
+                        },
+                        testTag = "graph_mode_effects_chip"
                     )
                 }
             }
 
-            // Alight Motion Split Graph Workspace: Left 4-Mode Curve Rail + Square Bezier Grid Box
-            Row(
-                modifier = Modifier
-                    .widthIn(max = 460.dp)
-                    .fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Left Vertical Curve Mode Icon Column (Exact Alight Motion Easing Rail)
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    AmSubToolRailButton(
-                        icon = Icons.AutoMirrored.Filled.TrendingUp,
-                        label = "Linear",
-                        selected = curveMode == 0,
-                        onClick = {
-                            curveMode = 0
-                            p1x = 0f; p1y = 0f; p2x = 1f; p2y = 1f
-                            onUpdateBezierHandles(p1x, p1y, p2x, p2y)
-                        }
-                    )
-                    AmSubToolRailButton(
-                        icon = Icons.AutoMirrored.Filled.ShowChart,
-                        label = "Bezier",
-                        selected = curveMode == 1,
-                        onClick = {
-                            curveMode = 1
-                            p1x = 0.42f; p1y = 0f; p2x = 0.18f; p2y = 1f
-                            onUpdateBezierHandles(p1x, p1y, p2x, p2y)
-                        }
-                    )
-                    AmSubToolRailButton(
-                        icon = Icons.Default.Timeline,
-                        label = "Bounce",
-                        selected = curveMode == 2,
-                        onClick = {
-                            curveMode = 2
-                            p1x = 0.34f; p1y = 1.32f; p2x = 0.64f; p2y = 1f
-                            onUpdateBezierHandles(p1x, p1y, p2x, p2y)
-                        }
-                    )
-                    AmSubToolRailButton(
-                        icon = Icons.Default.Functions,
-                        label = "Expr",
-                        selected = curveMode == 3,
-                        onClick = { curveMode = 3 }
-                    )
-                }
-
-                // Square Alight Motion Dark Bezier Curve Box
-                Box(
+            // 2. CHANNEL SELECTOR STRIP
+            if (!editingEffectMode) {
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(DeepBlack)
-                        .border(1.2.dp, OutlineSubtle, RoundedCornerShape(14.dp))
-                        .padding(22.dp)
+                        .widthIn(max = 520.dp)
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    var draggingHandle by remember { mutableIntStateOf(0) }
-
-                    Canvas(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(Unit) {
-                                detectDragGestures(
-                                    onDragStart = { start ->
-                                        val w = size.width.toFloat().coerceAtLeast(1f)
-                                        val h = size.height.toFloat().coerceAtLeast(1f)
-                                        val h1 = Offset(p1x * w, (1f - p1y) * h)
-                                        val h2 = Offset(p2x * w, (1f - p2y) * h)
-                                        val d1 = hypot(start.x - h1.x, start.y - h1.y)
-                                        val d2 = hypot(start.x - h2.x, start.y - h2.y)
-                                        draggingHandle = if (d1 <= d2) 1 else 2
-                                        curveMode = 1
-                                    },
-                                    onDrag = { change, _ ->
-                                        change.consume()
-                                        val nx = (change.position.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                                        val ny = (1f - (change.position.y / size.height.coerceAtLeast(1))).coerceIn(-0.35f, 1.35f)
-                                        if (draggingHandle == 1) {
-                                            p1x = nx; p1y = ny
-                                        } else {
-                                            p2x = nx; p2y = ny
-                                        }
-                                        onUpdateBezierHandles(p1x, p1y, p2x, p2y)
-                                    }
-                                )
-                            }
-                            .testTag("bezier_curve_canvas")
-                    ) {
-                        val w = size.width
-                        val h = size.height
-
-                        // Hairline 4x4 Grid
-                        for (g in 0..4) {
-                            val f = g / 4f
-                            drawLine(Color(0xFF232836), Offset(w * f, 0f), Offset(w * f, h), strokeWidth = 1.2f)
-                            drawLine(Color(0xFF232836), Offset(0f, h * f), Offset(w, h * f), strokeWidth = 1.2f)
-                        }
-
-                        // Diagonal linear baseline
-                        drawLine(Color(0x44FFFFFF), Offset(0f, h), Offset(w, 0f), strokeWidth = 1.6f)
-
-                        val p0 = Offset(0f, h)
-                        val p3 = Offset(w, 0f)
-                        val c1 = Offset(p1x * w, (1f - p1y) * h)
-                        val c2 = Offset(p2x * w, (1f - p2y) * h)
-
-                        // Speed / Velocity Bars
-                        for (s in 1..20) {
-                            val t0 = (s - 1) / 20f
-                            val t1 = s / 20f
-                            val y0 = AnimationEvaluator.evaluateCubicBezier(t0, p1x, p1y, p2x, p2y)
-                            val y1 = AnimationEvaluator.evaluateCubicBezier(t1, p1x, p1y, p2x, p2y)
-                            val vel = abs(y1 - y0) * 20f
-                            val barH = (vel * h * 0.18f).coerceAtMost(h * 0.45f)
-                            drawLine(
-                                color = AmTeal.copy(alpha = 0.28f),
-                                start = Offset(t1 * w, h),
-                                end = Offset(t1 * w, h - barH),
-                                strokeWidth = 5f
-                            )
-                        }
-
-                        // Alight Motion Tangent Stems
-                        drawLine(NeonPink, p0, c1, strokeWidth = 2.8f)
-                        drawLine(AmTealBright, p3, c2, strokeWidth = 2.8f)
-
-                        // Crisp White-Teal Spline Curve
-                        val curve = Path().apply {
-                            moveTo(p0.x, p0.y)
-                            cubicTo(c1.x, c1.y, c2.x, c2.y, p3.x, p3.y)
-                        }
-                        drawPath(curve, color = PlayheadWhite, style = Stroke(width = 4.5f))
-
-                        // Alight Motion Ringed Circular Tangent Handles
-                        drawCircle(DeepBlack, radius = 13f, center = c1)
-                        drawCircle(NeonPink, radius = 13f, center = c1, style = Stroke(width = 3.5f))
-                        drawCircle(Color.White, radius = 4f, center = c1)
-
-                        drawCircle(DeepBlack, radius = 13f, center = c2)
-                        drawCircle(AmTealBright, radius = 13f, center = c2, style = Stroke(width = 3.5f))
-                        drawCircle(Color.White, radius = 4f, center = c2)
+                    PropertyTarget.entries.forEach { target ->
+                        val kfs = selectedLayer?.propertyFor(target)?.keyframes?.size ?: 0
+                        AmSegmentChip(
+                            label = if (kfs > 0) "${target.label} ◆$kfs" else target.label,
+                            selected = selectedProperty == target,
+                            compact = true,
+                            onClick = { onSelectProperty(target) }
+                        )
+                    }
+                }
+            } else {
+                // Effect Node Selector + All 5 Effect Parameter Slots
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 520.dp)
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Effect:", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    layerEffects.forEach { fx ->
+                        AmSegmentChip(
+                            label = fx.displayName,
+                            selected = activeFx?.id == fx.id,
+                            compact = true,
+                            onClick = { onSelectEffect(fx.id) }
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 520.dp)
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Param:", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    activeFxSpecs.forEach { spec ->
+                        val kfs = activeFx?.propertyFor(spec.slot)?.keyframes?.size ?: 0
+                        AmSegmentChip(
+                            label = if (kfs > 0) "${spec.label} ◆$kfs" else spec.label,
+                            selected = selectedEffectSlot == spec.slot,
+                            compact = true,
+                            onClick = { onSelectEffectSlot(spec.slot) }
+                        )
                     }
                 }
             }
 
-            // Alight Motion Easing Preset Strip
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                val presets = listOf(
-                    "Linear" to floatArrayOf(0f, 0f, 1f, 1f),
-                    "Ease Out" to floatArrayOf(0.16f, 1f, 0.30f, 1f),
-                    "Ease InOut" to floatArrayOf(0.83f, 0f, 0.17f, 1f),
-                    "Overshoot" to floatArrayOf(0.34f, 1.32f, 0.64f, 1f),
-                    "Velocity Whip" to floatArrayOf(0.08f, 0.96f, 0.18f, 1f)
-                )
-                presets.forEach { (name, pts) ->
-                    AmSegmentChip(
-                        label = name,
-                        selected = false,
-                        onClick = {
-                            p1x = pts[0]; p1y = pts[1]; p2x = pts[2]; p2y = pts[3]
-                            onUpdateBezierHandles(p1x, p1y, p2x, p2y)
-                        }
-                    )
-                }
-            }
+            // 3. 100% CONTROLLABLE BEZIER & MULTI-KEYFRAME VALUE GRAPH CANVAS
+            AmControllableCurveEditor(
+                property = activeProp,
+                minValue = minDomain,
+                maxValue = maxDomain,
+                playheadMs = playheadMs,
+                clipStartMs = selectedLayer?.startTimeMs ?: 0L,
+                clipEndMs = selectedLayer?.endTimeMs ?: 10000L,
+                hasCopiedCurve = hasCopiedCurve,
+                onUpdateBezierHandles = { ox, oy, ix, iy, hold ->
+                    onUpdateBezierHandles(ox, oy, ix, iy, hold, editingEffectMode)
+                },
+                onCopyCurve = { onCopyCurve(editingEffectMode) },
+                onPasteCurve = { onPasteCurve(editingEffectMode) },
+                onDragKeyframeNode = { id, t, v ->
+                    onDragKeyframeNode(id, t, v, editingEffectMode)
+                },
+                onScrubPlayhead = onScrubPlayhead,
+                canvasHeight = 260.dp,
+                compactMode = false,
+                canvasTestTag = "bezier_curve_canvas",
+                modifier = Modifier.widthIn(max = 520.dp)
+            )
 
-            // Procedural Math Expression Card
+            // 4. PROCEDURAL KEYFLOW MATH EXPRESSION ENGINE CARD
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = SurfaceDark,
                 modifier = Modifier
-                    .widthIn(max = 460.dp)
+                    .widthIn(max = 520.dp)
                     .fillMaxWidth()
                     .border(1.dp, OutlineSubtle, RoundedCornerShape(12.dp))
             ) {
@@ -351,7 +289,7 @@ fun GraphEditorScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "fx Procedural Expression Engine",
+                        text = "fx Procedural Expression Engine ($activeTitle)",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -359,7 +297,7 @@ fun GraphEditorScreen(
                         value = expressionText,
                         onValueChange = {
                             expressionText = it
-                            onUpdateExpression(it)
+                            onUpdateExpression(it, editingEffectMode)
                         },
                         label = { Text("Expression (e.g. sin(time * 4) * 50)") },
                         singleLine = true,
@@ -372,20 +310,22 @@ fun GraphEditorScreen(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        val amp = if ((maxDomain - minDomain) <= 6f) "0.35" else "50"
                         listOf(
                             "Clear" to "",
-                            "KeyFlow Spring" to "spring(3, 4, 65)",
-                            "KeyFlow Pendulum" to "pendulum(2.2, 35)",
-                            "Sine Wave" to "sin(time * 4) * 50",
-                            "Oscillate / Wiggle" to "wiggle(5, 30)",
-                            "BPM Beat Pulse" to "pulse(128)"
+                            "KeyFlow Spring" to if (amp == "0.35") "spring(3, 4, 0.45)" else "spring(3, 4, 65)",
+                            "KeyFlow Pendulum" to if (amp == "0.35") "pendulum(2.2, 0.35)" else "pendulum(2.2, 35)",
+                            "Sine Wave" to "sin(time * 4) * $amp",
+                            "Oscillate / Wiggle" to "wiggle(5, $amp)",
+                            "BPM Beat Pulse" to "pulse(128) * $amp"
                         ).forEach { (label, expr) ->
                             AmSegmentChip(
                                 label = label,
                                 selected = expressionText == expr && expr.isNotEmpty(),
+                                compact = true,
                                 onClick = {
                                     expressionText = expr
-                                    onUpdateExpression(expr)
+                                    onUpdateExpression(expr, editingEffectMode)
                                 }
                             )
                         }

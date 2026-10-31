@@ -2,6 +2,7 @@ package com.example.engine
 
 import com.example.data.model.AnimatableProperty
 import com.example.data.model.AudioBand
+import com.example.data.model.EffectNode
 import com.example.data.model.Keyframe
 import com.example.data.model.Layer
 import com.example.data.model.LayerType
@@ -37,6 +38,14 @@ data class EvaluatedTransform(
     val rotY: Float,
     val rotZ: Float,
     val opacity: Float
+)
+
+data class EvaluatedEffectParams(
+    val primary: Float,
+    val secondary: Float,
+    val frequency: Float,
+    val angleDeg: Float,
+    val mixFraction: Float
 )
 
 object AnimationEvaluator {
@@ -106,6 +115,10 @@ object AnimationEvaluator {
                     val a: Keyframe = kfs[i]
                     val b: Keyframe = kfs[i + 1]
                     if (timeMs in a.timeMs..b.timeMs) {
+                        if (a.holdStep && timeMs < b.timeMs) {
+                            result = a.value
+                            break
+                        }
                         val span = (b.timeMs - a.timeMs).coerceAtLeast(1L).toFloat()
                         val rawT = (timeMs - a.timeMs).toFloat() / span
                         val easedT = evaluateCubicBezier(
@@ -124,8 +137,29 @@ object AnimationEvaluator {
         }
 
         val exprOffset = evaluateExpressionOffset(prop.expression, timeMs / 1000f, keyframedValue, kfs, timeMs)
-        val audioBoost = audio.levelFor(prop.audioReactorBand) * prop.audioReactorGain * 40f
+        val isSmallNormalizedRange = abs(prop.baseValue) <= 3.0f && kfs.all { abs(it.value) <= 3.0f }
+        val audioBoost = audio.levelFor(prop.audioReactorBand) * prop.audioReactorGain * (if (isSmallNormalizedRange) 0.65f else 40f)
         return keyframedValue + exprOffset + audioBoost
+    }
+
+    fun evaluateEffectNode(
+        effect: EffectNode,
+        timeMs: Long,
+        audio: AudioSpectrumSnapshot = AudioSpectrumSnapshot()
+    ): EvaluatedEffectParams {
+        val nodeAudioMod = audio.levelFor(effect.audioBoundBand) * effect.audioSensitivity * 0.65f
+        val p1 = (evaluateProperty(effect.primaryProp, timeMs, audio) + nodeAudioMod).coerceIn(0f, 3f)
+        val p2 = evaluateProperty(effect.secondaryProp, timeMs, audio).coerceIn(0f, 2f)
+        val p3 = evaluateProperty(effect.frequencyProp, timeMs, audio).coerceIn(0f, 4f)
+        val p4 = evaluateProperty(effect.angleProp, timeMs, audio).coerceIn(-720f, 720f)
+        val p5 = (evaluateProperty(effect.mixProp, timeMs, audio) / 100f).coerceIn(0f, 1f)
+        return EvaluatedEffectParams(
+            primary = p1,
+            secondary = p2,
+            frequency = p3,
+            angleDeg = p4,
+            mixFraction = p5
+        )
     }
 
     /**

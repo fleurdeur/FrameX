@@ -439,11 +439,18 @@ fun AmTickWheelScrubber(
     label: String,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    fineStep: Float = 0f,
     testTag: String = "property_value_slider"
 ) {
     val currentValState by rememberUpdatedState(value)
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
     var visualPhasePx by remember { mutableFloatStateOf(0f) }
-    val span = (maxValue - minValue).coerceAtLeast(1f)
+    val span = (maxValue - minValue).coerceAtLeast(0.01f)
+    val formattedVal = if (span <= 6f) {
+        String.format("%.2f", value)
+    } else {
+        String.format("%.1f", value)
+    }
 
     Column(modifier = modifier) {
         Row(
@@ -456,14 +463,50 @@ fun AmTickWheelScrubber(
                 style = MaterialTheme.typography.labelSmall,
                 color = TextSecondary,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
             )
-            Text(
-                text = "${String.format("%.1f", value)}$unit",
-                style = MaterialTheme.typography.labelMedium,
-                color = AmTealBright,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (fineStep > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(PanelDark)
+                            .border(0.8.dp, OutlineSubtle, CircleShape)
+                            .clickable {
+                                currentOnValueChange((currentValState - fineStep).coerceIn(minValue, maxValue))
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("−", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    text = "$formattedVal$unit",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AmTealBright,
+                    fontWeight = FontWeight.Bold
+                )
+                if (fineStep > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(PanelDark)
+                            .border(0.8.dp, OutlineSubtle, CircleShape)
+                            .clickable {
+                                currentOnValueChange((currentValState + fineStep).coerceIn(minValue, maxValue))
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("+", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
@@ -479,9 +522,9 @@ fun AmTickWheelScrubber(
                     detectHorizontalDragGestures { change, dragAmount ->
                         change.consume()
                         visualPhasePx = (visualPhasePx + dragAmount) % 240f
-                        val sensitivity = span / 620f
+                        val sensitivity = span / 520f
                         val next = (currentValState + dragAmount * sensitivity).coerceIn(minValue, maxValue)
-                        onValueChange(next)
+                        currentOnValueChange(next)
                     }
                 }
                 .testTag(testTag)

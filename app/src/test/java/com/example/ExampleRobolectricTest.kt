@@ -193,4 +193,341 @@ class ExampleRobolectricTest {
         assertEquals(4, restoredAudio.extractedWaveform.size)
         assertEquals(0.75f, restoredAudio.extractedWaveform[1], 0.01f)
     }
+
+    @Test
+    fun `verify all 5 effect parameter slots keyframes overshoot bezier holdStep and serialization`() {
+        val audio = AudioReactorEngine().sampleTimelineSpectrum(0L, 128, emptyList())
+        val glowDef = EffectsCatalog.findById("S_Glow")
+        assertEquals(5, glowDef.paramSpecs().size)
+
+        val baseFx = glowDef.toNode(customIntensity = 0.8f)
+        val animatedFx = baseFx.copy(
+            tintColorHex = "#FF3366",
+            primaryProp = AnimatableProperty(
+                baseValue = 0.2f,
+                keyframes = listOf(
+                    // Overshoot Bezier handle above 1.0 (outTangentY = 1.38f)
+                    Keyframe(
+                        timeMs = 0L,
+                        value = 0.2f,
+                        outTangentX = 0.2f,
+                        outTangentY = 1.38f,
+                        inTangentX = 0.7f,
+                        inTangentY = 1.0f
+                    ),
+                    Keyframe(timeMs = 2000L, value = 1.0f)
+                )
+            ),
+            angleProp = AnimatableProperty(
+                baseValue = 0f,
+                keyframes = listOf(
+                    // Hold / Step keyframe holds 0.25 until 2000ms
+                    Keyframe(timeMs = 0L, value = 0.25f, holdStep = true),
+                    Keyframe(timeMs = 2000L, value = 1.50f)
+                )
+            ),
+            mixProp = AnimatableProperty(
+                baseValue = 100f,
+                keyframes = listOf(
+                    Keyframe(timeMs = 0L, value = 100f),
+                    Keyframe(timeMs = 2000L, value = 50f)
+                )
+            )
+        )
+
+        val midEval = AnimationEvaluator.evaluateEffectNode(animatedFx, 1000L, audio)
+        assertTrue("Overshoot Bezier should evaluate cleanly above linear midpoint", midEval.primary > 0.6f)
+        assertEquals("Hold/Step keyframe should hold initial value prior to next keyframe", 0.25f, midEval.angleDeg, 0.001f)
+        assertEquals(0.75f, midEval.mixFraction, 0.03f)
+
+        val endEval = AnimationEvaluator.evaluateEffectNode(animatedFx, 2000L, audio)
+        assertEquals(1.50f, endEval.angleDeg, 0.001f)
+
+        // Verify full envelope roundtrip of 5-channel EffectNode keyframes, holdStep, and tintColorHex
+        val layer = Layer(id = "fx_layer", effects = listOf(animatedFx))
+        val envelope = ProjectPayloadSerializer.encodeProjectEnvelope(listOf(layer), "#000000")
+        val restoredLayer = ProjectPayloadSerializer.decodeLayers(envelope).single()
+        val restoredFx = restoredLayer.effects.single()
+        assertEquals("#FF3366", restoredFx.tintColorHex)
+        assertEquals(2, restoredFx.primaryProp.keyframes.size)
+        assertEquals(1.38f, restoredFx.primaryProp.keyframes.first().outTangentY, 0.001f)
+        assertTrue(restoredFx.angleProp.keyframes.first().holdStep)
+        assertEquals(2, restoredLayer.allKeyframeTimes().size)
+    }
+
+    @Test
+    fun `verify smart bookmark navigation goes to zero when no earlier bookmark exists and jumps to bookmark when present`() {
+        val vm = com.example.viewmodel.StudioViewModel()
+        vm.createNewProject(
+            name = "Bookmark & FX Test",
+            preset = AspectRatioPreset.PORTRAIT_9_16,
+            customWidth = 1080,
+            customHeight = 1920,
+            fps = 60,
+            durationSec = 10,
+            bpm = 120
+        )
+
+        // 1. No bookmarks added yet: scrubbing to 4200ms and pressing Previous beside Play goes back to 0!
+        vm.scrubPlayhead(4200L)
+        assertEquals(4200L, vm.state.value.playheadMs)
+        vm.jumpToBookmark(forward = false)
+        assertEquals(0L, vm.state.value.playheadMs)
+
+        // Forward with no bookmarks jumps to end of composition (10000ms)
+        vm.jumpToBookmark(forward = true)
+        assertEquals(10000L, vm.state.value.playheadMs)
+
+        // 2. Add two bookmarks at 1500ms and 6800ms
+        vm.scrubPlayhead(1500L)
+        val snappedFirst = vm.state.value.playheadMs
+        vm.toggleBeatBookmarkAtPlayhead()
+        vm.scrubPlayhead(6800L)
+        val snappedSecond = vm.state.value.playheadMs
+        vm.toggleBeatBookmarkAtPlayhead()
+
+        // Scrub to 4500ms: Previous jumps to first bookmark, then Previous again goes to 0ms!
+        vm.scrubPlayhead(4500L)
+        vm.jumpToBookmark(forward = false)
+        assertEquals(snappedFirst, vm.state.value.playheadMs)
+        vm.jumpToBookmark(forward = false)
+        assertEquals(0L, vm.state.value.playheadMs)
+
+        // Forward from 0ms jumps to first bookmark -> second bookmark -> 10000ms end
+        vm.jumpToBookmark(forward = true)
+        assertEquals(snappedFirst, vm.state.value.playheadMs)
+        vm.jumpToBookmark(forward = true)
+        assertEquals(snappedSecond, vm.state.value.playheadMs)
+        vm.jumpToBookmark(forward = true)
+        assertEquals(10000L, vm.state.value.playheadMs)
+
+        // 3. Verify adding an Effect opens EFFECT_DETAIL inspector & supports per-effect keyframes + curves
+        vm.scrubPlayhead(0L)
+        vm.addShapeLayerWithKind("Star")
+        val glow = EffectsCatalog.findById("S_Glow")
+        vm.addEffectToSelectedLayer(glow)
+        assertEquals(com.example.viewmodel.AmInspectorTab.EFFECT_DETAIL, vm.state.value.inspectorTab)
+        val fxId = vm.state.value.selectedEffectId
+        assertTrue("Selected effect ID should be populated after adding effect", !fxId.isNullOrBlank())
+
+        vm.selectEffectParamSlot(com.example.data.model.EffectParamSlot.FREQUENCY)
+        vm.scrubPlayhead(0L)
+        vm.toggleEffectKeyframeAtPlayhead()
+        vm.scrubPlayhead(2000L)
+        vm.updateSelectedEffectParamValue(1.45f)
+
+        vm.scrubPlayhead(500L)
+        vm.setInspectorTab(com.example.viewmodel.AmInspectorTab.EFFECT_EASING)
+        assertEquals(com.example.viewmodel.AmInspectorTab.EFFECT_EASING, vm.state.value.inspectorTab)
+
+        vm.updateEffectBezierHandles(0.18f, 1.25f, 0.72f, 0.95f)
+        vm.copyActiveBezierCurve(isEffect = true)
+        assertTrue(vm.state.value.hasCopiedCurve)
+
+        val updatedLayer = vm.state.value.activeProject.layers.single()
+        val updatedFx = updatedLayer.effects.single()
+        assertEquals(2, updatedFx.frequencyProp.keyframes.size)
+        assertEquals(1.25f, updatedFx.frequencyProp.keyframes.first().outTangentY, 0.001f)
+    }
+
+    @Test
+    fun `verify preview quality switching loop toggle playback RAM cache prerender and edit invalidation`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.engine.PlaybackCacheEngine.clearAll()
+
+        val vm = com.example.viewmodel.StudioViewModel(appContext = context)
+        vm.createNewProject(
+            name = "Cache & Quality Optimization Test",
+            preset = AspectRatioPreset.SQUARE_1_1,
+            customWidth = 720,
+            customHeight = 720,
+            fps = 24,
+            durationSec = 2,
+            bpm = 120
+        )
+
+        // 1. Switch PreviewQuality tiers
+        vm.setPreviewQuality(com.example.data.preferences.PreviewQuality.QUARTER)
+        assertEquals(com.example.data.preferences.PreviewQuality.QUARTER, vm.state.value.previewQuality)
+
+        // 2. Toggle Loop playback (accessible via long-pressing Play)
+        val initialLoop = vm.state.value.isLoopPlayback
+        vm.toggleLoopPlayback()
+        assertEquals(!initialLoop, vm.state.value.isLoopPlayback)
+
+        // 3. Add a layer + effect, then pre-render composition frames into RAM cache
+        vm.addShapeLayerWithKind("Star")
+        vm.addEffectToSelectedLayer(EffectsCatalog.findById("S_Glow"))
+        val revBeforeRender = vm.state.value.projectRevision
+
+        kotlinx.coroutines.runBlocking {
+            com.example.engine.PlaybackCacheEngine.preRenderComposition(
+                context = context,
+                project = vm.state.value.activeProject,
+                projectRevision = revBeforeRender,
+                quality = com.example.data.preferences.PreviewQuality.QUARTER,
+                fpsCap = 24,
+                audioEngine = vm.audioEngine
+            )
+        }
+
+        val cachedFrame = com.example.engine.PlaybackCacheEngine.getCachedFrame(
+            projectRevision = revBeforeRender,
+            quality = com.example.data.preferences.PreviewQuality.QUARTER,
+            timeMs = 0L,
+            fps = 24
+        )
+        assertTrue("Expected RAM-cached frame bitmap at 0ms after pre-render", cachedFrame != null && cachedFrame.width > 0)
+        assertTrue(com.example.engine.PlaybackCacheEngine.preRenderState.value.cachedFramesCount > 0)
+
+        // 4. Editing the layer increments projectRevision and invalidates stale cached frames
+        val layerId = vm.state.value.selectedLayerId!!
+        vm.updateLayerColor(layerId, "#FF3366")
+        val revAfterEdit = vm.state.value.projectRevision
+        assertTrue("Project revision should advance on edit", revAfterEdit > revBeforeRender)
+        val missOnNewRevision = com.example.engine.PlaybackCacheEngine.getCachedFrame(
+            projectRevision = revAfterEdit,
+            quality = com.example.data.preferences.PreviewQuality.QUARTER,
+            timeMs = 0L,
+            fps = 24
+        )
+        assertNull("New project revision must not serve stale cached frames", missOnNewRevision)
+    }
+
+    @Test
+    fun `verify effect deletion low res selected layer effect thumbnail preview and studio settings persistence`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val vm = com.example.viewmodel.StudioViewModel(appContext = context)
+        vm.addShapeLayerWithKind("Circle")
+        val layerId = vm.state.value.selectedLayerId!!
+
+        // 1. Add two effects, delete one from EFFECT_DETAIL, and verify clean return to EFFECTS tab
+        val fxGlow = EffectsCatalog.findById("S_Glow")
+        val fxRgb = EffectsCatalog.findById("RGB_Split")
+        vm.addEffectToSelectedLayer(fxGlow)
+        vm.addEffectToSelectedLayer(fxRgb)
+        assertEquals(2, vm.state.value.activeProject.layers.single().effects.size)
+        assertEquals(com.example.viewmodel.AmInspectorTab.EFFECT_DETAIL, vm.state.value.inspectorTab)
+
+        val secondFxId = vm.state.value.selectedEffectId!!
+        vm.removeEffectNode(layerId, secondFxId)
+        assertEquals(1, vm.state.value.activeProject.layers.single().effects.size)
+        assertEquals(com.example.viewmodel.AmInspectorTab.EFFECTS, vm.state.value.inspectorTab)
+
+        // Clear all remaining effects on layer
+        vm.clearAllEffectsOnLayer(layerId)
+        assertTrue(vm.state.value.activeProject.layers.single().effects.isEmpty())
+
+        // 2. Verify Effect Browser low-res (56x56) selected-layer + effect thumbnail previewer
+        val selectedLayer = vm.state.value.activeProject.layers.single()
+        val thumbBmp = com.example.engine.EffectThumbnailPreviewer.generateThumbnailSync(
+            context = context,
+            selectedLayer = selectedLayer,
+            effect = fxGlow
+        )
+        assertEquals(56, thumbBmp.width)
+        assertEquals(56, thumbBmp.height)
+
+        // 3. Verify Studio Settings persistence (codec, bitrate, preview quality, RAM cache budget)
+        vm.updateStudioPreferences {
+            it.copy(
+                preferredVideoCodec = "H.265",
+                exportBitrateProfile = com.example.data.preferences.BitrateProfile.HIGH_32M,
+                defaultPreviewQuality = com.example.data.preferences.PreviewQuality.EIGHTH,
+                playbackCacheLimitMb = 256
+            )
+        }
+        val reloadedRepo = com.example.data.preferences.AppPreferencesRepository(context)
+        assertEquals("H.265", reloadedRepo.preferences.value.preferredVideoCodec)
+        assertEquals(com.example.data.preferences.BitrateProfile.HIGH_32M, reloadedRepo.preferences.value.exportBitrateProfile)
+        assertEquals(com.example.data.preferences.PreviewQuality.EIGHTH, reloadedRepo.preferences.value.defaultPreviewQuality)
+        assertEquals(256, reloadedRepo.preferences.value.playbackCacheLimitMb)
+    }
+
+    @Test
+    fun `verify fast zero copy media import live OES video gating lookahead prerender and glitch free audio video lifecycle`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.engine.PlaybackCacheEngine.clearAll()
+
+        // 1. Verify HardwareVideoPreviewEngine OES stream eligibility vs nonlinear video modes
+        val linearVideo = Layer(
+            id = "vid_oes_1",
+            type = LayerType.VIDEO,
+            mediaUri = "file:///tmp/sample.mp4",
+            visible = true
+        )
+        assertTrue(com.example.engine.HardwareVideoPreviewEngine.isEligibleForLiveOesStream(linearVideo))
+        assertTrue(!com.example.engine.HardwareVideoPreviewEngine.isEligibleForLiveOesStream(linearVideo.copy(reversed = true)))
+        assertTrue(!com.example.engine.HardwareVideoPreviewEngine.isEligibleForLiveOesStream(linearVideo.copy(timeRemapEnabled = true)))
+        assertTrue(!com.example.engine.HardwareVideoPreviewEngine.isEligibleForLiveOesStream(linearVideo.copy(freezeFrameMs = 500L)))
+
+        // 2. Verify fast direct file:// image import without redundant whole-file copying
+        val tmpImgFile = java.io.File(context.cacheDir, "fast_import_probe.png")
+        val testBmp = android.graphics.Bitmap.createBitmap(128, 96, android.graphics.Bitmap.Config.ARGB_8888)
+        testBmp.eraseColor(android.graphics.Color.CYAN)
+        java.io.FileOutputStream(tmpImgFile).use { out ->
+            testBmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 90, out)
+        }
+        val fileUri = android.net.Uri.fromFile(tmpImgFile)
+
+        val importedInfo = kotlinx.coroutines.runBlocking {
+            com.example.engine.MediaEngine.importMediaUri(
+                context = context,
+                pickedUri = fileUri,
+                type = LayerType.IMAGE
+            )
+        }
+        assertEquals("Direct readable file:// URI should stream directly without slow copy", fileUri.toString(), importedInfo.localUri)
+        assertEquals(128, importedInfo.width)
+        assertEquals(96, importedInfo.height)
+
+        // 3. Verify lookahead pre-render window + multi-core throughput reporting
+        val vm = com.example.viewmodel.StudioViewModel(appContext = context)
+        vm.createNewProject(
+            name = "Lookahead & Throughput Test",
+            preset = AspectRatioPreset.LANDSCAPE_16_9,
+            customWidth = 640,
+            customHeight = 360,
+            fps = 30,
+            durationSec = 3,
+            bpm = 128
+        )
+        vm.addShapeLayerWithKind("Rounded Rect")
+        vm.addEffectToSelectedLayer(EffectsCatalog.findById("Chromatic_Aberration"))
+        val rev = vm.state.value.projectRevision
+
+        kotlinx.coroutines.runBlocking {
+            com.example.engine.PlaybackCacheEngine.preRenderLookaheadWindow(
+                context = context,
+                project = vm.state.value.activeProject,
+                projectRevision = rev,
+                quality = com.example.data.preferences.PreviewQuality.QUARTER,
+                fpsCap = 30,
+                startPlayheadMs = 500L,
+                windowDurationMs = 1000L,
+                audioEngine = vm.audioEngine
+            )
+        }
+
+        val lookaheadHit = com.example.engine.PlaybackCacheEngine.getCachedFrame(
+            projectRevision = rev,
+            quality = com.example.data.preferences.PreviewQuality.QUARTER,
+            timeMs = 500L,
+            fps = 30
+        )
+        assertTrue("Lookahead auto-cache should populate frame at playhead", lookaheadHit != null)
+
+        // 4. Verify safe ExoPlayer audio & video controller prewarm / sync / release lifecycle
+        val audioController = com.example.engine.TimelineAudioController(context)
+        audioController.prewarmProjectAudio(vm.state.value.activeProject)
+        audioController.syncPlayback(vm.state.value.activeProject, 250L, isPlaying = false)
+        audioController.pauseAll()
+        audioController.releaseAll()
+
+        com.example.engine.HardwareVideoPreviewEngine.prewarmProjectVideos(context, vm.state.value.activeProject, 0L)
+        com.example.engine.HardwareVideoPreviewEngine.pauseAll()
+        com.example.engine.HardwareVideoPreviewEngine.releaseAll()
+        tmpImgFile.delete()
+    }
 }
+

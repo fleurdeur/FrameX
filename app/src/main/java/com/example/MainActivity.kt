@@ -21,6 +21,7 @@ import com.example.data.repository.ProjectRepository
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.authStateFlow
 import com.example.ui.auth.signOutUser
+import com.example.ui.screens.AppSettingsScreen
 import com.example.ui.screens.AudioReactorScreen
 import com.example.ui.screens.EditorWorkspaceScreen
 import com.example.ui.screens.EffectsBrowserScreen
@@ -81,6 +82,8 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
     )
 
     val wsState by studioViewModel.state.collectAsStateWithLifecycle()
+    val preferences by studioViewModel.preferences.collectAsStateWithLifecycle()
+    val preRenderState by studioViewModel.preRenderState.collectAsStateWithLifecycle()
     val cloudProjects by studioViewModel.cloudProjects.collectAsStateWithLifecycle()
     val cloudPresets by studioViewModel.cloudPresets.collectAsStateWithLifecycle()
     val spectrum by studioViewModel.liveSpectrum.collectAsStateWithLifecycle()
@@ -121,13 +124,28 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                         onSignOutComplete = {},
                         scope = scope
                     )
-                }
+                },
+                defaultPreferences = preferences,
+                onOpenSettings = { studioViewModel.navigateTo(StudioDestination.SETTINGS) }
+            )
+        }
+        StudioDestination.SETTINGS -> {
+            AppSettingsScreen(
+                preferences = preferences,
+                codecCapabilities = studioViewModel.codecCapabilities,
+                onUpdatePreferences = studioViewModel::updateStudioPreferences,
+                onApplyQualityNow = studioViewModel::setPreviewQuality,
+                onClearCaches = studioViewModel::clearAllPlaybackAndMediaCaches,
+                onResetDefaults = studioViewModel::resetStudioPreferences,
+                onBack = { studioViewModel.navigateTo(StudioDestination.HOME) }
             )
         }
         StudioDestination.EDITOR -> {
             EditorWorkspaceScreen(
                 state = wsState,
                 audioSpectrum = spectrum,
+                preferences = preferences,
+                preRenderState = preRenderState,
                 onBack = { studioViewModel.navigateTo(StudioDestination.HOME) },
                 onSaveCloud = { studioViewModel.saveCurrentProjectToCloud(silent = false) },
                 onUndo = studioViewModel::undo,
@@ -137,8 +155,13 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 onCollapseToTimeline = studioViewModel::collapseLayerSheetToTimeline,
                 onSetTimelineZoom = studioViewModel::setTimelineZoom,
                 onTogglePlay = studioViewModel::togglePlayback,
+                onToggleLoop = studioViewModel::toggleLoopPlayback,
+                onTriggerOrCancelPreRender = { studioViewModel.triggerOrCancelPreRender(context) },
+                onSetPreviewQuality = studioViewModel::setPreviewQuality,
+                onClearPlaybackCache = studioViewModel::clearAllPlaybackAndMediaCaches,
+                onRenderTelemetryUpdate = studioViewModel::updateRenderTelemetry,
                 onStepFrame = studioViewModel::stepFrame,
-                onScrubPlayhead = studioViewModel::scrubPlayhead,
+                onScrubPlayhead = studioViewModel::scrubPlayheadInteractive,
                 onToggleBeatBookmark = studioViewModel::toggleBeatBookmarkAtPlayhead,
                 onJumpBookmark = studioViewModel::jumpToBookmark,
                 onJumpKeyframe = studioViewModel::jumpToAdjacentKeyframe,
@@ -147,9 +170,30 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 onUpdatePropertyValue = studioViewModel::updateSelectedPropertyValue,
                 onUpdateExpression = studioViewModel::updatePropertyExpression,
                 onDragLayerOnCanvas = studioViewModel::dragSelectedLayerByDelta,
+                onScaleAndRotateLayerOnCanvas = studioViewModel::scaleAndRotateSelectedLayerByDelta,
                 onResetTransform = studioViewModel::resetSelectedLayerTransform,
                 onToggleKeyframe = { studioViewModel.toggleKeyframeAtPlayhead() },
                 onUpdateBezierHandles = studioViewModel::updateBezierHandlesForActiveSegment,
+                onSelectEffectForInspection = studioViewModel::selectEffectForInspection,
+                onSelectEffectSlot = studioViewModel::selectEffectParamSlot,
+                onUpdateEffectSlotValue = studioViewModel::updateSelectedEffectParamValue,
+                onToggleEffectKeyframe = studioViewModel::toggleEffectKeyframeAtPlayhead,
+                onJumpEffectKeyframe = studioViewModel::jumpToAdjacentEffectKeyframe,
+                onUpdateEffectBezierHandles = studioViewModel::updateEffectBezierHandles,
+                onUpdateEffectExpression = studioViewModel::updateEffectParamExpression,
+                onMoveEffectOrder = { fxId, up ->
+                    if (selectedLayer != null) studioViewModel.moveEffectOrder(selectedLayer.id, fxId, up)
+                },
+                onDuplicateEffect = { fxId ->
+                    if (selectedLayer != null) studioViewModel.duplicateEffectNode(selectedLayer.id, fxId)
+                },
+                onResetEffect = { fxId ->
+                    if (selectedLayer != null) studioViewModel.resetEffectNode(selectedLayer.id, fxId)
+                },
+                onCopyCurve = studioViewModel::copyActiveBezierCurve,
+                onPasteCurve = studioViewModel::pasteBezierCurve,
+                onDragKeyframePoint = studioViewModel::dragKeyframePoint,
+                onOpenGraphEditor = studioViewModel::openGraphEditor,
                 onImportMediaUri = { uri, type -> studioViewModel.importMediaLayer(context, uri, type) },
                 onExtractAudioFromVideo = { studioViewModel.extractAudioFromSelectedVideo(context) },
                 onAddLayer = studioViewModel::addLayer,
@@ -160,6 +204,10 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 onPasteEffects = studioViewModel::pasteEffectsToSelectedLayer,
                 onDuplicateLayer = studioViewModel::duplicateSelectedLayer,
                 onMoveLayerZOrder = studioViewModel::moveLayerZOrder,
+                onRenameLayer = studioViewModel::renameLayer,
+                onToggleSoloLayer = studioViewModel::toggleSoloLayer,
+                onGroupIntoNullRig = studioViewModel::groupVisibleLayersIntoNullRig,
+                onExpandLayerToComp = studioViewModel::expandSelectedLayerToComposition,
                 onPullStart = studioViewModel::pullStartToPlayhead,
                 onTrimStart = studioViewModel::trimSelectedLayerStartToPlayhead,
                 onUpdateSpeed = studioViewModel::updateSelectedLayerSpeed,
@@ -195,6 +243,11 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                         studioViewModel.removeEffectNode(selectedLayer.id, nodeId)
                     }
                 },
+                onClearAllEffects = {
+                    if (selectedLayer != null) {
+                        studioViewModel.clearAllEffectsOnLayer(selectedLayer.id)
+                    }
+                },
                 onUpdateProjectSettings = studioViewModel::updateProjectTimingAndResolution,
                 onViewportGesture = studioViewModel::updateCanvasViewportGesture,
                 onResetViewport = studioViewModel::resetCanvasViewport
@@ -221,6 +274,7 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 },
                 onSaveChainAsPreset = studioViewModel::saveLayerEffectChainAsPreset,
                 onApplyCloudPreset = studioViewModel::applyCloudPresetToSelectedLayer,
+                onOpenEffectInspector = studioViewModel::selectEffectForInspection,
                 onBack = { studioViewModel.navigateTo(StudioDestination.EDITOR) }
             )
         }
@@ -228,10 +282,34 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
             GraphEditorScreen(
                 selectedLayer = selectedLayer,
                 selectedProperty = wsState.selectedProperty,
+                selectedEffectId = wsState.selectedEffectId,
+                selectedEffectSlot = wsState.selectedEffectSlot,
+                initialTargetsEffect = wsState.graphTargetsEffect,
+                hasCopiedCurve = wsState.hasCopiedCurve,
                 playheadMs = wsState.playheadMs,
                 onSelectProperty = studioViewModel::selectProperty,
-                onUpdateBezierHandles = studioViewModel::updateBezierHandlesForActiveSegment,
-                onUpdateExpression = studioViewModel::updatePropertyExpression,
+                onSelectEffect = studioViewModel::selectEffectForInspection,
+                onSelectEffectSlot = studioViewModel::selectEffectParamSlot,
+                onToggleKeyframe = { isEffect ->
+                    if (isEffect) studioViewModel.toggleEffectKeyframeAtPlayhead()
+                    else studioViewModel.toggleKeyframeAtPlayhead()
+                },
+                onJumpKeyframe = { forward, isEffect ->
+                    if (isEffect) studioViewModel.jumpToAdjacentEffectKeyframe(forward)
+                    else studioViewModel.jumpToAdjacentKeyframe(forward)
+                },
+                onUpdateBezierHandles = { ox, oy, ix, iy, hold, isEffect ->
+                    if (isEffect) studioViewModel.updateEffectBezierHandles(ox, oy, ix, iy, hold)
+                    else studioViewModel.updateBezierHandlesForActiveSegment(ox, oy, ix, iy, hold)
+                },
+                onCopyCurve = studioViewModel::copyActiveBezierCurve,
+                onPasteCurve = studioViewModel::pasteBezierCurve,
+                onDragKeyframeNode = studioViewModel::dragKeyframePoint,
+                onScrubPlayhead = studioViewModel::scrubPlayhead,
+                onUpdateExpression = { expr, isEffect ->
+                    if (isEffect) studioViewModel.updateEffectParamExpression(expr)
+                    else studioViewModel.updatePropertyExpression(expr)
+                },
                 onBack = { studioViewModel.navigateTo(StudioDestination.EDITOR) }
             )
         }

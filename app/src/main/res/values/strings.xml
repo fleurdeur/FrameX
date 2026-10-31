@@ -15,4 +15,11 @@
     <string name="save_project">Sync Cloud</string>
     <string name="export_mp4">EXPORT</string>
     <string name="empty_projects_tip">No cloud projects yet. Tap the + button below or pick a template to start animating.</string>
+    <string name="settings_title">Studio Settings &amp; Optimizations</string>
+    <string name="settings_button_desc">Open Studio Settings</string>
+    <string name="preview_quality_label">Preview Quality</string>
+    <string name="loop_playback_label">Loop</string>
+    <string name="prerender_playback_label">Pre-render</string>
+    <string name="delete_effect_label">Delete Effect</string>
+    <string name="clear_cache_label">Clear Playback &amp; Media Cache</string>
 </resources>

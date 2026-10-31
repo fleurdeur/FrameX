@@ -31,11 +31,13 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.BlurLinear
 import androidx.compose.material.icons.filled.BorderStyle
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FirstPage
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -52,9 +54,11 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -66,6 +70,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +92,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.EffectNode
+import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
 import com.example.data.model.LayerType
 import com.example.data.model.Primitive3DType
@@ -141,12 +147,16 @@ fun AmClickedLayerSheet(
     allLayers: List<Layer>,
     projectDurationMs: Long,
     selectedProperty: PropertyTarget,
+    selectedEffectId: String? = null,
+    selectedEffectSlot: EffectParamSlot = EffectParamSlot.PRIMARY,
     playheadMs: Long,
     audioSpectrum: AudioSpectrumSnapshot,
     hasCopiedEffects: Boolean,
+    hasCopiedCurve: Boolean = false,
     canMoveForward: Boolean = false,
     canMoveBackward: Boolean = false,
     onMoveLayerZOrder: (sendBackward: Boolean) -> Unit = {},
+    onRenameLayer: (String, String) -> Unit = { _, _ -> },
     onSetInspectorTab: (AmInspectorTab) -> Unit,
     onCollapseToTimeline: () -> Unit,
     onScrubPlayhead: (Long) -> Unit,
@@ -157,7 +167,21 @@ fun AmClickedLayerSheet(
     onResetTransform: () -> Unit,
     onToggleKeyframe: () -> Unit,
     onJumpKeyframe: (Boolean) -> Unit,
-    onUpdateBezierHandles: (Float, Float, Float, Float) -> Unit,
+    onUpdateBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit,
+    onSelectEffectForInspection: (String) -> Unit = {},
+    onSelectEffectSlot: (EffectParamSlot) -> Unit = {},
+    onUpdateEffectSlotValue: (Float) -> Unit = {},
+    onToggleEffectKeyframe: () -> Unit = {},
+    onJumpEffectKeyframe: (Boolean) -> Unit = {},
+    onUpdateEffectBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
+    onUpdateEffectExpression: (String) -> Unit = {},
+    onMoveEffectOrder: (String, Boolean) -> Unit = { _, _ -> },
+    onDuplicateEffect: (String) -> Unit = {},
+    onResetEffect: (String) -> Unit = {},
+    onCopyCurve: (Boolean) -> Unit = {},
+    onPasteCurve: (Boolean) -> Unit = {},
+    onDragKeyframePoint: (String, Long, Float, Boolean) -> Unit = { _, _, _, _ -> },
+    onOpenGraphEditor: (Boolean) -> Unit = {},
     onPullStart: () -> Unit,
     onTrimStart: () -> Unit,
     onUpdateSpeed: (Float) -> Unit,
@@ -187,12 +211,15 @@ fun AmClickedLayerSheet(
     onUpdate3DPrimitive: (String, Primitive3DType) -> Unit,
     onUpdateEffectNode: (EffectNode) -> Unit,
     onRemoveEffectNode: (String) -> Unit,
+    onClearAllEffects: (() -> Unit)? = null,
     onCopyEffects: () -> Unit,
     onPasteEffects: () -> Unit,
     onNavigateTool: (StudioDestination) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var parentMenuOpen by remember { mutableStateOf(false) }
+    var renameDialogOpen by remember { mutableStateOf(false) }
+    var renameDraft by remember(selectedLayer.id, selectedLayer.name) { mutableStateOf(selectedLayer.name) }
     val nullCandidates = remember(allLayers, selectedLayer.id) {
         allLayers.filter {
             (it.type == LayerType.NULL_OBJECT || it.type == LayerType.SHAPE || it.type == LayerType.CAMERA) &&
@@ -200,6 +227,39 @@ fun AmClickedLayerSheet(
         }
     }
     val parentName = allLayers.firstOrNull { it.id == selectedLayer.parentId }?.name
+
+    if (renameDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { renameDialogOpen = false },
+            containerColor = SurfaceDark,
+            title = { Text("Rename Layer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    label = { Text("Layer Name") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRenameLayer(selectedLayer.id, renameDraft)
+                        renameDialogOpen = false
+                    }
+                ) {
+                    Text("Save", color = AmTealBright, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameDialogOpen = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
 
     Surface(
         color = SurfaceDark,
@@ -246,15 +306,34 @@ fun AmClickedLayerSheet(
                             .border(1.dp, Color.White.copy(alpha = 0.65f), CircleShape)
                     )
 
-                    Text(
-                        text = selectedLayer.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable {
+                                renameDraft = selectedLayer.name
+                                renameDialogOpen = true
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = selectedLayer.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Rename layer",
+                            tint = TextMuted,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
 
                     // Compact Parent Rig Icon Pill
                     Box {
@@ -395,7 +474,7 @@ fun AmClickedLayerSheet(
                         }
                 ) {
                     val allKfTimes = remember(selectedLayer) {
-                        PropertyTarget.entries.flatMap { t -> selectedLayer.propertyFor(t).keyframes.map { it.timeMs } }.distinct()
+                        selectedLayer.allKeyframeTimes()
                     }
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val sX = (selectedLayer.startTimeMs / dur).coerceIn(0f, 1f) * size.width
@@ -696,7 +775,12 @@ fun AmClickedLayerSheet(
                             selectedLayer = selectedLayer,
                             selectedProperty = selectedProperty,
                             playheadMs = playheadMs,
+                            hasCopiedCurve = hasCopiedCurve,
                             onUpdateBezierHandles = onUpdateBezierHandles,
+                            onCopyCurve = { onCopyCurve(false) },
+                            onPasteCurve = { onPasteCurve(false) },
+                            onDragKeyframeNode = { kfId, t, v -> onDragKeyframePoint(kfId, t, v, false) },
+                            onScrubPlayhead = onScrubPlayhead,
                             onReturnToTransform = {
                                 if (selectedProperty == PropertyTarget.TIME_REMAP) {
                                     onSetInspectorTab(AmInspectorTab.SPEED_TIMING)
@@ -704,7 +788,7 @@ fun AmClickedLayerSheet(
                                     onSetInspectorTab(AmInspectorTab.MOVE_TRANSFORM)
                                 }
                             },
-                            onOpenFullGraph = { onNavigateTool(StudioDestination.GRAPH_EDITOR) }
+                            onOpenFullGraph = { onOpenGraphEditor(false) }
                         )
                     }
 
@@ -1033,16 +1117,46 @@ fun AmClickedLayerSheet(
                                     onClick = onPasteEffects,
                                     modifier = Modifier.weight(1f)
                                 )
+                                if (selectedLayer.effects.isNotEmpty() && onClearAllEffects != null) {
+                                    AmTimingBarButton(
+                                        icon = Icons.Default.DeleteOutline,
+                                        label = "Clear All",
+                                        onClick = onClearAllEffects,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("clear_all_layer_effects_button")
+                                    )
+                                }
                             }
 
-                            selectedLayer.effects.forEach { fx ->
+                            if (selectedLayer.effects.isNotEmpty()) {
+                                Text(
+                                    text = "Tap any effect to configure all parameters, keyframes ◆ & curve editor:",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AmTealBright
+                                )
+                            }
+
+                            selectedLayer.effects.forEachIndexed { idx, fx ->
+                                val fxKfCount = fx.allKeyframeTimes().size
+                                val livePrimary = AnimationEvaluator.evaluateProperty(
+                                    fx.primaryProp,
+                                    playheadMs,
+                                    audioSpectrum
+                                )
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .clip(RoundedCornerShape(11.dp))
                                         .background(PanelDark)
-                                        .border(1.dp, OutlineSubtle, RoundedCornerShape(10.dp))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                                        .border(
+                                            1.dp,
+                                            if (fx.id == selectedEffectId) AmTeal else OutlineSubtle,
+                                            RoundedCornerShape(11.dp)
+                                        )
+                                        .clickable { onSelectEffectForInspection(fx.id) }
+                                        .testTag("layer_effect_item_${fx.id}")
+                                        .padding(horizontal = 10.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
@@ -1054,32 +1168,69 @@ fun AmClickedLayerSheet(
                                             .size(18.dp)
                                             .clickable { onUpdateEffectNode(fx.copy(enabled = !fx.enabled)) }
                                     )
-                                    Text(
-                                        text = fx.displayName,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = TextPrimary,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        modifier = Modifier.width(96.dp),
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Slider(
-                                        value = fx.intensity,
-                                        onValueChange = { v -> onUpdateEffectNode(fx.copy(intensity = v)) },
-                                        valueRange = 0f..1f,
-                                        colors = SliderDefaults.colors(
-                                            thumbColor = AmTealBright,
-                                            activeTrackColor = AmTeal
-                                        ),
-                                        modifier = Modifier.weight(1f)
-                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                        ) {
+                                            Text(
+                                                text = fx.displayName,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = TextPrimary,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (fxKfCount > 0) {
+                                                Text(
+                                                    text = "◆$fxKfCount",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = KeyframeAmber,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = "5 Params • Primary ${(livePrimary * 100).toInt()}% • Tap to Edit & Curve",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    if (selectedLayer.effects.size > 1) {
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowUp,
+                                            contentDescription = "Move effect up",
+                                            tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.3f),
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .clickable(enabled = idx > 0) { onMoveEffectOrder(fx.id, true) }
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowDown,
+                                            contentDescription = "Move effect down",
+                                            tint = if (idx < selectedLayer.effects.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.3f),
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .clickable(enabled = idx < selectedLayer.effects.lastIndex) { onMoveEffectOrder(fx.id, false) }
+                                        )
+                                    }
+
                                     Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove effect",
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = "Configure effect properties",
+                                        tint = AmTealBright,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                    AmSquareIconButton(
+                                        icon = Icons.Default.DeleteOutline,
+                                        contentDescription = "Delete ${fx.displayName}",
                                         tint = NeonPink,
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .clickable { onRemoveEffectNode(fx.id) }
+                                        onClick = { onRemoveEffectNode(fx.id) },
+                                        sizeDp = 30.dp,
+                                        testTag = "delete_effect_row_${fx.id}"
                                     )
                                 }
                             }
@@ -1091,6 +1242,62 @@ fun AmClickedLayerSheet(
                                 onClick = { onNavigateTool(StudioDestination.EFFECTS_BROWSER) },
                                 modifier = Modifier.fillMaxWidth(),
                                 testTag = "open_effects_browser_cta"
+                            )
+                        }
+                    }
+
+                    AmInspectorTab.EFFECT_DETAIL -> {
+                        val activeFx = selectedLayer.effects.firstOrNull { it.id == selectedEffectId }
+                            ?: selectedLayer.effects.lastOrNull()
+                        if (activeFx == null) {
+                            onSetInspectorTab(AmInspectorTab.EFFECTS)
+                        } else {
+                            val fxIdx = selectedLayer.effects.indexOfFirst { it.id == activeFx.id }.coerceAtLeast(0)
+                            AmEffectDetailInspectorPanel(
+                                layer = selectedLayer,
+                                effect = activeFx,
+                                effectIndex = fxIdx,
+                                totalEffects = selectedLayer.effects.size,
+                                selectedSlot = selectedEffectSlot,
+                                playheadMs = playheadMs,
+                                audioSpectrum = audioSpectrum,
+                                onBackToEffectsList = { onSetInspectorTab(AmInspectorTab.EFFECTS) },
+                                onSelectSlot = onSelectEffectSlot,
+                                onUpdateSlotValue = onUpdateEffectSlotValue,
+                                onToggleSlotKeyframe = onToggleEffectKeyframe,
+                                onJumpSlotKeyframe = onJumpEffectKeyframe,
+                                onOpenEffectCurveEditor = { onSetInspectorTab(AmInspectorTab.EFFECT_EASING) },
+                                onOpenFullGraphForEffect = { onOpenGraphEditor(true) },
+                                onUpdateSlotExpression = onUpdateEffectExpression,
+                                onUpdateEffectNode = onUpdateEffectNode,
+                                onMoveEffectOrder = { up -> onMoveEffectOrder(activeFx.id, up) },
+                                onDuplicateEffect = { onDuplicateEffect(activeFx.id) },
+                                onResetEffect = { onResetEffect(activeFx.id) },
+                                onRemoveEffect = { onRemoveEffectNode(activeFx.id) }
+                            )
+                        }
+                    }
+
+                    AmInspectorTab.EFFECT_EASING -> {
+                        val activeFx = selectedLayer.effects.firstOrNull { it.id == selectedEffectId }
+                            ?: selectedLayer.effects.lastOrNull()
+                        if (activeFx == null) {
+                            onSetInspectorTab(AmInspectorTab.EFFECTS)
+                        } else {
+                            AmEffectInlineCurvePanel(
+                                layer = selectedLayer,
+                                effect = activeFx,
+                                selectedSlot = selectedEffectSlot,
+                                playheadMs = playheadMs,
+                                hasCopiedCurve = hasCopiedCurve,
+                                onSelectSlot = onSelectEffectSlot,
+                                onUpdateEffectBezierHandles = onUpdateEffectBezierHandles,
+                                onCopyCurve = { onCopyCurve(true) },
+                                onPasteCurve = { onPasteCurve(true) },
+                                onDragEffectKeyframeNode = { kfId, t, v -> onDragKeyframePoint(kfId, t, v, true) },
+                                onScrubPlayhead = onScrubPlayhead,
+                                onReturnToEffectDetail = { onSetInspectorTab(AmInspectorTab.EFFECT_DETAIL) },
+                                onOpenFullGraph = { onOpenGraphEditor(true) }
                             )
                         }
                     }
@@ -1118,7 +1325,9 @@ fun AmClickedLayerSheet(
                         AmInspectorTab.EDIT_LAYER to "Edit",
                         AmInspectorTab.EFFECTS to "Effects"
                     ).forEach { (tab, label) ->
-                        val isSel = activeTab == tab || (activeTab == AmInspectorTab.EASING_INLINE && tab == AmInspectorTab.MOVE_TRANSFORM)
+                        val isSel = activeTab == tab ||
+                            (activeTab == AmInspectorTab.EASING_INLINE && tab == AmInspectorTab.MOVE_TRANSFORM) ||
+                            ((activeTab == AmInspectorTab.EFFECT_DETAIL || activeTab == AmInspectorTab.EFFECT_EASING) && tab == AmInspectorTab.EFFECTS)
                         AmSegmentChip(
                             label = label,
                             selected = isSel,

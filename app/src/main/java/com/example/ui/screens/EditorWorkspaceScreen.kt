@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package com.example.ui.screens
 
@@ -12,9 +12,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -47,17 +49,21 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -101,17 +107,26 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.example.data.model.EffectNode
+import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
 import com.example.data.model.LayerType
 import com.example.data.model.Primitive3DType
 import com.example.data.model.PropertyTarget
+import com.example.data.preferences.PreviewQuality
+import com.example.data.preferences.StudioPreferences
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
+import com.example.engine.PlaybackCacheEngine
+import com.example.engine.PreRenderUiState
 import com.example.ui.components.AmSquareIconButton
 import com.example.ui.components.GlPreviewCanvas
 import com.example.ui.theme.AmBgDark
@@ -142,6 +157,8 @@ import kotlin.math.abs
 fun EditorWorkspaceScreen(
     state: StudioWorkspaceState,
     audioSpectrum: AudioSpectrumSnapshot,
+    preferences: StudioPreferences = StudioPreferences(),
+    preRenderState: PreRenderUiState = PreRenderUiState(),
     onBack: () -> Unit,
     onSaveCloud: () -> Unit,
     onUndo: () -> Unit,
@@ -151,6 +168,11 @@ fun EditorWorkspaceScreen(
     onCollapseToTimeline: () -> Unit,
     onSetTimelineZoom: (Float) -> Unit,
     onTogglePlay: () -> Unit,
+    onToggleLoop: () -> Unit = {},
+    onTriggerOrCancelPreRender: () -> Unit = {},
+    onSetPreviewQuality: (PreviewQuality) -> Unit = {},
+    onClearPlaybackCache: () -> Unit = {},
+    onRenderTelemetryUpdate: ((Int, Float) -> Unit)? = null,
     onStepFrame: (Int) -> Unit,
     onScrubPlayhead: (Long) -> Unit,
     onToggleBeatBookmark: () -> Unit,
@@ -161,9 +183,24 @@ fun EditorWorkspaceScreen(
     onUpdatePropertyValue: (Float) -> Unit,
     onUpdateExpression: (String) -> Unit,
     onDragLayerOnCanvas: (Float, Float) -> Unit,
+    onScaleAndRotateLayerOnCanvas: (Float, Float) -> Unit = { _, _ -> },
     onResetTransform: () -> Unit,
     onToggleKeyframe: () -> Unit,
-    onUpdateBezierHandles: (Float, Float, Float, Float) -> Unit,
+    onUpdateBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit,
+    onSelectEffectForInspection: (String) -> Unit = {},
+    onSelectEffectSlot: (EffectParamSlot) -> Unit = {},
+    onUpdateEffectSlotValue: (Float) -> Unit = {},
+    onToggleEffectKeyframe: () -> Unit = {},
+    onJumpEffectKeyframe: (Boolean) -> Unit = {},
+    onUpdateEffectBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
+    onUpdateEffectExpression: (String) -> Unit = {},
+    onMoveEffectOrder: (String, Boolean) -> Unit = { _, _ -> },
+    onDuplicateEffect: (String) -> Unit = {},
+    onResetEffect: (String) -> Unit = {},
+    onCopyCurve: (Boolean) -> Unit = {},
+    onPasteCurve: (Boolean) -> Unit = {},
+    onDragKeyframePoint: (String, Long, Float, Boolean) -> Unit = { _, _, _, _ -> },
+    onOpenGraphEditor: (Boolean) -> Unit = {},
     onImportMediaUri: (Uri, LayerType) -> Unit,
     onExtractAudioFromVideo: () -> Unit,
     onAddLayer: (LayerType, String) -> Unit,
@@ -174,6 +211,10 @@ fun EditorWorkspaceScreen(
     onPasteEffects: () -> Unit,
     onDuplicateLayer: () -> Unit,
     onMoveLayerZOrder: (String, Boolean) -> Unit,
+    onRenameLayer: (String, String) -> Unit = { _, _ -> },
+    onToggleSoloLayer: (String) -> Unit = {},
+    onGroupIntoNullRig: () -> Unit = {},
+    onExpandLayerToComp: () -> Unit = {},
     onPullStart: () -> Unit,
     onTrimStart: () -> Unit,
     onUpdateSpeed: (Float) -> Unit,
@@ -201,6 +242,7 @@ fun EditorWorkspaceScreen(
     onUpdate3DPrimitive: (String, Primitive3DType) -> Unit,
     onUpdateEffectNode: (EffectNode) -> Unit,
     onRemoveEffectNode: (String) -> Unit,
+    onClearAllEffects: (() -> Unit)? = null,
     onUpdateProjectSettings: (String, Int, Int, Int, Int, String) -> Unit,
     onViewportGesture: (Float, Float, Float) -> Unit,
     onResetViewport: () -> Unit
@@ -208,10 +250,13 @@ fun EditorWorkspaceScreen(
     val project = state.activeProject
     val selectedLayer = project.layers.firstOrNull { it.id == state.selectedLayerId }
     val isLayerSheetOpen = state.inspectorTab != AmInspectorTab.TIMELINE && selectedLayer != null
+    val density = LocalDensity.current
 
     var showAddDrawer by remember { mutableStateOf(false) }
     var showProjectSettings by remember { mutableStateOf(false) }
     var showClipboardMenu by remember { mutableStateOf(false) }
+    var showQualityMenu by remember { mutableStateOf(false) }
+    var showPlayHoldMenu by remember { mutableStateOf(false) }
 
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -358,6 +403,34 @@ fun EditorWorkspaceScreen(
                                             showClipboardMenu = false
                                         }
                                     )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                if (state.soloLayerId == selectedLayer.id) "Disable Solo Layer"
+                                                else "Solo Layer"
+                                            )
+                                        },
+                                        onClick = {
+                                            onToggleSoloLayer(selectedLayer.id)
+                                            showClipboardMenu = false
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Expand Clip to Composition") },
+                                        onClick = {
+                                            onExpandLayerToComp()
+                                            showClipboardMenu = false
+                                        }
+                                    )
+                                }
+                                if (project.layers.size >= 2) {
+                                    DropdownMenuItem(
+                                        text = { Text("Group into Null Rig") },
+                                        onClick = {
+                                            onGroupIntoNullRig()
+                                            showClipboardMenu = false
+                                        }
+                                    )
                                 }
                                 if (selectedLayer?.type == LayerType.VIDEO) {
                                     HorizontalDivider(color = OutlineSubtle)
@@ -475,7 +548,7 @@ fun EditorWorkspaceScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // 2. TOP HALF: UNOBSTRUCTED ALIGHT MOTION PREVIEW STAGE
+            // 2. TOP HALF: UNOBSTRUCTED ALIGHT MOTION PREVIEW STAGE + QUALITY SWITCHER & CACHE HUD
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -485,6 +558,12 @@ fun EditorWorkspaceScreen(
                     project = project,
                     playheadMs = state.playheadMs,
                     isPlaying = state.isPlaying,
+                    previewQuality = state.previewQuality,
+                    previewFpsCap = preferences.previewFpsCap,
+                    isLooping = state.isLoopPlayback,
+                    projectRevision = state.projectRevision,
+                    usePlaybackCache = preferences.autoCachePlaybackFrames || preRenderState.cachedFramesCount > 0,
+                    onRenderStatsUpdate = if (preferences.showPerformanceHud) onRenderTelemetryUpdate else null,
                     audioSnapshot = audioSpectrum,
                     canvasZoom = state.canvasZoom,
                     canvasPanX = state.canvasPanX,
@@ -495,8 +574,179 @@ fun EditorWorkspaceScreen(
                     selectedLayerId = state.selectedLayerId,
                     onViewportGesture = onViewportGesture,
                     onDragSelectedLayer = onDragLayerOnCanvas,
+                    onScaleAndRotateSelectedLayer = onScaleAndRotateLayerOnCanvas,
+                    onSelectLayerOnCanvas = onSelectLayer,
                     modifier = Modifier.fillMaxSize()
                 )
+
+                // Top-Left: Preview Quality Switcher (Full / Half / Quarter / Low) + Pre-render Status + Performance HUD
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(SurfaceDark.copy(alpha = 0.90f))
+                                    .border(0.8.dp, OutlineSubtle, RoundedCornerShape(8.dp))
+                                    .clickable { showQualityMenu = true }
+                                    .testTag("preview_quality_button")
+                                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.HighQuality,
+                                    contentDescription = "Preview quality",
+                                    tint = AmTealBright,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "${state.previewQuality.badge} ${state.previewQuality.title}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary
+                                )
+                                if (preRenderState.cachedFramesCount > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(RigGreen)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = showQualityMenu,
+                                onDismissRequest = { showQualityMenu = false }
+                            ) {
+                                PreviewQuality.entries.forEach { q ->
+                                    val isCurrent = state.previewQuality == q
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "${q.title} (${q.badge})",
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isCurrent) AmTealBright else TextPrimary
+                                                )
+                                                if (isCurrent) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = AmTealBright,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            onSetPreviewQuality(q)
+                                            showQualityMenu = false
+                                        },
+                                        modifier = Modifier.testTag("preview_quality_option_${q.name}")
+                                    )
+                                }
+                                HorizontalDivider(color = OutlineSubtle)
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (preRenderState.isPreRendering) "Stop Pre-render" else "Pre-render Playback Cache",
+                                            color = AudioCyan,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    },
+                                    onClick = {
+                                        onTriggerOrCancelPreRender()
+                                        showQualityMenu = false
+                                    },
+                                    modifier = Modifier.testTag("preview_menu_prerender")
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (state.isLoopPlayback) "Loop Playback: ON" else "Loop Playback: OFF",
+                                            color = if (state.isLoopPlayback) AmTealBright else TextSecondary
+                                        )
+                                    },
+                                    onClick = {
+                                        onToggleLoop()
+                                        showQualityMenu = false
+                                    },
+                                    modifier = Modifier.testTag("preview_menu_loop")
+                                )
+                                if (preRenderState.cachedFramesCount > 0) {
+                                    DropdownMenuItem(
+                                        text = { Text("Clear Playback Cache", color = NeonPink) },
+                                        onClick = {
+                                            onClearPlaybackCache()
+                                            showQualityMenu = false
+                                        },
+                                        modifier = Modifier.testTag("preview_menu_clear_cache")
+                                    )
+                                }
+                            }
+                        }
+
+                        if (preRenderState.isPreRendering) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(SurfaceDark.copy(alpha = 0.92f))
+                                    .border(0.8.dp, AudioCyan.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                                    .clickable(onClick = onTriggerOrCancelPreRender)
+                                    .testTag("prerender_progress_pill")
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Bolt,
+                                    contentDescription = "Pre-rendering",
+                                    tint = AudioCyan,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                val fpsSuffix = if (preRenderState.throughputFps > 0) " • ${preRenderState.throughputFps} fps" else ""
+                                Text(
+                                    text = "Pre-render ${(preRenderState.progress * 100).toInt()}%$fpsSuffix",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AudioCyan
+                                )
+                            }
+                        }
+                    }
+
+                    if (preferences.showPerformanceHud) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(DeepBlack.copy(alpha = 0.84f))
+                                .border(0.6.dp, OutlineSubtle, RoundedCornerShape(7.dp))
+                                .testTag("preview_performance_hud")
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "${state.livePreviewFps} FPS • ${String.format("%.1f", state.liveFrameTimeMs)}ms • Cache ${PlaybackCacheEngine.getCacheHitRatePercent()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = RigGreen
+                            )
+                        }
+                    }
+                }
 
                 if (state.canvasZoom != 1f || state.canvasPanX != 0f || state.canvasPanY != 0f) {
                     Text(
@@ -573,57 +823,191 @@ fun EditorWorkspaceScreen(
                         )
                     }
 
-                    // Center: Expressive Frame-Step + Play/Pause Cluster
+                    // Center: 1:1 Alight Motion Smart Bookmark/Boundary Jump (|< & >|) + Frame Step (‹ & ›) + Play/Pause!
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Previous button beside Play: jumps to earlier bookmark if present, or 00:00:00 if none!
                         AmSquareIconButton(
                             icon = Icons.Default.SkipPrevious,
-                            contentDescription = "Previous frame",
-                            tint = TextSecondary,
-                            onClick = { onStepFrame(-1) },
-                            sizeDp = 34.dp
+                            contentDescription = "Previous bookmark or start (0)",
+                            tint = TextPrimary,
+                            onClick = { onJumpBookmark(false) },
+                            sizeDp = 34.dp,
+                            testTag = "transport_prev_bookmark_or_start_button"
                         )
 
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (state.isPlaying) {
-                                        Brush.linearGradient(listOf(AmTealBright, AmTeal))
-                                    } else {
-                                        Brush.linearGradient(listOf(PanelElevated, PanelDark))
+                        AmSquareIconButton(
+                            icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "Step back 1 frame",
+                            tint = TextSecondary,
+                            onClick = { onStepFrame(-1) },
+                            sizeDp = 30.dp,
+                            testTag = "step_prev_frame_button"
+                        )
+
+                        // Play / Pause with Click-and-Hold Upper Buttons (Loop + Pre-render)!
+                        Box(contentAlignment = Alignment.Center) {
+                            if (showPlayHoldMenu) {
+                                Popup(
+                                    alignment = Alignment.TopCenter,
+                                    offset = IntOffset(0, -with(density) { 46.dp.roundToPx() }),
+                                    onDismissRequest = { showPlayHoldMenu = false },
+                                    properties = PopupProperties(focusable = true)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .shadow(8.dp, RoundedCornerShape(12.dp))
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(SurfaceDark)
+                                            .border(1.dp, AmTeal.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                                            .testTag("play_hold_upper_menu")
+                                            .padding(horizontal = 6.dp, vertical = 5.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // 1. LOOP UPPER BUTTON
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (state.isLoopPlayback) AmTealContainer else PanelDark)
+                                                .border(
+                                                    0.9.dp,
+                                                    if (state.isLoopPlayback) AmTealBright else OutlineSubtle,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable {
+                                                    onToggleLoop()
+                                                    showPlayHoldMenu = false
+                                                }
+                                                .testTag("play_hold_loop_button")
+                                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Loop,
+                                                contentDescription = "Loop playback",
+                                                tint = if (state.isLoopPlayback) AmTealBright else TextSecondary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = if (state.isLoopPlayback) "Loop ON" else "Loop OFF",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (state.isLoopPlayback) AmTealBright else TextPrimary
+                                            )
+                                        }
+
+                                        // 2. PRE-RENDER UPPER BUTTON
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(
+                                                    if (preRenderState.isPreRendering || preRenderState.cachedFramesCount > 0) {
+                                                        AudioCyan.copy(alpha = 0.16f)
+                                                    } else PanelDark
+                                                )
+                                                .border(
+                                                    0.9.dp,
+                                                    if (preRenderState.isPreRendering) AudioCyan else OutlineSubtle,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable {
+                                                    onTriggerOrCancelPreRender()
+                                                    showPlayHoldMenu = false
+                                                }
+                                                .testTag("play_hold_prerender_button")
+                                                .padding(horizontal = 9.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Bolt,
+                                                contentDescription = "Pre-render playback",
+                                                tint = AudioCyan,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = if (preRenderState.isPreRendering) {
+                                                    "Stop ${(preRenderState.progress * 100).toInt()}%"
+                                                } else {
+                                                    "Pre-render"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AudioCyan
+                                            )
+                                        }
                                     }
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (state.isPlaying) {
+                                            Brush.linearGradient(listOf(AmTealBright, AmTeal))
+                                        } else {
+                                            Brush.linearGradient(listOf(PanelElevated, PanelDark))
+                                        }
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (state.isPlaying) AmTealBright else OutlineSubtle,
+                                        CircleShape
+                                    )
+                                    .combinedClickable(
+                                        onClick = onTogglePlay,
+                                        onLongClick = { showPlayHoldMenu = true }
+                                    )
+                                    .testTag("timeline_play_pause_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (state.isPlaying) "Pause (hold for Loop & Pre-render)" else "Play (hold for Loop & Pre-render)",
+                                    tint = if (state.isPlaying) DeepBlack else TextPrimary,
+                                    modifier = Modifier.size(21.dp)
                                 )
-                                .border(
-                                    1.dp,
-                                    if (state.isPlaying) AmTealBright else OutlineSubtle,
-                                    CircleShape
+                            }
+
+                            if (state.isLoopPlayback) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(AmTealBright)
+                                        .border(1.dp, SurfaceDark, CircleShape)
                                 )
-                                .clickable(onClick = onTogglePlay)
-                                .testTag("timeline_play_pause_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (state.isPlaying) "Pause" else "Play",
-                                tint = if (state.isPlaying) DeepBlack else TextPrimary,
-                                modifier = Modifier.size(21.dp)
-                            )
+                            }
                         }
 
                         AmSquareIconButton(
-                            icon = Icons.Default.SkipNext,
-                            contentDescription = "Next frame",
+                            icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Step forward 1 frame",
                             tint = TextSecondary,
                             onClick = { onStepFrame(1) },
-                            sizeDp = 34.dp
+                            sizeDp = 30.dp,
+                            testTag = "step_next_frame_button"
+                        )
+
+                        // Next/Forward button beside Play: jumps to forward bookmark if present, or timeline end if none!
+                        AmSquareIconButton(
+                            icon = Icons.Default.SkipNext,
+                            contentDescription = "Next bookmark or timeline end",
+                            tint = TextPrimary,
+                            onClick = { onJumpBookmark(true) },
+                            sizeDp = 34.dp,
+                            testTag = "transport_next_bookmark_or_end_button"
                         )
                     }
 
-                    // Right: Pure Icon Bookmark Navigation Cluster (‹ 🔖 › — zero squeezed text!)
+                    // Right: Pure Icon Bookmark Navigation Cluster (‹ 🔖 › — always active: jumps to bookmark or 0/end!)
                     Row(
                         modifier = Modifier
                             .height(34.dp)
@@ -638,24 +1022,22 @@ fun EditorWorkspaceScreen(
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(30.dp, 34.dp)
-                                .clickable(
-                                    enabled = project.beatMarkers.isNotEmpty(),
-                                    onClick = { onJumpBookmark(false) }
-                                ),
+                                .size(28.dp, 34.dp)
+                                .clickable { onJumpBookmark(false) }
+                                .testTag("bookmark_cluster_prev_button"),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                contentDescription = "Previous bookmark",
-                                tint = if (project.beatMarkers.isNotEmpty()) TextSecondary else TextMuted.copy(alpha = 0.4f),
+                                contentDescription = "Previous bookmark or start",
+                                tint = if (project.beatMarkers.isNotEmpty()) NeonPink else TextSecondary,
                                 modifier = Modifier.size(17.dp)
                             )
                         }
 
                         Box(
                             modifier = Modifier
-                                .size(34.dp, 34.dp)
+                                .size(32.dp, 34.dp)
                                 .clickable(onClick = onToggleBeatBookmark)
                                 .testTag("timecode_bookmark_button"),
                             contentAlignment = Alignment.Center
@@ -670,17 +1052,15 @@ fun EditorWorkspaceScreen(
 
                         Box(
                             modifier = Modifier
-                                .size(30.dp, 34.dp)
-                                .clickable(
-                                    enabled = project.beatMarkers.isNotEmpty(),
-                                    onClick = { onJumpBookmark(true) }
-                                ),
+                                .size(28.dp, 34.dp)
+                                .clickable { onJumpBookmark(true) }
+                                .testTag("bookmark_cluster_next_button"),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "Next bookmark",
-                                tint = if (project.beatMarkers.isNotEmpty()) TextSecondary else TextMuted.copy(alpha = 0.4f),
+                                contentDescription = "Next bookmark or end",
+                                tint = if (project.beatMarkers.isNotEmpty()) NeonPink else TextSecondary,
                                 modifier = Modifier.size(17.dp)
                             )
                         }
@@ -702,12 +1082,16 @@ fun EditorWorkspaceScreen(
                         allLayers = project.layers,
                         projectDurationMs = project.durationMs,
                         selectedProperty = state.selectedProperty,
+                        selectedEffectId = state.selectedEffectId,
+                        selectedEffectSlot = state.selectedEffectSlot,
                         playheadMs = state.playheadMs,
                         audioSpectrum = audioSpectrum,
                         hasCopiedEffects = state.hasCopiedEffects,
+                        hasCopiedCurve = state.hasCopiedCurve,
                         canMoveForward = selIdx in 0 until project.layers.lastIndex,
                         canMoveBackward = selIdx > 0,
                         onMoveLayerZOrder = { sendBack -> onMoveLayerZOrder(selectedLayer.id, sendBack) },
+                        onRenameLayer = onRenameLayer,
                         onSetInspectorTab = onSetInspectorTab,
                         onCollapseToTimeline = onCollapseToTimeline,
                         onScrubPlayhead = onScrubPlayhead,
@@ -719,6 +1103,20 @@ fun EditorWorkspaceScreen(
                         onToggleKeyframe = onToggleKeyframe,
                         onJumpKeyframe = onJumpKeyframe,
                         onUpdateBezierHandles = onUpdateBezierHandles,
+                        onSelectEffectForInspection = onSelectEffectForInspection,
+                        onSelectEffectSlot = onSelectEffectSlot,
+                        onUpdateEffectSlotValue = onUpdateEffectSlotValue,
+                        onToggleEffectKeyframe = onToggleEffectKeyframe,
+                        onJumpEffectKeyframe = onJumpEffectKeyframe,
+                        onUpdateEffectBezierHandles = onUpdateEffectBezierHandles,
+                        onUpdateEffectExpression = onUpdateEffectExpression,
+                        onMoveEffectOrder = onMoveEffectOrder,
+                        onDuplicateEffect = onDuplicateEffect,
+                        onResetEffect = onResetEffect,
+                        onCopyCurve = onCopyCurve,
+                        onPasteCurve = onPasteCurve,
+                        onDragKeyframePoint = onDragKeyframePoint,
+                        onOpenGraphEditor = onOpenGraphEditor,
                         onPullStart = onPullStart,
                         onTrimStart = onTrimStart,
                         onUpdateSpeed = onUpdateSpeed,
@@ -754,6 +1152,7 @@ fun EditorWorkspaceScreen(
                         onUpdate3DPrimitive = onUpdate3DPrimitive,
                         onUpdateEffectNode = onUpdateEffectNode,
                         onRemoveEffectNode = onRemoveEffectNode,
+                        onClearAllEffects = onClearAllEffects,
                         onCopyEffects = onCopyEffects,
                         onPasteEffects = onPasteEffects,
                         onNavigateTool = onNavigateTool
@@ -761,6 +1160,7 @@ fun EditorWorkspaceScreen(
                 } else {
                     AmMultitrackTimelineArea(
                         state = state,
+                        cachedSpanFractions = preRenderState.cachedSpanFractions,
                         isAddDrawerOpen = showAddDrawer,
                         onScrubPlayhead = onScrubPlayhead,
                         onSetTimelineZoom = onSetTimelineZoom,
@@ -812,6 +1212,7 @@ fun EditorWorkspaceScreen(
 @Composable
 private fun AmMultitrackTimelineArea(
     state: StudioWorkspaceState,
+    cachedSpanFractions: List<Pair<Float, Float>> = emptyList(),
     isAddDrawerOpen: Boolean,
     onScrubPlayhead: (Long) -> Unit,
     onSetTimelineZoom: (Float) -> Unit,
@@ -903,6 +1304,18 @@ private fun AmMultitrackTimelineArea(
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
+
+                        // Green RAM Pre-Render Cache Span Indicator Bar along top of ruler!
+                        cachedSpanFractions.forEach { (startF, endF) ->
+                            val sx = (startF.coerceIn(0f, 1f)) * w
+                            val ex = (endF.coerceIn(0f, 1f)) * w
+                            drawRect(
+                                color = RigGreen.copy(alpha = 0.85f),
+                                topLeft = Offset(sx, 0f),
+                                size = Size((ex - sx).coerceAtLeast(3f), 3.2f)
+                            )
+                        }
+
                         val tickDensity = (28 * state.timelineZoom).toInt().coerceIn(16, 96)
                         for (i in 0..tickDensity) {
                             val x = (i.toFloat() / tickDensity) * w
@@ -1133,7 +1546,7 @@ private fun AmTimelineLayerRow(
         LayerType.NULL_OBJECT -> Icons.Default.AccountTree
     }
     val kfTimes = remember(layer) {
-        PropertyTarget.entries.flatMap { t -> layer.propertyFor(t).keyframes.map { it.timeMs } }.distinct()
+        layer.allKeyframeTimes()
     }
     val durFloat = durationMs.coerceAtLeast(1L).toFloat()
 

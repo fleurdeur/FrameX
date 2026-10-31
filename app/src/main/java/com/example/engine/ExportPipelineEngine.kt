@@ -34,12 +34,12 @@ import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.example.data.model.LayerType
 import com.example.data.model.Project
+import com.example.data.preferences.BitrateProfile
+import com.example.data.preferences.StudioPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.coroutines.resume
 
 data class ExportOutcome(
     val outputPath: String,
@@ -54,7 +54,7 @@ data class ExportOutcome(
 /**
  * Hardware-accelerated MP4 Export Pipeline:
  * 1. Renders frame-accurate composited frames at the user's custom Resolution (W x H) and custom FPS
- *    via Android hardware MediaCodec + MediaMuxer.
+ *    via Android hardware MediaCodec + MediaMuxer with user-configured Bitrate Profile & GOP Interval.
  * 2. Runs Jetpack Media3 Transformer post-processing pass applying GlEffect chains & target H.264 / H.265 codec.
  * 3. Publishes the final MP4 to MediaStore Movies/FramePollution for instant sharing/viewing.
  */
@@ -65,14 +65,19 @@ object ExportPipelineEngine {
         context: Context,
         project: Project,
         audioEngine: AudioReactorEngine,
+        preferences: StudioPreferences = StudioPreferences(),
         onProgress: (Float, String) -> Unit
     ): Result<ExportOutcome> = withContext(Dispatchers.Default) {
         try {
-            // Ensure even dimensions required by hardware H.264/H.265 encoders
             val targetW = ((project.width.coerceIn(128, 3840) / 2) * 2).coerceAtLeast(128)
             val targetH = ((project.height.coerceIn(128, 3840) / 2) * 2).coerceAtLeast(128)
             val targetFps = project.fps.coerceIn(12, 120)
             val exportDurationMs = project.durationMs.coerceIn(1000L, 15000L)
+            val chosenCodec = if (project.codec == "H.265" || preferences.preferredVideoCodec == "H.265") {
+                if (project.codec == "H.264") "H.264" else "H.265"
+            } else {
+                "H.264"
+            }
 
             val rawDir = File(context.cacheDir, "exports").apply { mkdirs() }
             val safeTitle = project.name.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").ifBlank { "FramePollution" }
@@ -81,7 +86,7 @@ object ExportPipelineEngine {
             if (intermediateFile.exists()) intermediateFile.delete()
             if (transformedFile.exists()) transformedFile.delete()
 
-            onProgress(0.05f, "Allocating ${targetW}x${targetH} @ ${targetFps}fps framebuffer...")
+            onProgress(0.05f, "Allocating ${targetW}x${targetH} @ ${targetFps}fps (${preferences.exportBitrateProfile.label})...")
 
             renderSequenceWithMediaCodec(
                 context = context,
@@ -92,20 +97,22 @@ object ExportPipelineEngine {
                 height = targetH,
                 fps = targetFps,
                 durationMs = exportDurationMs,
+                bitrateProfile = preferences.exportBitrateProfile,
+                gopSec = preferences.keyframeIntervalSec,
                 onFrameProgress = { p ->
                     onProgress(0.05f + p * 0.60f, "Rendering frames (${(p * 100).toInt()}%)...")
                 }
             )
 
-            onProgress(0.68f, "Running Media3 Transformer GlEffect pipeline (${project.codec})...")
+            onProgress(0.68f, "Running Media3 Transformer GlEffect pipeline ($chosenCodec)...")
             val finalFile = runMedia3TransformerPass(
                 context = context,
                 inputFile = intermediateFile,
                 outputFile = transformedFile,
-                project = project,
+                project = project.copy(codec = chosenCodec),
                 targetHeight = targetH,
                 onTransformProgress = { tp ->
-                    onProgress(0.68f + tp * 0.25f, "Encoding ${project.codec} MP4 (${(tp * 100).toInt()}%)...")
+                    onProgress(0.68f + tp * 0.25f, "Encoding $chosenCodec MP4 (${(tp * 100).toInt()}%)...")
                 }
             )
 
@@ -124,7 +131,7 @@ object ExportPipelineEngine {
                     width = targetW,
                     height = targetH,
                     fps = targetFps,
-                    codec = project.codec
+                    codec = chosenCodec
                 )
             )
         } catch (e: Exception) {
@@ -141,10 +148,10 @@ object ExportPipelineEngine {
         height: Int,
         fps: Int,
         durationMs: Long,
+        bitrateProfile: BitrateProfile,
+        gopSec: Int,
         onFrameProgress: (Float) -> Unit
     ) {
-        // Cap software-fed encoder dimensions to 1280 max edge if 4K to ensure reliable fast completion on all mobile SoCs,
-        // then Media3 Presentation scales to requested output resolution.
         val maxRenderEdge = 1280
         val aspect = width.toFloat() / height.toFloat()
         val encW: Int
@@ -163,12 +170,13 @@ object ExportPipelineEngine {
         }
 
         val mime = MediaFormat.MIMETYPE_VIDEO_AVC
-        val bitRate = (encW * encH * fps * 0.14f).toInt().coerceIn(2_000_000, 16_000_000)
+        val maxCapBps = bitrateProfile.targetMbps * 1_000_000
+        val bitRate = (encW * encH * fps * bitrateProfile.bppFactor).toInt().coerceIn(2_000_000, maxCapBps)
         val format = MediaFormat.createVideoFormat(mime, encW, encH).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, gopSec.coerceIn(1, 5))
         }
 
         val encoder = MediaCodec.createEncoderByType(mime)

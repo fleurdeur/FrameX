@@ -383,49 +383,37 @@ fun AmMoveTransformPanel(
 }
 
 /**
- * 1:1 Alight Motion Inline Bezier Easing Panel right inside the clicked-layer bottom sheet!
+ * 1:1 Alight Motion Inline Bezier Easing & Value Graph Panel right inside the clicked-layer bottom sheet!
  */
 @Composable
 fun AmInlineEasingPanel(
     selectedLayer: Layer,
     selectedProperty: PropertyTarget,
     playheadMs: Long,
-    onUpdateBezierHandles: (outX: Float, outY: Float, inX: Float, inY: Float) -> Unit,
+    hasCopiedCurve: Boolean = false,
+    onUpdateBezierHandles: (outX: Float, outY: Float, inX: Float, inY: Float, holdStep: Boolean) -> Unit,
+    onCopyCurve: () -> Unit = {},
+    onPasteCurve: () -> Unit = {},
+    onDragKeyframeNode: ((kfId: String, newTimeMs: Long, newValue: Float) -> Unit)? = null,
+    onScrubPlayhead: ((Long) -> Unit)? = null,
     onReturnToTransform: () -> Unit,
     onOpenFullGraph: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val prop = selectedLayer.propertyFor(selectedProperty)
-    val sorted = prop.keyframes.sortedBy { it.timeMs }
-    val activeKf = sorted.lastOrNull { it.timeMs <= playheadMs } ?: sorted.firstOrNull()
-    val nextKf = sorted.firstOrNull { it.timeMs > (activeKf?.timeMs ?: -1L) } ?: sorted.lastOrNull()
 
-    var x1 by remember(selectedLayer.id, selectedProperty, activeKf?.id) {
-        mutableFloatStateOf(activeKf?.outTangentX ?: 0.42f)
-    }
-    var y1 by remember(selectedLayer.id, selectedProperty, activeKf?.id) {
-        mutableFloatStateOf(activeKf?.outTangentY ?: 0.0f)
-    }
-    var x2 by remember(selectedLayer.id, selectedProperty, nextKf?.id) {
-        mutableFloatStateOf(nextKf?.inTangentX ?: 0.58f)
-    }
-    var y2 by remember(selectedLayer.id, selectedProperty, nextKf?.id) {
-        mutableFloatStateOf(nextKf?.inTangentY ?: 1.0f)
-    }
-
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier.width(98.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(32.dp)
+                    .height(30.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(PanelDark)
                     .border(1.dp, OutlineSubtle, RoundedCornerShape(8.dp))
@@ -433,112 +421,43 @@ fun AmInlineEasingPanel(
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(15.dp))
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Back", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                Text("${selectedProperty.label} Easing", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
             }
 
-            listOf(
-                "Linear" to floatArrayOf(0.25f, 0.25f, 0.75f, 0.75f),
-                "Ease In/Out" to floatArrayOf(0.42f, 0.0f, 0.58f, 1.0f),
-                "Ease Out" to floatArrayOf(0.16f, 1.0f, 0.30f, 1.0f),
-                "Overshoot" to floatArrayOf(0.34f, 1.38f, 0.64f, 1.0f)
-            ).forEach { (label, pts) ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(29.dp)
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(PanelDark)
-                        .border(1.dp, OutlineSubtle, RoundedCornerShape(7.dp))
-                        .clickable {
-                            x1 = pts[0]; y1 = pts[1]; x2 = pts[2]; y2 = pts[3]
-                            onUpdateBezierHandles(x1, y1, x2, y2)
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                }
+            Row(
+                modifier = Modifier
+                    .height(30.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(AmTealContainer)
+                    .border(1.dp, AmTeal, RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenFullGraph)
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Timeline, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Full Graph", style = MaterialTheme.typography.labelSmall, color = AmTealBright, fontWeight = FontWeight.Bold)
             }
         }
 
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(148.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(DeepBlack)
-                .border(1.dp, OutlineSubtle, RoundedCornerShape(12.dp))
-                .pointerInput(selectedLayer.id, selectedProperty) {
-                    var draggingHandle = 1
-                    detectDragGestures(
-                        onDragStart = { start ->
-                            val pad = 18f
-                            val gw = (size.width - pad * 2f).coerceAtLeast(1f)
-                            val gh = (size.height - pad * 2f).coerceAtLeast(1f)
-                            val p1 = Offset(pad + x1 * gw, size.height - pad - y1.coerceIn(-0.3f, 1.3f) * gh)
-                            val p2 = Offset(pad + x2 * gw, size.height - pad - y2.coerceIn(-0.3f, 1.3f) * gh)
-                            val d1 = hypot(start.x - p1.x, start.y - p1.y)
-                            val d2 = hypot(start.x - p2.x, start.y - p2.y)
-                            draggingHandle = if (d1 <= d2) 1 else 2
-                        },
-                        onDrag = { change, drag ->
-                            change.consume()
-                            val gw = (size.width - 36f).coerceAtLeast(1f)
-                            val gh = (size.height - 36f).coerceAtLeast(1f)
-                            if (draggingHandle == 1) {
-                                x1 = (x1 + drag.x / gw).coerceIn(0f, 1f)
-                                y1 = (y1 - drag.y / gh).coerceIn(-0.35f, 1.4f)
-                            } else {
-                                x2 = (x2 + drag.x / gw).coerceIn(0f, 1f)
-                                y2 = (y2 - drag.y / gh).coerceIn(-0.35f, 1.4f)
-                            }
-                            onUpdateBezierHandles(x1, y1, x2, y2)
-                        }
-                    )
-                }
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val pad = 18f
-                val gw = (size.width - pad * 2f).coerceAtLeast(1f)
-                val gh = (size.height - pad * 2f).coerceAtLeast(1f)
-                val p0 = Offset(pad, size.height - pad)
-                val p3 = Offset(pad + gw, pad)
-                val p1 = Offset(pad + x1 * gw, size.height - pad - y1.coerceIn(-0.3f, 1.3f) * gh)
-                val p2 = Offset(pad + x2 * gw, size.height - pad - y2.coerceIn(-0.3f, 1.3f) * gh)
-
-                drawLine(OutlineSubtle, p0, p3, strokeWidth = 1.2f)
-                drawLine(AmTeal, p0, p1, strokeWidth = 2f)
-                drawLine(NeonPink, p3, p2, strokeWidth = 2f)
-
-                val curve = Path().apply {
-                    moveTo(p0.x, p0.y)
-                    cubicTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
-                }
-                drawPath(curve, Color.White, style = Stroke(width = 3f))
-                drawCircle(AmTealBright, radius = 7.5f, center = p1)
-                drawCircle(NeonPink, radius = 7.5f, center = p2)
-                drawCircle(KeyframeAmber, radius = 4.5f, center = p0)
-                drawCircle(KeyframeAmber, radius = 4.5f, center = p3)
-            }
-        }
-
-        Column(
-            modifier = Modifier.width(52.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AmSubToolRailButton(
-                icon = Icons.Default.Timeline,
-                label = "Graph",
-                selected = true,
-                onClick = onOpenFullGraph
-            )
-            Text(
-                text = "${String.format("%.2f", x1)}\n${String.format("%.2f", y1)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted
-            )
-        }
+        com.example.ui.components.AmControllableCurveEditor(
+            property = prop,
+            minValue = selectedProperty.minVal,
+            maxValue = selectedProperty.maxVal,
+            playheadMs = playheadMs,
+            clipStartMs = selectedLayer.startTimeMs,
+            clipEndMs = selectedLayer.endTimeMs,
+            hasCopiedCurve = hasCopiedCurve,
+            onUpdateBezierHandles = onUpdateBezierHandles,
+            onCopyCurve = onCopyCurve,
+            onPasteCurve = onPasteCurve,
+            onDragKeyframeNode = onDragKeyframeNode,
+            onScrubPlayhead = onScrubPlayhead,
+            canvasHeight = 160.dp,
+            compactMode = true,
+            canvasTestTag = "inline_bezier_curve_canvas"
+        )
     }
 }

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -86,6 +87,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.model.AspectRatioPreset
 import com.example.data.model.Project
+import com.example.data.preferences.StudioPreferences
 import com.example.ui.components.AmActionTileButton
 import com.example.ui.components.AmBottomNavigationBar
 import com.example.ui.components.AmHomeTab
@@ -122,7 +124,9 @@ fun HomeScreen(
     ) -> Unit,
     onOpenProject: (Project) -> Unit,
     onDeleteProject: (String) -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    defaultPreferences: StudioPreferences = StudioPreferences(),
+    onOpenSettings: () -> Unit = {}
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var activeTab by remember { mutableStateOf(AmHomeTab.HOME) }
@@ -180,6 +184,13 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    AmSquareIconButton(
+                        icon = Icons.Default.Settings,
+                        contentDescription = stringResource(id = R.string.settings_button_desc),
+                        onClick = onOpenSettings,
+                        testTag = "home_settings_button",
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
                     AmSquareIconButton(
                         icon = Icons.AutoMirrored.Filled.Logout,
                         contentDescription = stringResource(id = R.string.sign_out),
@@ -334,6 +345,7 @@ fun HomeScreen(
 
     if (showCreateDialog) {
         AmNewProjectScreenDialog(
+            defaultPreferences = defaultPreferences,
             onDismiss = { showCreateDialog = false },
             onConfirm = { name, preset, w, h, fps, durSec, bpm, bg ->
                 showCreateDialog = false
@@ -763,6 +775,7 @@ private fun AmProjectListRow(
  */
 @Composable
 private fun AmNewProjectScreenDialog(
+    defaultPreferences: StudioPreferences = StudioPreferences(),
     onDismiss: () -> Unit,
     onConfirm: (
         name: String,
@@ -776,14 +789,14 @@ private fun AmNewProjectScreenDialog(
     ) -> Unit
 ) {
     var name by remember { mutableStateOf("New Project 1") }
-    var selectedPreset by remember { mutableStateOf(AspectRatioPreset.LANDSCAPE_16_9) }
-    var widthText by remember { mutableStateOf("1920") }
-    var heightText by remember { mutableStateOf("1080") }
-    var fpsText by remember { mutableStateOf("60") }
-    var durationSecText by remember { mutableStateOf("10") }
+    var selectedPreset by remember { mutableStateOf(defaultPreferences.defaultAspectPreset) }
+    var widthText by remember { mutableStateOf(defaultPreferences.defaultAspectPreset.defaultWidth.toString()) }
+    var heightText by remember { mutableStateOf(defaultPreferences.defaultAspectPreset.defaultHeight.toString()) }
+    var fpsText by remember { mutableStateOf(defaultPreferences.defaultProjectFps.toString()) }
+    var durationSecText by remember { mutableStateOf(defaultPreferences.defaultProjectDurationSec.toString()) }
     var bpmText by remember { mutableStateOf("128") }
     var resolutionScale by remember { mutableIntStateOf(1080) }
-    var selectedBg by remember { mutableStateOf("Black") }
+    var selectedBg by remember { mutableStateOf(defaultPreferences.defaultCanvasBackground) }
 
     Dialog(
         onDismissRequest = onDismiss,

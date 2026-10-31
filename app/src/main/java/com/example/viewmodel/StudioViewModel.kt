@@ -12,6 +12,7 @@ import com.example.data.model.AudioBand
 import com.example.data.model.BeatMarker
 import com.example.data.model.CustomEffectPresetDocument
 import com.example.data.model.EffectNode
+import com.example.data.model.EffectParamSlot
 import com.example.data.model.Keyframe
 import com.example.data.model.Layer
 import com.example.data.model.LayerType
@@ -19,6 +20,10 @@ import com.example.data.model.Primitive3DType
 import com.example.data.model.Project
 import com.example.data.model.ProjectPayloadSerializer
 import com.example.data.model.PropertyTarget
+import com.example.data.preferences.AppPreferencesRepository
+import com.example.data.preferences.HardwareCodecCapabilities
+import com.example.data.preferences.PreviewQuality
+import com.example.data.preferences.StudioPreferences
 import com.example.data.repository.ProjectRepository
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioReactorEngine
@@ -26,9 +31,13 @@ import com.example.engine.AudioSpectrumSnapshot
 import com.example.engine.EffectCategory
 import com.example.engine.EffectDefinition
 import com.example.engine.EffectsCatalog
+import com.example.engine.EffectThumbnailPreviewer
 import com.example.engine.ExportOutcome
 import com.example.engine.ExportPipelineEngine
+import com.example.engine.HardwareVideoPreviewEngine
 import com.example.engine.MediaEngine
+import com.example.engine.PlaybackCacheEngine
+import com.example.engine.PreRenderUiState
 import com.example.engine.TimelineAudioController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,6 +46,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -56,6 +66,7 @@ sealed interface UiState<out T> {
 
 enum class StudioDestination {
     HOME,
+    SETTINGS,
     EDITOR,
     EFFECTS_BROWSER,
     GRAPH_EDITOR,
@@ -87,7 +98,9 @@ enum class AmInspectorTab {
     MOVE_TRANSFORM,
     EASING_INLINE,
     EDIT_LAYER,
-    EFFECTS
+    EFFECTS,
+    EFFECT_DETAIL,
+    EFFECT_EASING
 }
 
 data class ExportUiState(
@@ -112,14 +125,24 @@ data class StudioWorkspaceState(
     ),
     val selectedLayerId: String? = null,
     val selectedProperty: PropertyTarget = PropertyTarget.POS_X,
+    val selectedEffectId: String? = null,
+    val selectedEffectSlot: EffectParamSlot = EffectParamSlot.PRIMARY,
+    val graphTargetsEffect: Boolean = false,
     val inspectorTab: AmInspectorTab = AmInspectorTab.TIMELINE,
     val playheadMs: Long = 0L,
     val timelineZoom: Float = 1.0f,
     val isPlaying: Boolean = false,
+    val isLoopPlayback: Boolean = true,
+    val previewQuality: PreviewQuality = PreviewQuality.HALF,
+    val projectRevision: Long = 1L,
+    val livePreviewFps: Int = 60,
+    val liveFrameTimeMs: Float = 1.2f,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val hasCopiedLayer: Boolean = false,
     val hasCopiedEffects: Boolean = false,
+    val hasCopiedCurve: Boolean = false,
+    val soloLayerId: String? = null,
     val canvasZoom: Float = 1.0f,
     val canvasPanX: Float = 0f,
     val canvasPanY: Float = 0f,
@@ -173,12 +196,11 @@ object StudioTemplates {
                 audioReactorGain = 0.45f
             ),
             effects = listOf(
-                EffectsCatalog.findById("S_Glow").toNode().copy(
-                    intensity = 0.78f,
+                EffectsCatalog.findById("S_Glow").toNode(customIntensity = 0.78f).copy(
                     audioBoundBand = AudioBand.BASS,
                     audioSensitivity = 0.85f
                 ),
-                EffectsCatalog.findById("Chromatic_Aberration").toNode().copy(intensity = 0.42f)
+                EffectsCatalog.findById("Chromatic_Aberration").toNode(customIntensity = 0.42f)
             )
         )
         val titleLayer = Layer(
@@ -192,7 +214,7 @@ object StudioTemplates {
                 expression = "sin(time * 3.2) * 24"
             ),
             effects = listOf(
-                EffectsCatalog.findById("Glitch_Scanlines").toNode().copy(intensity = 0.35f)
+                EffectsCatalog.findById("Glitch_Scanlines").toNode(customIntensity = 0.35f)
             )
         )
         val cube3D = Layer(
@@ -228,9 +250,9 @@ object StudioTemplates {
                 audioReactorGain = 0.7f
             ),
             effects = listOf(
-                EffectsCatalog.findById("Beat_Sync_Pulse").toNode().copy(intensity = 0.7f, audioBoundBand = AudioBand.BASS),
-                EffectsCatalog.findById("RGB_Split").toNode().copy(intensity = 0.55f),
-                EffectsCatalog.findById("S_Glow").toNode().copy(intensity = 0.65f)
+                EffectsCatalog.findById("Beat_Sync_Pulse").toNode(customIntensity = 0.7f).copy(audioBoundBand = AudioBand.BASS),
+                EffectsCatalog.findById("RGB_Split").toNode(customIntensity = 0.55f),
+                EffectsCatalog.findById("S_Glow").toNode(customIntensity = 0.65f)
             )
         )
         val caption = Layer(
@@ -264,8 +286,8 @@ object StudioTemplates {
             colorHex = "#00D2A8",
             scale = AnimatableProperty(115f),
             effects = listOf(
-                EffectsCatalog.findById("Stardust_Particles").toNode().copy(intensity = 0.85f),
-                EffectsCatalog.findById("BCC_FilmGlow").toNode().copy(intensity = 0.6f)
+                EffectsCatalog.findById("Stardust_Particles").toNode(customIntensity = 0.85f),
+                EffectsCatalog.findById("BCC_FilmGlow").toNode(customIntensity = 0.6f)
             )
         )
         val subtitle = Layer(
@@ -290,20 +312,29 @@ object StudioTemplates {
 }
 
 class StudioViewModel(
-    private val repository: ProjectRepository,
-    private val currentUserId: String,
+    private val repository: ProjectRepository? = null,
+    private val currentUserId: String = "local_user",
     appContext: Context? = null
 ) : ViewModel() {
 
+    private val appCtx: Context? = appContext?.applicationContext
+    val preferencesRepository = AppPreferencesRepository(appCtx)
+    val preferences: StateFlow<StudioPreferences> = preferencesRepository.preferences
+    val codecCapabilities: HardwareCodecCapabilities
+        get() = preferencesRepository.codecCapabilities
+    val preRenderState: StateFlow<PreRenderUiState> = PlaybackCacheEngine.preRenderState
+
     val audioEngine = AudioReactorEngine()
-    private val timelineAudioController = appContext?.applicationContext?.let { TimelineAudioController(it) }
+    private val timelineAudioController = appCtx?.let { TimelineAudioController(it) }
 
     private val undoStack = ArrayDeque<Project>()
     private val redoStack = ArrayDeque<Project>()
     private var clipboardLayer: Layer? = null
     private var clipboardEffects: List<EffectNode> = emptyList()
+    private var clipboardCurve: FloatArray? = null
+    private var clipboardHoldStep: Boolean = false
 
-    val cloudProjects: StateFlow<UiState<List<Project>>> = repository.observeProjects(currentUserId)
+    val cloudProjects: StateFlow<UiState<List<Project>>> = (repository?.observeProjects(currentUserId) ?: flowOf(emptyList()))
         .map<List<Project>, UiState<List<Project>>> { UiState.Success(it) }
         .catch { err ->
             Log.w(TAG, "Error observing projects", err)
@@ -315,7 +346,7 @@ class StudioViewModel(
             initialValue = UiState.Loading
         )
 
-    val cloudPresets: StateFlow<UiState<List<CustomEffectPresetDocument>>> = repository.observePresets(currentUserId)
+    val cloudPresets: StateFlow<UiState<List<CustomEffectPresetDocument>>> = (repository?.observePresets(currentUserId) ?: flowOf(emptyList()))
         .map<List<CustomEffectPresetDocument>, UiState<List<CustomEffectPresetDocument>>> { UiState.Success(it) }
         .catch { err ->
             Log.w(TAG, "Error observing presets", err)
@@ -327,14 +358,129 @@ class StudioViewModel(
             initialValue = UiState.Loading
         )
 
-    private val _state = MutableStateFlow(StudioWorkspaceState())
+    private val _state = MutableStateFlow(
+        StudioWorkspaceState(
+            previewQuality = preferences.value.defaultPreviewQuality,
+            isLoopPlayback = preferences.value.defaultLoopPlayback
+        )
+    )
     val state: StateFlow<StudioWorkspaceState> = _state.asStateFlow()
 
     val liveSpectrum: StateFlow<AudioSpectrumSnapshot> = audioEngine.spectrum
     val isLiveMicActive: StateFlow<Boolean> = audioEngine.isLiveMicActive
 
     private var playbackJob: Job? = null
+    private var preRenderJob: Job? = null
+    private var idleAutoCacheJob: Job? = null
+    private var scrubSettleJob: Job? = null
     private var bannerClearJob: Job? = null
+
+    init {
+        applyPreferencesToEngines(preferences.value)
+    }
+
+    private fun applyPreferencesToEngines(prefs: StudioPreferences) {
+        MediaEngine.activePreviewQuality = _state.value.previewQuality
+        MediaEngine.fastKeyframeScrubEnabled = prefs.fastKeyframeScrub
+        MediaEngine.configureCacheLimitMb((prefs.playbackCacheLimitMb / 2).coerceIn(48, 256))
+        PlaybackCacheEngine.configureCacheLimitMb(prefs.playbackCacheLimitMb)
+        HardwareVideoPreviewEngine.syncDriftThresholdMs = prefs.audioSyncThresholdMs.toLong()
+        timelineAudioController?.syncDriftThresholdMs = prefs.audioSyncThresholdMs.toLong()
+        timelineAudioController?.muteDuringScrub = prefs.muteAudioDuringFastScrub
+    }
+
+    fun updateStudioPreferences(transform: (StudioPreferences) -> StudioPreferences) {
+        preferencesRepository.update(transform)
+        val updated = preferences.value
+        applyPreferencesToEngines(updated)
+    }
+
+    fun resetStudioPreferences() {
+        preferencesRepository.resetToDefaults()
+        val defaults = preferences.value
+        _state.update {
+            it.copy(
+                previewQuality = defaults.defaultPreviewQuality,
+                isLoopPlayback = defaults.defaultLoopPlayback
+            )
+        }
+        applyPreferencesToEngines(defaults)
+        postTransientBanner("Restored default Studio preferences")
+    }
+
+    fun setPreviewQuality(quality: PreviewQuality) {
+        MediaEngine.activePreviewQuality = quality
+        _state.update { it.copy(previewQuality = quality) }
+        postTransientBanner("Preview Quality: ${quality.title} (${quality.badge})")
+    }
+
+    fun toggleLoopPlayback() {
+        var nextLoop = true
+        _state.update {
+            nextLoop = !it.isLoopPlayback
+            it.copy(isLoopPlayback = nextLoop)
+        }
+        postTransientBanner(if (nextLoop) "Loop Playback ON" else "Loop Playback OFF")
+    }
+
+    fun setLoopPlayback(enabled: Boolean) {
+        _state.update { it.copy(isLoopPlayback = enabled) }
+    }
+
+    fun triggerOrCancelPreRender(context: Context? = appCtx) {
+        idleAutoCacheJob?.cancel()
+        idleAutoCacheJob = null
+        if (preRenderJob?.isActive == true || preRenderState.value.isPreRendering) {
+            preRenderJob?.cancel()
+            preRenderJob = null
+            val s = _state.value
+            PlaybackCacheEngine.notifyProjectEdited(
+                newRevision = s.projectRevision,
+                quality = s.previewQuality,
+                durationMs = s.activeProject.durationMs,
+                fps = s.activeProject.fps
+            )
+            postTransientBanner("Pre-render cancelled")
+            return
+        }
+
+        val snapshot = _state.value
+        val fpsCap = preferences.value.previewFpsCap
+        postTransientBanner("Pre-rendering @ ${snapshot.previewQuality.badge} (${snapshot.previewQuality.title})...")
+        preRenderJob = viewModelScope.launch {
+            PlaybackCacheEngine.preRenderComposition(
+                context = context?.applicationContext ?: appCtx,
+                project = snapshot.activeProject,
+                projectRevision = snapshot.projectRevision,
+                quality = snapshot.previewQuality,
+                fpsCap = fpsCap,
+                audioEngine = audioEngine
+            )
+            if (_state.value.projectRevision == snapshot.projectRevision) {
+                val st = preRenderState.value
+                val fpsLabel = if (st.throughputFps > 0) " @ ${st.throughputFps} fps" else ""
+                postTransientBanner("Pre-render ready (${st.cachedFramesCount} frames$fpsLabel)")
+            }
+        }
+    }
+
+    fun clearAllPlaybackAndMediaCaches() {
+        idleAutoCacheJob?.cancel()
+        idleAutoCacheJob = null
+        preRenderJob?.cancel()
+        preRenderJob = null
+        PlaybackCacheEngine.clearAll()
+        MediaEngine.clearAllMediaCache()
+        EffectThumbnailPreviewer.clearThumbnails()
+        postTransientBanner("Cleared playback & media RAM caches")
+    }
+
+    fun updateRenderTelemetry(fps: Int, frameMs: Float) {
+        val cur = _state.value
+        if (cur.livePreviewFps != fps || abs(cur.liveFrameTimeMs - frameMs) >= 0.25f) {
+            _state.update { it.copy(livePreviewFps = fps, liveFrameTimeMs = frameMs) }
+        }
+    }
 
     private fun postTransientBanner(message: String?) {
         bannerClearJob?.cancel()
@@ -350,7 +496,7 @@ class StudioViewModel(
     }
 
     fun navigateTo(destination: StudioDestination) {
-        if (destination == StudioDestination.HOME) {
+        if (destination == StudioDestination.HOME || destination == StudioDestination.SETTINGS) {
             pausePlayback()
         }
         _state.update { it.copy(destination = destination, statusBanner = null) }
@@ -359,6 +505,17 @@ class StudioViewModel(
     fun navigateBackToParent() {
         val current = _state.value
         when {
+            current.destination == StudioDestination.SETTINGS -> {
+                _state.update { it.copy(destination = StudioDestination.HOME) }
+            }
+            current.destination == StudioDestination.EDITOR &&
+                current.inspectorTab == AmInspectorTab.EFFECT_EASING -> {
+                _state.update { it.copy(inspectorTab = AmInspectorTab.EFFECT_DETAIL) }
+            }
+            current.destination == StudioDestination.EDITOR &&
+                current.inspectorTab == AmInspectorTab.EFFECT_DETAIL -> {
+                _state.update { it.copy(inspectorTab = AmInspectorTab.EFFECTS) }
+            }
             current.destination == StudioDestination.EDITOR &&
                 current.inspectorTab != AmInspectorTab.TIMELINE &&
                 current.inspectorTab != AmInspectorTab.LAYER_OVERVIEW -> {
@@ -378,6 +535,16 @@ class StudioViewModel(
         }
     }
 
+    fun openGraphEditor(forEffect: Boolean = false) {
+        _state.update {
+            it.copy(
+                graphTargetsEffect = forEffect,
+                destination = StudioDestination.GRAPH_EDITOR,
+                statusBanner = null
+            )
+        }
+    }
+
     fun setInspectorTab(tab: AmInspectorTab) {
         _state.update { current ->
             val selLayer = current.activeProject.layers.firstOrNull { it.id == current.selectedLayerId }
@@ -394,7 +561,12 @@ class StudioViewModel(
                 }
                 else -> current.selectedProperty
             }
-            current.copy(inspectorTab = tab, selectedProperty = nextProp)
+            val graphIsFx = tab == AmInspectorTab.EFFECT_DETAIL || tab == AmInspectorTab.EFFECT_EASING
+            current.copy(
+                inspectorTab = tab,
+                selectedProperty = nextProp,
+                graphTargetsEffect = graphIsFx
+            )
         }
     }
 
@@ -404,35 +576,55 @@ class StudioViewModel(
 
     fun undo() {
         if (undoStack.isEmpty()) return
+        idleAutoCacheJob?.cancel()
+        preRenderJob?.cancel()
         val current = _state.value.activeProject
         redoStack.addLast(current)
         val restored = undoStack.removeLast()
+        var nextRev = 1L
+        var qual = PreviewQuality.HALF
         _state.update {
+            nextRev = it.projectRevision + 1L
+            qual = it.previewQuality
             it.copy(
                 activeProject = restored,
+                projectRevision = nextRev,
                 selectedLayerId = it.selectedLayerId?.takeIf { id -> restored.layers.any { l -> l.id == id } }
                     ?: restored.layers.firstOrNull()?.id,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
         }
+        PlaybackCacheEngine.notifyProjectEdited(nextRev, qual, restored.durationMs, restored.fps)
+        prewarmProjectMediaEngines(restored, _state.value.playheadMs)
+        scheduleIdleLookaheadAutoCache()
         postTransientBanner("Undo")
     }
 
     fun redo() {
         if (redoStack.isEmpty()) return
+        idleAutoCacheJob?.cancel()
+        preRenderJob?.cancel()
         val current = _state.value.activeProject
         undoStack.addLast(current)
         val nextProj = redoStack.removeLast()
+        var nextRev = 1L
+        var qual = PreviewQuality.HALF
         _state.update {
+            nextRev = it.projectRevision + 1L
+            qual = it.previewQuality
             it.copy(
                 activeProject = nextProj,
+                projectRevision = nextRev,
                 selectedLayerId = it.selectedLayerId?.takeIf { id -> nextProj.layers.any { l -> l.id == id } }
                     ?: nextProj.layers.firstOrNull()?.id,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
         }
+        PlaybackCacheEngine.notifyProjectEdited(nextRev, qual, nextProj.durationMs, nextProj.fps)
+        prewarmProjectMediaEngines(nextProj, _state.value.playheadMs)
+        scheduleIdleLookaheadAutoCache()
         postTransientBanner("Redo")
     }
 
@@ -451,6 +643,8 @@ class StudioViewModel(
         backgroundColor: String = "Black"
     ) {
         pausePlayback()
+        idleAutoCacheJob?.cancel()
+        preRenderJob?.cancel()
         undoStack.clear()
         redoStack.clear()
         val w = customWidth.coerceIn(64, 7680)
@@ -458,6 +652,7 @@ class StudioViewModel(
         val safeFps = fps.coerceIn(1, 240)
         val durMs = (durationSec.coerceIn(1, 300) * 1000L)
         val safeBpm = bpm.coerceIn(40, 240)
+        val preferredCodec = if (preferences.value.preferredVideoCodec == "H.265") "H.265" else "H.264"
 
         val newProj = Project(
             name = name.ifBlank { "New Project" },
@@ -466,16 +661,21 @@ class StudioViewModel(
             height = h,
             fps = safeFps,
             durationMs = durMs,
-            codec = "H.264",
+            codec = preferredCodec,
             bpm = safeBpm,
             backgroundColor = backgroundColor,
             layers = emptyList(),
             beatMarkers = emptyList()
         )
 
+        var nextRev = 1L
+        var qual = PreviewQuality.HALF
         _state.update {
+            nextRev = it.projectRevision + 1L
+            qual = it.previewQuality
             it.copy(
                 activeProject = newProj,
+                projectRevision = nextRev,
                 selectedLayerId = null,
                 inspectorTab = AmInspectorTab.TIMELINE,
                 playheadMs = 0L,
@@ -487,18 +687,27 @@ class StudioViewModel(
                 destination = StudioDestination.EDITOR
             )
         }
+        PlaybackCacheEngine.notifyProjectEdited(nextRev, qual, newProj.durationMs, newProj.fps)
+        prewarmProjectMediaEngines(newProj, 0L)
         postTransientBanner("Clean project ${w}×${h} @ ${safeFps}fps")
         saveCurrentProjectToCloud(silent = true)
     }
 
     fun openProject(project: Project) {
         pausePlayback()
+        idleAutoCacheJob?.cancel()
+        preRenderJob?.cancel()
         undoStack.clear()
         redoStack.clear()
         audioEngine.sampleTimelineSpectrum(0L, project.bpm, project.beatMarkers)
+        var nextRev = 1L
+        var qual = PreviewQuality.HALF
         _state.update {
+            nextRev = it.projectRevision + 1L
+            qual = it.previewQuality
             it.copy(
                 activeProject = project,
+                projectRevision = nextRev,
                 selectedLayerId = null,
                 inspectorTab = AmInspectorTab.TIMELINE,
                 playheadMs = 0L,
@@ -511,11 +720,15 @@ class StudioViewModel(
                 statusBanner = null
             )
         }
+        PlaybackCacheEngine.notifyProjectEdited(nextRev, qual, project.durationMs, project.fps)
+        prewarmProjectMediaEngines(project, 0L)
+        scheduleIdleLookaheadAutoCache()
     }
 
     fun deleteCloudProject(projectId: String) {
+        val repo = repository ?: return
         viewModelScope.launch {
-            val res = repository.deleteProject(projectId)
+            val res = repo.deleteProject(projectId)
             res.onFailure { e ->
                 postTransientBanner(e.localizedMessage ?: "Delete failed")
             }
@@ -523,15 +736,16 @@ class StudioViewModel(
     }
 
     fun saveCurrentProjectToCloud(silent: Boolean = false) {
+        val repo = repository ?: return
         val current = _state.value.activeProject
         _state.update { it.copy(isSavingCloud = true) }
         viewModelScope.launch {
             val result = if (current.id.isBlank()) {
-                repository.createProject(current).map { newId ->
+                repo.createProject(current).map { newId ->
                     current.copy(id = newId, userId = currentUserId)
                 }
             } else {
-                repository.updateProject(current).map { current }
+                repo.updateProject(current).map { current }
             }
 
             result.fold(
@@ -557,38 +771,125 @@ class StudioViewModel(
     }
 
     /**
-     * Zero-Lag Playback Loop:
-     * - OpenGL ES 2.0 renderer runs unlocked at native 60fps VSync (`RENDERMODE_CONTINUOUSLY`).
-     * - Coroutine syncs real audio tracks via `TimelineAudioController` and updates Compose UI playhead
-     *   at a gentle ~25Hz cadence (`40ms`) so UI recomposition never starves GPU or video decoding!
+     * Zero-Lag Hardware-Clocked Playback Loop:
+     * - OpenGL ES 2.0 renderer runs unlocked at native 60fps VSync (`RENDERMODE_CONTINUOUSLY`),
+     *   streaming forward video directly via `ExoPlayer -> SurfaceTexture (GL_TEXTURE_EXTERNAL_OES)`
+     *   and blitting pre-rendered frames in O(1).
+     * - Locks playhead to the hardware audio DAC master clock (embedded video audio or standalone audio)
+     *   with ZERO per-frame `seekTo()` thrashing, eliminating audio crackles and sync drift!
+     * - Ticks Compose UI playhead state at ~30 Hz (`33ms`) so timeline UI never starves GPU rendering.
      */
     private fun startPlayback() {
         playbackJob?.cancel()
-        val startPlayhead = _state.value.playheadMs
+        idleAutoCacheJob?.cancel()
+        MediaEngine.isRapidScrubbing = false
+
+        val curState = _state.value
+        val initialProj = curState.activeProject
+        val durInitial = initialProj.durationMs.coerceAtLeast(200L)
+        val startPlayhead = if (!curState.isLoopPlayback && curState.playheadMs >= durInitial - 20L) {
+            0L
+        } else {
+            curState.playheadMs
+        }
         val startElapsedMs = SystemClock.elapsedRealtime()
-        _state.update { it.copy(isPlaying = true) }
+        _state.update { it.copy(isPlaying = true, playheadMs = startPlayhead) }
+
+        // Start hardware ExoPlayer audio & OES video once cleanly at playback start
+        timelineAudioController?.syncPlayback(
+            project = initialProj,
+            playheadMs = startPlayhead,
+            isPlaying = true,
+            forceExactSeek = true
+        )
+        appCtx?.let { ctx ->
+            HardwareVideoPreviewEngine.syncProjectVideos(
+                context = ctx,
+                project = initialProj,
+                playheadMs = startPlayhead,
+                isPlaying = true,
+                rapidScrubbing = false,
+                forceExactSeek = true
+            )
+        }
 
         playbackJob = viewModelScope.launch {
             var loopOriginMs = startPlayhead
             var loopWallOrigin = startElapsedMs
+            var tickCounter = 0
             while (isActive && _state.value.isPlaying) {
-                val proj = _state.value.activeProject
+                val snapState = _state.value
+                val proj = snapState.activeProject
                 val dur = proj.durationMs.coerceAtLeast(200L)
                 val nowWall = SystemClock.elapsedRealtime()
-                val rawMs = loopOriginMs + (nowWall - loopWallOrigin)
-                val currentMs = if (rawMs >= dur) {
-                    loopOriginMs = 0L
+                var rawMs = loopOriginMs + (nowWall - loopWallOrigin)
+                var wrappedLoopThisTick = false
+
+                if (rawMs >= dur) {
+                    if (snapState.isLoopPlayback) {
+                        loopOriginMs = 0L
+                        loopWallOrigin = nowWall
+                        rawMs = 0L
+                        wrappedLoopThisTick = true
+                    } else {
+                        val endSnapped = AnimationEvaluator.snapToFrameMs(dur, proj.fps)
+                        audioEngine.sampleTimelineSpectrum(endSnapped, proj.bpm, proj.beatMarkers)
+                        timelineAudioController?.pauseAll()
+                        HardwareVideoPreviewEngine.pauseAll()
+                        _state.update { it.copy(playheadMs = endSnapped, isPlaying = false) }
+                        break
+                    }
+                }
+
+                val masterClockMs = if (!wrappedLoopThisTick) {
+                    HardwareVideoPreviewEngine.queryMasterCompositionTimeMs(proj, rawMs)
+                        ?: timelineAudioController?.queryMasterAudioClockMs(proj, rawMs)
+                } else {
+                    null
+                }
+
+                val currentMs = if (masterClockMs != null) {
+                    // Gently re-anchor monotonic fallback clock to hardware audio clock so clip endings never jump
+                    loopOriginMs = masterClockMs
                     loopWallOrigin = nowWall
-                    0L
+                    masterClockMs
                 } else {
                     rawMs
                 }
 
                 val snapped = AnimationEvaluator.snapToFrameMs(currentMs, proj.fps)
                 audioEngine.sampleTimelineSpectrum(snapped, proj.bpm, proj.beatMarkers)
-                timelineAudioController?.syncPlayback(proj, snapped, isPlaying = true)
-                _state.update { it.copy(playheadMs = snapped) }
-                delay(40L)
+
+                if (wrappedLoopThisTick || tickCounter % 4 == 0) {
+                    timelineAudioController?.syncPlayback(
+                        project = proj,
+                        playheadMs = currentMs,
+                        isPlaying = true,
+                        forceExactSeek = wrappedLoopThisTick
+                    )
+                    appCtx?.let { ctx ->
+                        HardwareVideoPreviewEngine.syncProjectVideos(
+                            context = ctx,
+                            project = proj,
+                            playheadMs = currentMs,
+                            isPlaying = true,
+                            rapidScrubbing = false,
+                            forceExactSeek = wrappedLoopThisTick
+                        )
+                    }
+                }
+
+                _state.update { if (it.playheadMs != snapped) it.copy(playheadMs = snapped) else it }
+
+                // Only prefetch bitmap video frames for nonlinear (Reverse / Time-Remap) clips
+                if (appCtx != null && tickCounter % 8 == 0 &&
+                    proj.layers.any { it.type == LayerType.VIDEO && !HardwareVideoPreviewEngine.isEligibleForLiveOesStream(it) }
+                ) {
+                    MediaEngine.prefetchUpcomingVideoFrames(appCtx, proj, snapped, audioEngine.spectrum.value)
+                }
+                tickCounter++
+
+                delay(33L)
             }
         }
     }
@@ -597,7 +898,22 @@ class StudioViewModel(
         playbackJob?.cancel()
         playbackJob = null
         timelineAudioController?.pauseAll()
-        _state.update { it.copy(isPlaying = false) }
+        HardwareVideoPreviewEngine.pauseAll()
+        val cur = _state.value
+        if (cur.isPlaying) {
+            _state.update { it.copy(isPlaying = false) }
+        }
+        appCtx?.let { ctx ->
+            HardwareVideoPreviewEngine.syncProjectVideos(
+                context = ctx,
+                project = cur.activeProject,
+                playheadMs = cur.playheadMs,
+                isPlaying = false,
+                rapidScrubbing = false,
+                forceExactSeek = true
+            )
+        }
+        scheduleIdleLookaheadAutoCache()
     }
 
     fun scrubPlayhead(targetMs: Long) {
@@ -606,6 +922,55 @@ class StudioViewModel(
         val snapped = AnimationEvaluator.snapToFrameMs(clamped, proj.fps)
         audioEngine.sampleTimelineSpectrum(snapped, proj.bpm, proj.beatMarkers)
         _state.update { it.copy(playheadMs = snapped) }
+        appCtx?.let { ctx ->
+            HardwareVideoPreviewEngine.syncProjectVideos(
+                context = ctx,
+                project = proj,
+                playheadMs = snapped,
+                isPlaying = false,
+                rapidScrubbing = MediaEngine.isRapidScrubbing
+            )
+        }
+    }
+
+    fun scrubPlayheadInteractive(targetMs: Long) {
+        MediaEngine.isRapidScrubbing = true
+        idleAutoCacheJob?.cancel()
+        scrubSettleJob?.cancel()
+        scrubSettleJob = viewModelScope.launch {
+            delay(120L)
+            MediaEngine.isRapidScrubbing = false
+            val settled = _state.value
+            if (!settled.isPlaying) {
+                appCtx?.let { ctx ->
+                    HardwareVideoPreviewEngine.syncProjectVideos(
+                        context = ctx,
+                        project = settled.activeProject,
+                        playheadMs = settled.playheadMs,
+                        isPlaying = false,
+                        rapidScrubbing = false,
+                        forceExactSeek = true
+                    )
+                }
+                scheduleIdleLookaheadAutoCache()
+            }
+        }
+
+        val s = _state.value
+        val proj = s.activeProject
+        var candidate = targetMs.coerceIn(0L, proj.durationMs)
+        if (preferences.value.snapToBookmarksAndKeys) {
+            val nearBookmark = proj.beatMarkers.firstOrNull { abs(it.timeMs - candidate) <= 45L }
+            if (nearBookmark != null) {
+                candidate = nearBookmark.timeMs
+            } else {
+                val selLayer = proj.layers.firstOrNull { it.id == s.selectedLayerId }
+                val nearKf = selLayer?.propertyFor(s.selectedProperty)?.keyframes
+                    ?.firstOrNull { abs(it.timeMs - candidate) <= 40L }
+                if (nearKf != null) candidate = nearKf.timeMs
+            }
+        }
+        scrubPlayhead(candidate)
     }
 
     fun stepFrame(deltaFrames: Int) {
@@ -632,17 +997,25 @@ class StudioViewModel(
         )
     }
 
+    /**
+     * 1:1 Alight Motion Smart Bookmark & Boundary Jump:
+     * - Backward (`forward == false`, Previous button beside Play `|<` or `<`):
+     *   If an earlier bookmark exists before playhead, jumps automatically to that earlier bookmark;
+     *   if NO earlier bookmark exists, jumps cleanly back to 0 (`00:00:00`)!
+     * - Forward (`forward == true`, Next button beside Play `>|` or `>`):
+     *   If a forward bookmark exists after playhead, jumps automatically to that forward bookmark;
+     *   if NO forward bookmark exists, jumps to the end of the timeline (`durationMs`)!
+     */
     fun jumpToBookmark(forward: Boolean) {
         val s = _state.value
         val sorted = s.activeProject.beatMarkers.sortedBy { it.timeMs }
-        if (sorted.isEmpty()) return
-        val next = if (forward) {
-            sorted.firstOrNull { it.timeMs > s.playheadMs + 15L } ?: sorted.first()
+        val targetMs = if (forward) {
+            sorted.firstOrNull { it.timeMs > s.playheadMs + 15L }?.timeMs ?: s.activeProject.durationMs
         } else {
-            sorted.lastOrNull { it.timeMs < s.playheadMs - 15L } ?: sorted.last()
+            sorted.lastOrNull { it.timeMs < s.playheadMs - 15L }?.timeMs ?: 0L
         }
         pausePlayback()
-        scrubPlayhead(next.timeMs)
+        scrubPlayhead(targetMs)
     }
 
     fun jumpToAdjacentKeyframe(forward: Boolean) {
@@ -714,6 +1087,31 @@ class StudioViewModel(
         }
     }
 
+    /**
+     * Direct On-Canvas Bounding-Box Corner Resize & Top-Knob Rotation Gizmo!
+     */
+    fun scaleAndRotateSelectedLayerByDelta(scalePctDelta: Float, rotDegDelta: Float) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val timeMs = s.playheadMs
+        val audio = liveSpectrum.value
+        mutateLayer(layerId, recordUndo = false) { layer ->
+            if (layer.locked) return@mutateLayer layer
+            var updated = layer
+            if (abs(scalePctDelta) > 0.01f) {
+                val curScale = AnimationEvaluator.evaluateProperty(updated.scale, timeMs, audio)
+                val nextScale = (curScale + scalePctDelta).coerceIn(PropertyTarget.SCALE.minVal, PropertyTarget.SCALE.maxVal)
+                updated = updated.copy(scale = applyPropertyEditAtTime(updated.scale, nextScale, timeMs))
+            }
+            if (abs(rotDegDelta) > 0.01f) {
+                val curRot = AnimationEvaluator.evaluateProperty(updated.rotationZ, timeMs, audio)
+                val nextRot = (curRot + rotDegDelta).coerceIn(PropertyTarget.ROTATION_Z.minVal, PropertyTarget.ROTATION_Z.maxVal)
+                updated = updated.copy(rotationZ = applyPropertyEditAtTime(updated.rotationZ, nextRot, timeMs))
+            }
+            updated
+        }
+    }
+
     private fun applyPropertyEditAtTime(prop: AnimatableProperty, newValue: Float, timeMs: Long): AnimatableProperty {
         return if (prop.keyframes.isEmpty()) {
             prop.copy(baseValue = newValue)
@@ -729,17 +1127,18 @@ class StudioViewModel(
     }
 
     /**
-     * Real Media Import Pipeline for VIDEO, IMAGE, and AUDIO files!
-     * Copies URI into persistent internal storage, decodes true dimensions + frame 0 immediately,
-     * pre-warms video frames in RAM cache, and adds the layer cleanly onto the timeline.
+     * Instant Non-Blocking Media Import Pipeline for VIDEO, IMAGE, and AUDIO files!
+     * - Streams directly from persistable content/file URIs (< 25ms header probe via MediaExtractor).
+     * - Immediately mounts the layer on the timeline & pre-warms ExoPlayer OES / Audio decoders.
+     * - Computes the 72-bin audio waveform progressively in the background without blocking import!
      */
     fun importMediaLayer(context: Context, uri: Uri, type: LayerType) {
         pausePlayback()
-        postTransientBanner("Importing ${type.name.lowercase()}...")
+        val appContext = context.applicationContext
         viewModelScope.launch {
             val result = runCatching {
                 MediaEngine.importMediaUri(
-                    context = context.applicationContext,
+                    context = appContext,
                     pickedUri = uri,
                     type = type
                 )
@@ -810,6 +1209,32 @@ class StudioViewModel(
                         banner = "Imported ${newLayer.name}"
                     )
                     _state.update { it.copy(inspectorTab = AmInspectorTab.TIMELINE) }
+
+                    // Progressively compute container waveform in the background without bumping projectRevision!
+                    val shouldLoadWaveform = (type == LayerType.AUDIO) || (type == LayerType.VIDEO && info.hasAudio)
+                    if (shouldLoadWaveform && info.waveform.isEmpty()) {
+                        val targetLayerId = newLayer.id
+                        launch {
+                            val waveform = MediaEngine.computeWaveformAsync(appContext, info.localUri)
+                            if (waveform.isNotEmpty()) {
+                                _state.update { st ->
+                                    val hasLayer = st.activeProject.layers.any { it.id == targetLayerId }
+                                    if (!hasLayer) st
+                                    else st.copy(
+                                        activeProject = st.activeProject.copy(
+                                            layers = st.activeProject.layers.map { l ->
+                                                if (l.id == targetLayerId && l.extractedWaveform.isEmpty()) {
+                                                    l.copy(extractedWaveform = waveform)
+                                                } else {
+                                                    l
+                                                }
+                                            }
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
                 },
                 onFailure = { err ->
                     postTransientBanner(err.localizedMessage ?: "Failed to import media")
@@ -1129,6 +1554,7 @@ class StudioViewModel(
             nowRev = !layer.reversed
             layer.copy(reversed = nowRev)
         }
+        if (nowRev) warmSelectedNonlinearVideoLayer(layerId)
         postTransientBanner(if (nowRev) "Reverse playback enabled" else "Normal playback direction")
     }
 
@@ -1173,6 +1599,7 @@ class StudioViewModel(
             cur.copy(timeRemapEnabled = enabled, timeRemap = seededRemap)
         }
         if (enabled) {
+            warmSelectedNonlinearVideoLayer(layer.id)
             _state.update { it.copy(selectedProperty = PropertyTarget.TIME_REMAP) }
             postTransientBanner("Time Remap active — sculpt velocity curve or add keyframes")
         } else {
@@ -1223,6 +1650,7 @@ class StudioViewModel(
                 timeRemap = AnimatableProperty(baseValue = 0f, keyframes = keyframes)
             )
         }
+        warmSelectedNonlinearVideoLayer(layer.id)
         _state.update { it.copy(selectedProperty = PropertyTarget.TIME_REMAP) }
         postTransientBanner("Applied $presetKey velocity curve")
     }
@@ -1333,12 +1761,68 @@ class StudioViewModel(
         mutateLayer(layerId, recordUndo = true) { it.copy(visible = !it.visible) }
     }
 
+    fun toggleSoloLayer(layerId: String) {
+        val cur = _state.value
+        val disablingSolo = cur.soloLayerId == layerId
+        val nextSolo = if (disablingSolo) null else layerId
+        val updatedLayers = cur.activeProject.layers.map { l ->
+            if (disablingSolo) l.copy(visible = true)
+            else l.copy(visible = l.id == layerId)
+        }
+        updateActiveProject(
+            cur.activeProject.copy(layers = updatedLayers),
+            recordUndo = true,
+            banner = if (disablingSolo) "All layers un-soloed" else "Soloed layer"
+        )
+        _state.update { it.copy(soloLayerId = nextSolo) }
+    }
+
+    fun groupVisibleLayersIntoNullRig() {
+        val s = _state.value
+        val proj = s.activeProject
+        if (proj.layers.isEmpty()) return
+        val rigId = UUID.randomUUID().toString()
+        val rigCount = proj.layers.count { it.type == LayerType.NULL_OBJECT } + 1
+        val rigLayer = Layer(
+            id = rigId,
+            name = "Group Null $rigCount",
+            type = LayerType.NULL_OBJECT,
+            startTimeMs = 0L,
+            endTimeMs = proj.durationMs
+        )
+        val targetId = s.selectedLayerId
+        val updatedLayers = proj.layers.map { l ->
+            if (targetId != null && l.id == targetId && l.parentId == null) {
+                l.copy(parentId = rigId)
+            } else if (targetId == null && l.parentId == null && l.type != LayerType.AUDIO && l.type != LayerType.CAMERA) {
+                l.copy(parentId = rigId)
+            } else {
+                l
+            }
+        } + rigLayer
+        updateActiveProject(
+            proj.copy(layers = updatedLayers),
+            selectLayerId = rigId,
+            recordUndo = true,
+            banner = "Created ${rigLayer.name} rig"
+        )
+    }
+
+    fun expandSelectedLayerToComposition() {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            layer.copy(startTimeMs = 0L, endTimeMs = s.activeProject.durationMs)
+        }
+        postTransientBanner("Expanded clip to full composition")
+    }
+
     fun toggleLayerLock(layerId: String) {
         mutateLayer(layerId, recordUndo = true) { it.copy(locked = !it.locked) }
     }
 
     fun renameLayer(layerId: String, newName: String) {
-        mutateLayer(layerId, recordUndo = false) { it.copy(name = newName.ifBlank { it.name }) }
+        mutateLayer(layerId, recordUndo = true) { it.copy(name = newName.ifBlank { it.name }) }
     }
 
     fun setLayerParent(childId: String, parentId: String?) {
@@ -1428,7 +1912,8 @@ class StudioViewModel(
         outX: Float,
         outY: Float,
         inX: Float,
-        inY: Float
+        inY: Float,
+        holdStep: Boolean = false
     ) {
         val s = _state.value
         val layerId = s.selectedLayerId ?: return
@@ -1437,42 +1922,139 @@ class StudioViewModel(
 
         mutateLayer(layerId, recordUndo = false) { layer ->
             val prop = layer.propertyFor(target)
-            val sorted = prop.keyframes.sortedBy { it.timeMs }.toMutableList()
-            if (sorted.size < 2) {
-                val startKf = Keyframe(
-                    timeMs = layer.startTimeMs,
-                    value = prop.baseValue,
-                    outTangentX = outX.coerceIn(0f, 1f),
-                    outTangentY = outY.coerceIn(-0.5f, 1.5f),
-                    inTangentX = inX.coerceIn(0f, 1f),
-                    inTangentY = inY.coerceIn(-0.5f, 1.5f)
-                )
-                val endVal = if (target == PropertyTarget.TIME_REMAP) {
-                    ((layer.endTimeMs - layer.startTimeMs).coerceAtLeast(500L)) / 1000f
-                } else {
-                    (prop.baseValue + 120f).coerceIn(target.minVal, target.maxVal)
-                }
-                val endKf = Keyframe(
-                    timeMs = layer.endTimeMs,
-                    value = endVal,
-                    inTangentX = inX.coerceIn(0f, 1f),
-                    inTangentY = inY.coerceIn(-0.5f, 1.5f)
-                )
-                return@mutateLayer layer.updateProperty(target, prop.copy(keyframes = listOf(startKf, endKf)))
+            val endDefault = if (target == PropertyTarget.TIME_REMAP) {
+                ((layer.endTimeMs - layer.startTimeMs).coerceAtLeast(500L)) / 1000f
+            } else {
+                (prop.baseValue + 120f).coerceIn(target.minVal, target.maxVal)
             }
-
-            var segIndex = sorted.indexOfLast { it.timeMs <= timeMs }.coerceAtLeast(0)
-            if (segIndex >= sorted.size - 1) segIndex = sorted.size - 2
-
-            sorted[segIndex] = sorted[segIndex].copy(
-                outTangentX = outX.coerceIn(0f, 1f),
-                outTangentY = outY.coerceIn(-0.5f, 1.5f)
+            val updatedProp = applyBezierHandlesToProp(
+                prop = prop,
+                timeMs = timeMs,
+                clipStartMs = layer.startTimeMs,
+                clipEndMs = layer.endTimeMs,
+                fallbackEndVal = endDefault,
+                outX = outX,
+                outY = outY,
+                inX = inX,
+                inY = inY,
+                holdStep = holdStep
             )
-            sorted[segIndex + 1] = sorted[segIndex + 1].copy(
+            layer.updateProperty(target, updatedProp)
+        }
+    }
+
+    private fun applyBezierHandlesToProp(
+        prop: AnimatableProperty,
+        timeMs: Long,
+        clipStartMs: Long,
+        clipEndMs: Long,
+        fallbackEndVal: Float,
+        outX: Float,
+        outY: Float,
+        inX: Float,
+        inY: Float,
+        holdStep: Boolean
+    ): AnimatableProperty {
+        val sorted = prop.keyframes.sortedBy { it.timeMs }.toMutableList()
+        if (sorted.size < 2) {
+            val startKf = Keyframe(
+                timeMs = clipStartMs,
+                value = sorted.firstOrNull()?.value ?: prop.baseValue,
+                outTangentX = outX.coerceIn(0f, 1f),
+                outTangentY = outY.coerceIn(-0.5f, 1.5f),
+                inTangentX = inX.coerceIn(0f, 1f),
+                inTangentY = inY.coerceIn(-0.5f, 1.5f),
+                holdStep = holdStep
+            )
+            val endKf = Keyframe(
+                timeMs = clipEndMs.coerceAtLeast(clipStartMs + 200L),
+                value = fallbackEndVal,
                 inTangentX = inX.coerceIn(0f, 1f),
                 inTangentY = inY.coerceIn(-0.5f, 1.5f)
             )
-            layer.updateProperty(target, prop.copy(keyframes = sorted))
+            return prop.copy(keyframes = listOf(startKf, endKf))
+        }
+
+        var segIndex = sorted.indexOfLast { it.timeMs <= timeMs }.coerceAtLeast(0)
+        if (segIndex >= sorted.size - 1) segIndex = sorted.size - 2
+
+        sorted[segIndex] = sorted[segIndex].copy(
+            outTangentX = outX.coerceIn(0f, 1f),
+            outTangentY = outY.coerceIn(-0.5f, 1.5f),
+            holdStep = holdStep
+        )
+        sorted[segIndex + 1] = sorted[segIndex + 1].copy(
+            inTangentX = inX.coerceIn(0f, 1f),
+            inTangentY = inY.coerceIn(-0.5f, 1.5f)
+        )
+        return prop.copy(keyframes = sorted)
+    }
+
+    fun copyActiveBezierCurve(isEffect: Boolean = _state.value.graphTargetsEffect) {
+        val s = _state.value
+        val layer = s.activeProject.layers.firstOrNull { it.id == s.selectedLayerId } ?: return
+        val prop = if (isEffect) {
+            val fx = layer.effects.firstOrNull { it.id == s.selectedEffectId } ?: layer.effects.firstOrNull() ?: return
+            fx.propertyFor(s.selectedEffectSlot)
+        } else {
+            layer.propertyFor(s.selectedProperty)
+        }
+        val sorted = prop.keyframes.sortedBy { it.timeMs }
+        val segIdx = (sorted.indexOfLast { it.timeMs <= s.playheadMs }.coerceAtLeast(0))
+            .coerceAtMost((sorted.size - 2).coerceAtLeast(0))
+        val outKf = sorted.getOrNull(segIdx)
+        val inKf = sorted.getOrNull(segIdx + 1)
+        clipboardCurve = floatArrayOf(
+            outKf?.outTangentX ?: 0.42f,
+            outKf?.outTangentY ?: 0.0f,
+            inKf?.inTangentX ?: 0.58f,
+            inKf?.inTangentY ?: 1.0f
+        )
+        clipboardHoldStep = outKf?.holdStep ?: false
+        _state.update { it.copy(hasCopiedCurve = true) }
+        postTransientBanner("Copied easing curve")
+    }
+
+    fun pasteBezierCurve(isEffect: Boolean = _state.value.graphTargetsEffect) {
+        val curve = clipboardCurve ?: return
+        if (isEffect) {
+            updateEffectBezierHandles(curve[0], curve[1], curve[2], curve[3], clipboardHoldStep)
+        } else {
+            updateBezierHandlesForActiveSegment(curve[0], curve[1], curve[2], curve[3], clipboardHoldStep)
+        }
+        postTransientBanner("Pasted easing curve")
+    }
+
+    fun dragKeyframePoint(kfId: String, newTimeMs: Long, newValue: Float, isEffect: Boolean) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val snappedTime = AnimationEvaluator.snapToFrameMs(
+            newTimeMs.coerceIn(0L, s.activeProject.durationMs),
+            s.activeProject.fps
+        )
+        mutateLayer(layerId, recordUndo = false) { layer ->
+            if (isEffect) {
+                val fxId = s.selectedEffectId ?: return@mutateLayer layer
+                val slot = s.selectedEffectSlot
+                val updatedFx = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx
+                    else {
+                        val p = fx.propertyFor(slot)
+                        val kfs = p.keyframes.map { kf ->
+                            if (kf.id == kfId) kf.copy(timeMs = snappedTime, value = newValue) else kf
+                        }.sortedBy { it.timeMs }
+                        fx.updateProperty(slot, p.copy(baseValue = newValue, keyframes = kfs))
+                    }
+                }
+                layer.copy(effects = updatedFx)
+            } else {
+                val target = s.selectedProperty
+                val p = layer.propertyFor(target)
+                val kfs = p.keyframes.map { kf ->
+                    if (kf.id == kfId) kf.copy(timeMs = snappedTime, value = newValue) else kf
+                }.sortedBy { it.timeMs }
+                layer.updateProperty(target, p.copy(baseValue = newValue, keyframes = kfs))
+            }
         }
     }
 
@@ -1534,17 +2116,263 @@ class StudioViewModel(
 
     fun addEffectToSelectedLayer(definition: EffectDefinition) {
         val s = _state.value
-        val targetId = s.selectedLayerId ?: s.activeProject.layers.firstOrNull()?.id ?: return
-        mutateLayer(targetId, recordUndo = true) { layer ->
-            layer.copy(effects = layer.effects + definition.toNode())
+        val proj = s.activeProject
+        val newFx = definition.toNode()
+
+        // If user opens Effects Browser on a brand-new empty project and taps "+ STANDARD", create a clean base layer automatically so it never dead-ends!
+        val existingTargetId = s.selectedLayerId ?: proj.layers.lastOrNull()?.id
+        if (existingTargetId == null) {
+            val autoLayer = Layer(
+                name = "Adjustment Shape 1",
+                type = LayerType.SHAPE,
+                shapeKind = "Rounded Rect",
+                colorHex = "#00D2A8",
+                startTimeMs = 0L,
+                endTimeMs = proj.durationMs,
+                effects = listOf(newFx)
+            )
+            updateActiveProject(
+                proj.copy(layers = listOf(autoLayer)),
+                selectLayerId = autoLayer.id,
+                recordUndo = true,
+                banner = "Added ${definition.name}"
+            )
+            _state.update {
+                it.copy(
+                    selectedLayerId = autoLayer.id,
+                    selectedEffectId = newFx.id,
+                    selectedEffectSlot = EffectParamSlot.PRIMARY,
+                    graphTargetsEffect = true,
+                    inspectorTab = AmInspectorTab.EFFECT_DETAIL,
+                    destination = StudioDestination.EDITOR
+                )
+            }
+            return
         }
-        _state.update { it.copy(selectedLayerId = targetId) }
-        postTransientBanner("Added ${definition.name}")
+
+        mutateLayer(existingTargetId, recordUndo = true) { layer ->
+            layer.copy(effects = layer.effects + newFx)
+        }
+        _state.update {
+            it.copy(
+                selectedLayerId = existingTargetId,
+                selectedEffectId = newFx.id,
+                selectedEffectSlot = EffectParamSlot.PRIMARY,
+                graphTargetsEffect = true,
+                inspectorTab = AmInspectorTab.EFFECT_DETAIL,
+                destination = StudioDestination.EDITOR
+            )
+        }
+        postTransientBanner("Added ${definition.name} — tap parameters or ◆ to keyframe")
+    }
+
+    /**
+     * Opens the full Alight Motion Effect Detail Inspector when an added Effect is clicked!
+     */
+    fun selectEffectForInspection(effectNodeId: String) {
+        _state.update {
+            it.copy(
+                selectedEffectId = effectNodeId,
+                selectedEffectSlot = EffectParamSlot.PRIMARY,
+                graphTargetsEffect = true,
+                inspectorTab = AmInspectorTab.EFFECT_DETAIL,
+                destination = StudioDestination.EDITOR
+            )
+        }
+    }
+
+    fun selectEffectParamSlot(slot: EffectParamSlot) {
+        _state.update {
+            it.copy(
+                selectedEffectSlot = slot,
+                graphTargetsEffect = true
+            )
+        }
+    }
+
+    fun updateSelectedEffectParamValue(newValue: Float) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val fxId = s.selectedEffectId ?: return
+        val slot = s.selectedEffectSlot
+        val timeMs = s.playheadMs
+
+        mutateLayer(layerId, recordUndo = false) { layer ->
+            if (layer.locked) return@mutateLayer layer
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx
+                    else {
+                        val spec = EffectsCatalog.findById(fx.effectId).specFor(slot)
+                        val clamped = newValue.coerceIn(spec.minVal, spec.maxVal)
+                        val updatedProp = applyPropertyEditAtTime(fx.propertyFor(slot), clamped, timeMs)
+                        fx.updateProperty(slot, updatedProp)
+                    }
+                }
+            )
+        }
+    }
+
+    fun toggleEffectKeyframeAtPlayhead() {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val fxId = s.selectedEffectId ?: return
+        val slot = s.selectedEffectSlot
+        val timeMs = s.playheadMs
+        val audio = liveSpectrum.value
+
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx
+                    else {
+                        val prop = fx.propertyFor(slot)
+                        val existingIdx = prop.keyframes.indexOfFirst { abs(it.timeMs - timeMs) <= 25L }
+                        val updatedKfs = if (existingIdx >= 0) {
+                            prop.keyframes.filterIndexed { index, _ -> index != existingIdx }
+                        } else {
+                            val currentEval = AnimationEvaluator.evaluateProperty(prop, timeMs, audio)
+                            (prop.keyframes + Keyframe(timeMs = timeMs, value = currentEval)).sortedBy { it.timeMs }
+                        }
+                        fx.updateProperty(slot, prop.copy(keyframes = updatedKfs))
+                    }
+                }
+            )
+        }
+    }
+
+    fun jumpToAdjacentEffectKeyframe(forward: Boolean) {
+        val s = _state.value
+        val layer = s.activeProject.layers.firstOrNull { it.id == s.selectedLayerId } ?: return
+        val fx = layer.effects.firstOrNull { it.id == s.selectedEffectId } ?: return
+        val kfs = fx.propertyFor(s.selectedEffectSlot).keyframes.sortedBy { it.timeMs }
+        if (kfs.isEmpty()) return
+        val target = if (forward) {
+            kfs.firstOrNull { it.timeMs > s.playheadMs + 10L } ?: kfs.first()
+        } else {
+            kfs.lastOrNull { it.timeMs < s.playheadMs - 10L } ?: kfs.last()
+        }
+        pausePlayback()
+        scrubPlayhead(target.timeMs)
+    }
+
+    fun updateEffectBezierHandles(
+        outX: Float,
+        outY: Float,
+        inX: Float,
+        inY: Float,
+        holdStep: Boolean = false
+    ) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val fxId = s.selectedEffectId ?: return
+        val slot = s.selectedEffectSlot
+        val timeMs = s.playheadMs
+
+        mutateLayer(layerId, recordUndo = false) { layer ->
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx
+                    else {
+                        val spec = EffectsCatalog.findById(fx.effectId).specFor(slot)
+                        val prop = fx.propertyFor(slot)
+                        val fallbackEnd = (prop.baseValue + (spec.maxVal - spec.minVal) * 0.35f)
+                            .coerceIn(spec.minVal, spec.maxVal)
+                        val updatedProp = applyBezierHandlesToProp(
+                            prop = prop,
+                            timeMs = timeMs,
+                            clipStartMs = layer.startTimeMs,
+                            clipEndMs = layer.endTimeMs,
+                            fallbackEndVal = fallbackEnd,
+                            outX = outX,
+                            outY = outY,
+                            inX = inX,
+                            inY = inY,
+                            holdStep = holdStep
+                        )
+                        fx.updateProperty(slot, updatedProp)
+                    }
+                }
+            )
+        }
+    }
+
+    fun updateEffectParamExpression(expression: String) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val fxId = s.selectedEffectId ?: return
+        val slot = s.selectedEffectSlot
+        mutateLayer(layerId, recordUndo = false) { layer ->
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx
+                    else {
+                        val prop = fx.propertyFor(slot)
+                        fx.updateProperty(slot, prop.copy(expression = expression))
+                    }
+                }
+            )
+        }
+    }
+
+    fun moveEffectOrder(layerId: String, effectNodeId: String, moveUp: Boolean) {
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            val list = layer.effects.toMutableList()
+            val idx = list.indexOfFirst { it.id == effectNodeId }
+            if (idx < 0) return@mutateLayer layer
+            val targetIdx = if (moveUp) idx - 1 else idx + 1
+            if (targetIdx !in list.indices) return@mutateLayer layer
+            val item = list.removeAt(idx)
+            list.add(targetIdx, item)
+            layer.copy(effects = list)
+        }
+    }
+
+    fun duplicateEffectNode(layerId: String, effectNodeId: String) {
+        var newDupId: String? = null
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            val idx = layer.effects.indexOfFirst { it.id == effectNodeId }
+            if (idx < 0) return@mutateLayer layer
+            val src = layer.effects[idx]
+            val dup = src.copy(id = UUID.randomUUID().toString(), displayName = "${src.displayName} Copy")
+            newDupId = dup.id
+            val updated = layer.effects.toMutableList().apply { add(idx + 1, dup) }
+            layer.copy(effects = updated)
+        }
+        if (newDupId != null) {
+            _state.update { it.copy(selectedEffectId = newDupId) }
+            postTransientBanner("Duplicated effect")
+        }
+    }
+
+    fun resetEffectNode(layerId: String, effectNodeId: String) {
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != effectNodeId) fx
+                    else EffectsCatalog.findById(fx.effectId).toNode().copy(id = fx.id)
+                }
+            )
+        }
+        postTransientBanner("Reset effect to standard settings")
     }
 
     fun updateEffectNode(layerId: String, updatedNode: EffectNode) {
         mutateLayer(layerId, recordUndo = false) { layer ->
-            layer.copy(effects = layer.effects.map { if (it.id == updatedNode.id) updatedNode else it })
+            layer.copy(
+                effects = layer.effects.map {
+                    if (it.id == updatedNode.id) {
+                        // Keep primaryProp/secondaryProp base values synchronized if quick-slider changed intensity
+                        val syncedPrimary = if (it.intensity != updatedNode.intensity && updatedNode.primaryProp.keyframes.isEmpty()) {
+                            updatedNode.primaryProp.copy(baseValue = updatedNode.intensity)
+                        } else updatedNode.primaryProp
+                        val syncedSecondary = if (it.secondaryParam != updatedNode.secondaryParam && updatedNode.secondaryProp.keyframes.isEmpty()) {
+                            updatedNode.secondaryProp.copy(baseValue = updatedNode.secondaryParam)
+                        } else updatedNode.secondaryProp
+                        updatedNode.copy(primaryProp = syncedPrimary, secondaryProp = syncedSecondary)
+                    } else it
+                }
+            )
         }
     }
 
@@ -1552,14 +2380,41 @@ class StudioViewModel(
         mutateLayer(layerId, recordUndo = true) { layer ->
             layer.copy(effects = layer.effects.filterNot { it.id == effectNodeId })
         }
+        _state.update { cur ->
+            if (cur.selectedEffectId == effectNodeId) {
+                cur.copy(
+                    selectedEffectId = null,
+                    inspectorTab = if (cur.inspectorTab == AmInspectorTab.EFFECT_DETAIL || cur.inspectorTab == AmInspectorTab.EFFECT_EASING) {
+                        AmInspectorTab.EFFECTS
+                    } else cur.inspectorTab
+                )
+            } else cur
+        }
+        postTransientBanner("Deleted effect")
+    }
+
+    fun clearAllEffectsOnLayer(layerId: String) {
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            layer.copy(effects = emptyList())
+        }
+        _state.update { cur ->
+            cur.copy(
+                selectedEffectId = null,
+                inspectorTab = if (cur.inspectorTab == AmInspectorTab.EFFECT_DETAIL || cur.inspectorTab == AmInspectorTab.EFFECT_EASING) {
+                    AmInspectorTab.EFFECTS
+                } else cur.inspectorTab
+            )
+        }
+        postTransientBanner("Cleared all effects on layer")
     }
 
     fun saveLayerEffectChainAsPreset(presetName: String) {
+        val repo = repository ?: return
         val s = _state.value
         val layer = s.activeProject.layers.firstOrNull { it.id == s.selectedLayerId } ?: return
         if (layer.effects.isEmpty()) return
         viewModelScope.launch {
-            repository.saveEffectPreset(
+            repo.saveEffectPreset(
                 name = presetName.ifBlank { "${layer.name} FX Stack" },
                 category = layer.effects.first().category,
                 effects = layer.effects
@@ -1666,6 +2521,7 @@ class StudioViewModel(
                 context = context.applicationContext,
                 project = project,
                 audioEngine = audioEngine,
+                preferences = preferences.value,
                 onProgress = { prog, msg ->
                     _state.update { st ->
                         st.copy(
@@ -1723,6 +2579,8 @@ class StudioViewModel(
         recordUndo: Boolean = false,
         banner: String? = null
     ) {
+        idleAutoCacheJob?.cancel()
+        preRenderJob?.cancel()
         if (recordUndo) {
             if (undoStack.size >= 25) {
                 undoStack.removeFirst()
@@ -1730,23 +2588,91 @@ class StudioViewModel(
             undoStack.addLast(_state.value.activeProject)
             redoStack.clear()
         }
+        var nextRev = 1L
+        var qual = PreviewQuality.HALF
+        var curPlayhead = 0L
         _state.update {
+            nextRev = it.projectRevision + 1L
+            qual = it.previewQuality
+            curPlayhead = it.playheadMs
             it.copy(
                 activeProject = updated,
+                projectRevision = nextRev,
                 selectedLayerId = selectLayerId?.takeIf { id -> updated.layers.any { l -> l.id == id } },
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty()
             )
         }
+        PlaybackCacheEngine.notifyProjectEdited(nextRev, qual, updated.durationMs, updated.fps)
+        prewarmProjectMediaEngines(updated, curPlayhead)
+        scheduleIdleLookaheadAutoCache()
         if (!banner.isNullOrBlank()) {
             postTransientBanner(banner)
+        }
+    }
+
+    private fun prewarmProjectMediaEngines(project: Project, playheadMs: Long) {
+        timelineAudioController?.prewarmProjectAudio(project)
+        appCtx?.let { ctx ->
+            HardwareVideoPreviewEngine.prewarmProjectVideos(ctx, project, playheadMs)
+        }
+    }
+
+    private fun warmSelectedNonlinearVideoLayer(layerId: String) {
+        val ctx = appCtx ?: return
+        val layer = _state.value.activeProject.layers.firstOrNull { it.id == layerId } ?: return
+        MediaEngine.warmNonlinearVideoClipAsync(ctx, layer)
+    }
+
+    /**
+     * Smart Background Lookahead Auto-Cacher:
+     * When `autoCachePlaybackFrames` is enabled and the composition contains heavy effects or
+     * nonlinear video, quietly pre-renders a 2.5s lookahead window around the paused playhead
+     * after 700ms of user idle time so pressing Play starts at 60 FPS with 0ms lag!
+     */
+    private fun scheduleIdleLookaheadAutoCache() {
+        idleAutoCacheJob?.cancel()
+        val ctx = appCtx ?: return
+        val prefs = preferences.value
+        if (!prefs.autoCachePlaybackFrames) return
+        val snap = _state.value
+        if (snap.isPlaying || preRenderJob?.isActive == true) return
+        val hasHeavyWork = snap.activeProject.layers.any { layer ->
+            layer.visible && (
+                layer.effects.any { it.enabled } ||
+                    layer.motionBlurEnabled ||
+                    (layer.type == LayerType.VIDEO && !HardwareVideoPreviewEngine.isEligibleForLiveOesStream(layer))
+                )
+        }
+        if (!hasHeavyWork) return
+
+        val expectedRev = snap.projectRevision
+        idleAutoCacheJob = viewModelScope.launch {
+            delay(700L)
+            val latest = _state.value
+            if (latest.isPlaying || latest.projectRevision != expectedRev || preRenderJob?.isActive == true) {
+                return@launch
+            }
+            PlaybackCacheEngine.preRenderLookaheadWindow(
+                context = ctx,
+                project = latest.activeProject,
+                projectRevision = latest.projectRevision,
+                quality = latest.previewQuality,
+                fpsCap = preferences.value.previewFpsCap,
+                startPlayheadMs = latest.playheadMs,
+                windowDurationMs = 2_500L,
+                audioEngine = audioEngine
+            )
         }
     }
 
     override fun onCleared() {
         super.onCleared()
         pausePlayback()
+        idleAutoCacheJob?.cancel()
+        preRenderJob?.cancel()
         timelineAudioController?.releaseAll()
+        HardwareVideoPreviewEngine.releaseAll()
         audioEngine.stopLiveMicCapture()
     }
 

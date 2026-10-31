@@ -1,11 +1,19 @@
 package com.example.engine
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaRecorder
+import android.net.Uri
 import com.example.data.model.AudioBand
 import com.example.data.model.BeatMarker
+import com.example.data.model.Layer
+import com.example.data.model.LayerType
+import com.example.data.model.Project
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,12 +23,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.nio.ByteOrder
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * Pure-Kotlin Coroutine DSP Audio Reactor inspired by Node Video & TarsosDSP algorithms:
@@ -45,7 +59,10 @@ class AudioReactorEngine {
      * Evaluates deterministic spectral energy at timeline position [timeMs] for [bpm] when live mic is off,
      * ensuring Audio Reactor bindings animate smoothly during timeline scrubbing and MP4 export.
      */
-    fun sampleTimelineSpectrum(
+    /**
+     * Stateless, thread-safe spectral evaluator safe for multi-core parallel pre-render workers.
+     */
+    fun sampleTimelineSpectrumPure(
         timeMs: Long,
         bpm: Int,
         beatMarkers: List<BeatMarker>
@@ -80,13 +97,27 @@ class AudioReactorEngine {
         }
 
         val rms = ((bass * 0.5f) + (mids * 0.3f) + (treble * 0.2f)).coerceIn(0f, 1f)
-        val snap = AudioSpectrumSnapshot(
+        return AudioSpectrumSnapshot(
             bass = bass.coerceIn(0f, 1f),
             mids = mids,
             treble = treble,
             rms = rms
         )
-        _spectrum.value = snap
+    }
+
+    /**
+     * Evaluates deterministic spectral energy at timeline position [timeMs] for [bpm] when live mic is off,
+     * ensuring Audio Reactor bindings animate smoothly during timeline scrubbing and MP4 export.
+     */
+    fun sampleTimelineSpectrum(
+        timeMs: Long,
+        bpm:Int,
+        beatMarkers: List<BeatMarker>
+    ): AudioSpectrumSnapshot {
+        val snap = sampleTimelineSpectrumPure(timeMs, bpm, beatMarkers)
+        if (!_isLiveMicActive.value) {
+            _spectrum.value = snap
+        }
         return snap
     }
 
@@ -129,6 +160,257 @@ class AudioReactorEngine {
             beatIdx++
         }
         return markers
+    }
+
+    /**
+     * Real PCM Notable Bass Onset Detector:
+     * 1. Locates the primary `AUDIO` or unmuted `VIDEO` layer in [project].
+     * 2. Decodes real audio via `MediaExtractor` + `MediaCodec` and passes mono PCM through a
+     *    2nd-Order Butterworth Low-Pass Biquad (`fc = 135 Hz`, `Q = 0.7071`) to isolate kick & sub-bass!
+     * 3. Computes `20ms` hop bass RMS energies and runs [pickNotableBassPeaks] with an absolute noise gate,
+     *    adaptive local moving-average prominence threshold, and `300ms` refractory cooldown so quiet noise
+     *    or vocals NEVER spam markers!
+     */
+    suspend fun detectNotableBassBeats(
+        context: Context?,
+        project: Project,
+        sensitivity: Float = 0.65f
+    ): List<BeatMarker> = withContext(Dispatchers.Default) {
+        val safeSens = sensitivity.coerceIn(0.10f, 0.95f)
+        val audioSourceLayer: Layer? = project.layers.firstOrNull {
+            it.visible && it.type == LayerType.AUDIO && it.mediaUri.isNotBlank() && !it.audioMuted
+        } ?: project.layers.firstOrNull {
+            it.visible && it.type == LayerType.VIDEO && it.mediaUri.isNotBlank() && !it.audioMuted
+        }
+
+        if (context != null && audioSourceLayer != null) {
+            val decodedBassHops = decodeLowPassBassEnvelope(
+                context = context,
+                mediaUri = audioSourceLayer.mediaUri,
+                maxDurationMs = ((audioSourceLayer.endTimeMs - audioSourceLayer.startTimeMs) *
+                    audioSourceLayer.speedMultiplier.coerceIn(0.25f, 3.0f)).toLong().coerceIn(500L, 60_000L),
+                startOffsetMs = audioSourceLayer.sourceOffsetMs,
+                hopDurationMs = 20L
+            )
+            if (decodedBassHops != null && decodedBassHops.size >= 8) {
+                val rawPeaks = pickNotableBassPeaks(
+                    hopEnergies = decodedBassHops,
+                    hopDurationMs = 20L,
+                    sensitivity = safeSens,
+                    minCooldownMs = 300L
+                )
+                val spd = audioSourceLayer.speedMultiplier.coerceIn(0.25f, 3.0f)
+                val mapped = rawPeaks.mapNotNull { marker ->
+                    val compMs = audioSourceLayer.startTimeMs + (marker.timeMs / spd).toLong()
+                    if (compMs in audioSourceLayer.startTimeMs..min(project.durationMs, audioSourceLayer.endTimeMs)) {
+                        marker.copy(timeMs = compMs)
+                    } else null
+                }
+                if (mapped.isNotEmpty()) {
+                    return@withContext mapped
+                }
+            }
+        }
+
+        // Secondary fallback: if layer has a pre-extracted real waveform envelope, detect prominent peaks on it
+        val wf = audioSourceLayer?.extractedWaveform?.takeIf { it.size >= 16 }
+        if (wf != null && audioSourceLayer != null) {
+            val spanMs = (audioSourceLayer.endTimeMs - audioSourceLayer.startTimeMs).coerceAtLeast(400L)
+            val hopMs = (spanMs / wf.size.coerceAtLeast(1)).coerceAtLeast(25L)
+            val peaks = pickNotableBassPeaks(
+                hopEnergies = wf.toFloatArray(),
+                hopDurationMs = hopMs,
+                sensitivity = safeSens,
+                minCooldownMs = 320L
+            ).map { it.copy(timeMs = (audioSourceLayer.startTimeMs + it.timeMs).coerceAtMost(project.durationMs)) }
+            if (peaks.isNotEmpty()) return@withContext peaks
+        }
+
+        // Clean composition fallback (no media imported yet): sparse downbeat/kick accents only (never spam!)
+        generateSparseDownbeatMarkers(project.durationMs, project.bpm, safeSens)
+    }
+
+    private fun generateSparseDownbeatMarkers(
+        durationMs: Long,
+        bpm: Int,
+        sensitivity: Float
+    ): List<BeatMarker> {
+        val safeBpm = bpm.coerceIn(40, 240)
+        val beatMs = (60_000.0 / safeBpm).toLong().coerceAtLeast(240L)
+        val strideBeats = when {
+            sensitivity >= 0.78f -> 1
+            sensitivity >= 0.45f -> 2
+            else -> 4
+        }
+        val stepMs = (beatMs * strideBeats).coerceAtLeast(320L)
+        val result = ArrayList<BeatMarker>()
+        var t = 0L
+        var idx = 0
+        while (t <= durationMs) {
+            val strength = if (idx % 2 == 0) 0.96f else 0.80f
+            result.add(BeatMarker(timeMs = t, strength = strength, band = AudioBand.BASS))
+            t += stepMs
+            idx++
+        }
+        return result
+    }
+
+    private fun decodeLowPassBassEnvelope(
+        context: Context,
+        mediaUri: String,
+        maxDurationMs: Long,
+        startOffsetMs: Long,
+        hopDurationMs: Long
+    ): FloatArray? {
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+        return try {
+            val resolved = MediaEngine.resolvePlayableUriString(mediaUri)
+            val uri = Uri.parse(resolved)
+            if (uri.scheme == "file" && uri.path != null) {
+                extractor.setDataSource(uri.path!!)
+            } else {
+                extractor.setDataSource(context, uri, null)
+            }
+
+            var audioTrack = -1
+            var format: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val f = extractor.getTrackFormat(i)
+                val mime = f.getString(MediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("audio/")) {
+                    audioTrack = i
+                    format = f
+                    break
+                }
+            }
+            if (audioTrack < 0 || format == null) return null
+
+            extractor.selectTrack(audioTrack)
+            if (startOffsetMs > 0L) {
+                extractor.seekTo(startOffsetMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            }
+
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
+            var sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            } else 44100
+            var channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            } else 2
+
+            codec = MediaCodec.createDecoderByType(mime)
+            codec.configure(format, null, null, 0)
+            codec.start()
+
+            // 2nd-Order Butterworth Low-Pass Biquad coefficients at fc = 135 Hz, Q = 0.7071
+            var b0 = 0f; var b1 = 0f; var b2 = 0f; var a1 = 0f; var a2 = 0f
+            fun recomputeLowPass(sr: Int) {
+                val safeSr = sr.coerceIn(8000, 192000).toDouble()
+                val fc = 135.0.coerceAtMost(safeSr * 0.42)
+                val k = tan(PI * fc / safeSr)
+                val q = 0.70710678
+                val norm = 1.0 / (1.0 + k / q + k * k)
+                b0 = (k * k * norm).toFloat()
+                b1 = (2.0 * b0).toFloat()
+                b2 = b0
+                a1 = (2.0 * (k * k - 1.0) * norm).toFloat()
+                a2 = ((1.0 - k / q + k * k) * norm).toFloat()
+            }
+            recomputeLowPass(sampleRate)
+
+            var x1 = 0f; var x2 = 0f; var y1 = 0f; var y2 = 0f
+            var samplesPerHop = ((sampleRate * hopDurationMs) / 1000L).toInt().coerceAtLeast(64)
+            var hopAccumSq = 0.0
+            var hopSampleCounter = 0
+            val hops = ArrayList<Float>(1024)
+            val maxHops = (maxDurationMs / hopDurationMs).toInt().coerceIn(25, 3000)
+
+            val info = MediaCodec.BufferInfo()
+            var inputDone = false
+            var outputDone = false
+            val endPtsUs = (startOffsetMs + maxDurationMs) * 1000L
+
+            while (!outputDone && hops.size < maxHops) {
+                if (!inputDone) {
+                    val inIdx = codec.dequeueInputBuffer(4_000L)
+                    if (inIdx >= 0) {
+                        val inBuf = codec.getInputBuffer(inIdx)
+                        if (inBuf != null) {
+                            val sz = extractor.readSampleData(inBuf, 0)
+                            val pts = extractor.sampleTime
+                            if (sz < 0 || (pts > endPtsUs && hops.size > 12)) {
+                                codec.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputDone = true
+                            } else {
+                                codec.queueInputBuffer(inIdx, 0, sz, pts.coerceAtLeast(0L), 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                }
+
+                val outIdx = codec.dequeueOutputBuffer(info, 4_000L)
+                when {
+                    outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val outFmt = codec.outputFormat
+                        if (outFmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                            sampleRate = outFmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            samplesPerHop = ((sampleRate * hopDurationMs) / 1000L).toInt().coerceAtLeast(64)
+                            recomputeLowPass(sampleRate)
+                        }
+                        if (outFmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                            channelCount = outFmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
+                        }
+                    }
+                    outIdx >= 0 -> {
+                        val outBuf = codec.getOutputBuffer(outIdx)
+                        if (outBuf != null && info.size >= 2) {
+                            outBuf.position(info.offset)
+                            outBuf.limit(info.offset + info.size)
+                            val shortBuf = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                            val ch = channelCount.coerceIn(1, 8)
+                            val totalShorts = shortBuf.remaining()
+                            var sIdx = 0
+                            while (sIdx + ch <= totalShorts && hops.size < maxHops) {
+                                var mono = 0f
+                                for (c in 0 until ch) {
+                                    mono += shortBuf.get(sIdx + c) / 32768f
+                                }
+                                mono /= ch.toFloat()
+                                sIdx += ch
+
+                                val lp = b0 * mono + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                                x2 = x1
+                                x1 = mono
+                                y2 = y1
+                                y1 = lp
+
+                                hopAccumSq += (lp * lp).toDouble()
+                                hopSampleCounter++
+                                if (hopSampleCounter >= samplesPerHop) {
+                                    val rms = sqrt(hopAccumSq / hopSampleCounter.toDouble()).toFloat()
+                                    hops.add(rms)
+                                    hopAccumSq = 0.0
+                                    hopSampleCounter = 0
+                                }
+                            }
+                        }
+                        codec.releaseOutputBuffer(outIdx, false)
+                        if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            outputDone = true
+                        }
+                    }
+                }
+            }
+            if (hops.isEmpty()) null else hops.toFloatArray()
+        } catch (_: Throwable) {
+            null
+        } finally {
+            runCatching { codec?.stop() }
+            runCatching { codec?.release() }
+            runCatching { extractor.release() }
+        }
     }
 
     /**
@@ -193,9 +475,7 @@ class AudioReactorEngine {
                         var sumSq = 0f
                         for (i in 0 until fftSize) {
                             val sample = if (i < read) pcm[i] / 32768f else 0f
-                            // Hann window
-                            val window = (0.5f * (1f - cos(2.0 * PI * i / (fftSize - 1)))).toFloat()
-                            real[i] = sample * window
+                            real[i] = sample * HANN_WINDOW_1024[i]
                             imag[i] = 0f
                             sumSq += sample * sample
                         }
@@ -290,6 +570,89 @@ class AudioReactorEngine {
                 i += len
             }
             len = len shl 1
+        }
+    }
+
+    companion object {
+        private val HANN_WINDOW_1024 = FloatArray(1024) { i ->
+            (0.5 * (1.0 - cos(2.0 * PI * i / 1023.0))).toFloat()
+        }
+
+        /**
+         * Pure DSP Notable Bass Peak Picker:
+         * - Enforces an absolute noise gate (`max(0.035f, globalPeak * 0.22f)`) so low-amplitude room hiss,
+         *   quiet pads, or background noise NEVER trigger markers.
+         * - Computes a local moving-average baseline (`±0.5s`) + positive onset flux so sustained bass notes
+         *   only trigger at their initial attack transient, not continuously.
+         * - Enforces a minimum refractory cooldown (`minCooldownMs`, default `300ms`), keeping the stronger peak
+         *   if two candidates occur close together.
+         */
+        fun pickNotableBassPeaks(
+            hopEnergies: FloatArray,
+            hopDurationMs: Long = 20L,
+            sensitivity: Float = 0.65f,
+            minCooldownMs: Long = 300L
+        ): List<BeatMarker> {
+            val n = hopEnergies.size
+            if (n < 5) return emptyList()
+
+            var globalMax = 0f
+            var globalSum = 0f
+            for (v in hopEnergies) {
+                if (v > globalMax) globalMax = v
+                globalSum += v
+            }
+            val globalMean = globalSum / n.toFloat()
+
+            // Absolute silence / low-noise gate: if whole clip is quiet hiss or near-constant hum, emit 0 markers!
+            if (globalMax < 0.035f || globalMax < globalMean * 1.38f) {
+                return emptyList()
+            }
+
+            val safeSens = sensitivity.coerceIn(0.10f, 0.95f)
+            val absFloor = max(0.035f, globalMax * (0.34f - safeSens * 0.16f))
+            val prominenceRatio = (2.15f - safeSens * 0.72f).coerceIn(1.38f, 2.30f)
+            val halfWindow = ((500L / hopDurationMs.coerceAtLeast(10L)).toInt()).coerceIn(4, 32)
+            val minHopGap = (minCooldownMs / hopDurationMs.coerceAtLeast(1L)).toInt().coerceAtLeast(2)
+
+            val candidates = ArrayList<BeatMarker>()
+            var lastAcceptedHop = -minHopGap * 2
+
+            for (i in 1 until n - 1) {
+                val cur = hopEnergies[i]
+                if (cur < absFloor) continue
+                // Strict local peak with non-trivial attack rise
+                if (cur < hopEnergies[i - 1] || cur < hopEnergies[i + 1]) continue
+                val prevMin = min(hopEnergies[i - 1], hopEnergies[max(0, i - 2)])
+                val onsetRise = cur - prevMin
+                if (onsetRise < globalMax * 0.08f) continue
+
+                val wStart = max(0, i - halfWindow)
+                val wEnd = min(n - 1, i + halfWindow)
+                var localSum = 0f
+                for (k in wStart..wEnd) {
+                    localSum += hopEnergies[k]
+                }
+                val localMean = (localSum / (wEnd - wStart + 1).toFloat()).coerceAtLeast(0.001f)
+                if (cur < localMean * prominenceRatio) continue
+
+                val strength = (cur / globalMax).coerceIn(0.45f, 1.0f)
+                val timeMs = i * hopDurationMs
+
+                if (i - lastAcceptedHop >= minHopGap) {
+                    candidates.add(BeatMarker(timeMs = timeMs, strength = strength, band = AudioBand.BASS))
+                    lastAcceptedHop = i
+                } else if (candidates.isNotEmpty() && strength > candidates.last().strength) {
+                    // Replace weaker nearby candidate within cooldown window with the true kick peak!
+                    candidates[candidates.lastIndex] = BeatMarker(
+                        timeMs = timeMs,
+                        strength = strength,
+                        band = AudioBand.BASS
+                    )
+                    lastAcceptedHop = i
+                }
+            }
+            return candidates
         }
     }
 }

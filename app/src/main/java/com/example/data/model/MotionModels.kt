@@ -63,6 +63,14 @@ enum class PropertyTarget(val label: String, val unit: String, val minVal: Float
     TIME_REMAP("Time Remap", "s", 0f, 120f)
 }
 
+enum class EffectParamSlot {
+    PRIMARY,
+    SECONDARY,
+    FREQUENCY,
+    ANGLE,
+    MIX
+}
+
 data class Keyframe(
     val id: String = UUID.randomUUID().toString(),
     val timeMs: Long = 0L,
@@ -71,7 +79,8 @@ data class Keyframe(
     val outTangentX: Float = 0.42f,
     val outTangentY: Float = 0.0f,
     val inTangentX: Float = 0.58f,
-    val inTangentY: Float = 1.0f
+    val inTangentY: Float = 1.0f,
+    val holdStep: Boolean = false
 )
 
 data class AnimatableProperty(
@@ -91,9 +100,38 @@ data class EffectNode(
     val intensity: Float = 0.65f,
     val secondaryParam: Float = 0.50f,
     val frequencyParam: Float = 0.35f,
+    val angleParam: Float = 0.0f,
+    val mixParam: Float = 100.0f,
+    val tintColorHex: String = "#FFFFFF",
+    val primaryProp: AnimatableProperty = AnimatableProperty(intensity),
+    val secondaryProp: AnimatableProperty = AnimatableProperty(secondaryParam),
+    val frequencyProp: AnimatableProperty = AnimatableProperty(frequencyParam),
+    val angleProp: AnimatableProperty = AnimatableProperty(angleParam),
+    val mixProp: AnimatableProperty = AnimatableProperty(mixParam),
     val audioBoundBand: AudioBand = AudioBand.NONE,
     val audioSensitivity: Float = 1.0f
-)
+) {
+    fun propertyFor(slot: EffectParamSlot): AnimatableProperty = when (slot) {
+        EffectParamSlot.PRIMARY -> primaryProp
+        EffectParamSlot.SECONDARY -> secondaryProp
+        EffectParamSlot.FREQUENCY -> frequencyProp
+        EffectParamSlot.ANGLE -> angleProp
+        EffectParamSlot.MIX -> mixProp
+    }
+
+    fun updateProperty(slot: EffectParamSlot, updated: AnimatableProperty): EffectNode = when (slot) {
+        EffectParamSlot.PRIMARY -> copy(intensity = updated.baseValue, primaryProp = updated)
+        EffectParamSlot.SECONDARY -> copy(secondaryParam = updated.baseValue, secondaryProp = updated)
+        EffectParamSlot.FREQUENCY -> copy(frequencyParam = updated.baseValue, frequencyProp = updated)
+        EffectParamSlot.ANGLE -> copy(angleParam = updated.baseValue, angleProp = updated)
+        EffectParamSlot.MIX -> copy(mixParam = updated.baseValue, mixProp = updated)
+    }
+
+    fun allKeyframeTimes(): List<Long> = EffectParamSlot.entries
+        .flatMap { slot -> propertyFor(slot).keyframes.map { it.timeMs } }
+        .distinct()
+        .sorted()
+}
 
 data class MaskNode(
     val id: String = UUID.randomUUID().toString(),
@@ -115,6 +153,9 @@ data class Layer(
     val mediaHeight: Int = 0,
     val parentId: String? = null,
     val colorHex: String = "#00D2A8",
+    val fillMode: String = "SOLID", // "SOLID", "LINEAR_GRADIENT", "RADIAL_GRADIENT"
+    val gradientEndColorHex: String = "#0094FF",
+    val gradientAngleDeg: Float = 45f,
     val shapeKind: String = "Rounded Rect",
     val blendMode: String = "Normal",
     val strokeEnabled: Boolean = false,
@@ -129,6 +170,14 @@ data class Layer(
     val freezeFrameMs: Long = -1L,
     val audioMuted: Boolean = false,
     val audioVolume: Float = 1.0f,
+    val audioPreset: String = "Clean",
+    val audioReverbMix: Float = 0f,
+    val audioRoomSize: Float = 0.55f,
+    val audioBassBoost: Float = 0f,
+    val audioEchoMix: Float = 0f,
+    val audioEchoDelayMs: Float = 240f,
+    val audioFilterCutoff: Float = 1.0f,
+    val audioPitchSemitones: Float = 0f,
     val extractedWaveform: List<Float> = emptyList(),
     val motionBlurEnabled: Boolean = false,
     val shutterAngle: Float = 180f,
@@ -180,6 +229,48 @@ data class Layer(
         PropertyTarget.ROTATION_Z -> copy(rotationZ = updated)
         PropertyTarget.OPACITY -> copy(opacity = updated)
         PropertyTarget.TIME_REMAP -> copy(timeRemap = updated)
+    }
+
+    fun allKeyframeTimes(): List<Long> {
+        val layerKfs = PropertyTarget.entries.flatMap { t -> propertyFor(t).keyframes.map { it.timeMs } }
+        val fxKfs = effects.flatMap { fx -> fx.allKeyframeTimes() }
+        return (layerKfs + fxKfs).distinct().sorted()
+    }
+
+    fun shiftTimeRangeAndKeyframes(deltaMs: Long): Layer {
+        if (deltaMs == 0L) return this
+        fun shiftProp(p: AnimatableProperty): AnimatableProperty {
+            if (p.keyframes.isEmpty()) return p
+            return p.copy(
+                keyframes = p.keyframes.map { kf ->
+                    kf.copy(timeMs = (kf.timeMs + deltaMs).coerceAtLeast(0L))
+                }.sortedBy { it.timeMs }
+            )
+        }
+        return copy(
+            startTimeMs = (startTimeMs + deltaMs).coerceAtLeast(0L),
+            endTimeMs = (endTimeMs + deltaMs).coerceAtLeast(100L),
+            posX = shiftProp(posX),
+            posY = shiftProp(posY),
+            posZ = shiftProp(posZ),
+            pivotX = shiftProp(pivotX),
+            pivotY = shiftProp(pivotY),
+            scale = shiftProp(scale),
+            rotationX = shiftProp(rotationX),
+            rotationY = shiftProp(rotationY),
+            rotationZ = shiftProp(rotationZ),
+            opacity = shiftProp(opacity),
+            timeRemap = shiftProp(timeRemap),
+            effects = effects.map { fx ->
+                fx.copy(
+                    primaryProp = shiftProp(fx.primaryProp),
+                    secondaryProp = shiftProp(fx.secondaryProp),
+                    frequencyProp = shiftProp(fx.frequencyProp),
+                    angleProp = shiftProp(fx.angleProp),
+                    mixProp = shiftProp(fx.mixProp)
+                )
+            }
+        )
     }
 }
 
@@ -271,6 +362,9 @@ object ProjectPayloadSerializer {
                 put("mediaHeight", layer.mediaHeight)
                 put("parentId", layer.parentId ?: "")
                 put("colorHex", layer.colorHex)
+                put("fillMode", layer.fillMode)
+                put("gradientEndColorHex", layer.gradientEndColorHex)
+                put("gradientAngleDeg", layer.gradientAngleDeg.toDouble())
                 put("shapeKind", layer.shapeKind)
                 put("blendMode", layer.blendMode)
                 put("strokeEnabled", layer.strokeEnabled)
@@ -285,6 +379,14 @@ object ProjectPayloadSerializer {
                 put("freezeFrameMs", layer.freezeFrameMs)
                 put("audioMuted", layer.audioMuted)
                 put("audioVolume", layer.audioVolume.toDouble())
+                put("audioPreset", layer.audioPreset)
+                put("audioReverbMix", layer.audioReverbMix.toDouble())
+                put("audioRoomSize", layer.audioRoomSize.toDouble())
+                put("audioBassBoost", layer.audioBassBoost.toDouble())
+                put("audioEchoMix", layer.audioEchoMix.toDouble())
+                put("audioEchoDelayMs", layer.audioEchoDelayMs.toDouble())
+                put("audioFilterCutoff", layer.audioFilterCutoff.toDouble())
+                put("audioPitchSemitones", layer.audioPitchSemitones.toDouble())
                 put("waveform", wfArr)
                 put("motionBlurEnabled", layer.motionBlurEnabled)
                 put("shutterAngle", layer.shutterAngle.toDouble())
@@ -347,6 +449,9 @@ object ProjectPayloadSerializer {
                             mediaHeight = obj.optInt("mediaHeight", 0),
                             parentId = rawParent.ifBlank { null },
                             colorHex = obj.optString("colorHex", "#00D2A8"),
+                            fillMode = obj.optString("fillMode", "SOLID"),
+                            gradientEndColorHex = obj.optString("gradientEndColorHex", "#0094FF"),
+                            gradientAngleDeg = obj.optDouble("gradientAngleDeg", 45.0).toFloat(),
                             shapeKind = obj.optString("shapeKind", "Rounded Rect"),
                             blendMode = obj.optString("blendMode", "Normal"),
                             strokeEnabled = obj.optBoolean("strokeEnabled", false),
@@ -361,6 +466,14 @@ object ProjectPayloadSerializer {
                             freezeFrameMs = obj.optLong("freezeFrameMs", -1L),
                             audioMuted = obj.optBoolean("audioMuted", false),
                             audioVolume = obj.optDouble("audioVolume", 1.0).toFloat(),
+                            audioPreset = obj.optString("audioPreset", "Clean"),
+                            audioReverbMix = obj.optDouble("audioReverbMix", 0.0).toFloat(),
+                            audioRoomSize = obj.optDouble("audioRoomSize", 0.55).toFloat(),
+                            audioBassBoost = obj.optDouble("audioBassBoost", 0.0).toFloat(),
+                            audioEchoMix = obj.optDouble("audioEchoMix", 0.0).toFloat(),
+                            audioEchoDelayMs = obj.optDouble("audioEchoDelayMs", 240.0).toFloat(),
+                            audioFilterCutoff = obj.optDouble("audioFilterCutoff", 1.0).toFloat(),
+                            audioPitchSemitones = obj.optDouble("audioPitchSemitones", 0.0).toFloat(),
                             extractedWaveform = wf,
                             motionBlurEnabled = obj.optBoolean("motionBlurEnabled", false),
                             shutterAngle = obj.optDouble("shutterAngle", 180.0).toFloat(),
@@ -403,9 +516,17 @@ object ProjectPayloadSerializer {
                     put("displayName", fx.displayName)
                     put("category", fx.category)
                     put("enabled", fx.enabled)
-                    put("intensity", fx.intensity.toDouble())
-                    put("secondaryParam", fx.secondaryParam.toDouble())
-                    put("frequencyParam", fx.frequencyParam.toDouble())
+                    put("intensity", fx.primaryProp.baseValue.toDouble())
+                    put("secondaryParam", fx.secondaryProp.baseValue.toDouble())
+                    put("frequencyParam", fx.frequencyProp.baseValue.toDouble())
+                    put("angleParam", fx.angleProp.baseValue.toDouble())
+                    put("mixParam", fx.mixProp.baseValue.toDouble())
+                    put("tintColorHex", fx.tintColorHex)
+                    put("primaryProp", encodeProp(fx.primaryProp))
+                    put("secondaryProp", encodeProp(fx.secondaryProp))
+                    put("frequencyProp", encodeProp(fx.frequencyProp))
+                    put("angleProp", encodeProp(fx.angleProp))
+                    put("mixProp", encodeProp(fx.mixProp))
                     put("audioBoundBand", fx.audioBoundBand.name)
                     put("audioSensitivity", fx.audioSensitivity.toDouble())
                 }
@@ -419,6 +540,16 @@ object ProjectPayloadSerializer {
         return buildList {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
+                val defInt = o.optDouble("intensity", 0.65).toFloat()
+                val defSec = o.optDouble("secondaryParam", 0.50).toFloat()
+                val defFreq = o.optDouble("frequencyParam", 0.35).toFloat()
+                val defAng = o.optDouble("angleParam", 0.0).toFloat()
+                val defMix = o.optDouble("mixParam", 100.0).toFloat()
+                val p1 = decodeProp(o.optJSONObject("primaryProp"), defInt)
+                val p2 = decodeProp(o.optJSONObject("secondaryProp"), defSec)
+                val p3 = decodeProp(o.optJSONObject("frequencyProp"), defFreq)
+                val p4 = decodeProp(o.optJSONObject("angleProp"), defAng)
+                val p5 = decodeProp(o.optJSONObject("mixProp"), defMix)
                 add(
                     EffectNode(
                         id = o.optString("id", UUID.randomUUID().toString()),
@@ -426,9 +557,17 @@ object ProjectPayloadSerializer {
                         displayName = o.optString("displayName", "S_Glow"),
                         category = o.optString("category", "Desktop Suite Homages"),
                         enabled = o.optBoolean("enabled", true),
-                        intensity = o.optDouble("intensity", 0.65).toFloat(),
-                        secondaryParam = o.optDouble("secondaryParam", 0.50).toFloat(),
-                        frequencyParam = o.optDouble("frequencyParam", 0.35).toFloat(),
+                        intensity = p1.baseValue,
+                        secondaryParam = p2.baseValue,
+                        frequencyParam = p3.baseValue,
+                        angleParam = p4.baseValue,
+                        mixParam = p5.baseValue,
+                        tintColorHex = o.optString("tintColorHex", "#FFFFFF"),
+                        primaryProp = p1,
+                        secondaryProp = p2,
+                        frequencyProp = p3,
+                        angleProp = p4,
+                        mixProp = p5,
                         audioBoundBand = runCatching { AudioBand.valueOf(o.optString("audioBoundBand", "NONE")) }.getOrDefault(AudioBand.NONE),
                         audioSensitivity = o.optDouble("audioSensitivity", 1.0).toFloat()
                     )
@@ -484,6 +623,7 @@ object ProjectPayloadSerializer {
                     put("outTangentY", kf.outTangentY.toDouble())
                     put("inTangentX", kf.inTangentX.toDouble())
                     put("inTangentY", kf.inTangentY.toDouble())
+                    put("holdStep", kf.holdStep)
                 }
             )
         }
@@ -511,7 +651,8 @@ object ProjectPayloadSerializer {
                             outTangentX = k.optDouble("outTangentX", 0.42).toFloat(),
                             outTangentY = k.optDouble("outTangentY", 0.0).toFloat(),
                             inTangentX = k.optDouble("inTangentX", 0.58).toFloat(),
-                            inTangentY = k.optDouble("inTangentY", 1.0).toFloat()
+                            inTangentY = k.optDouble("inTangentY", 1.0).toFloat(),
+                            holdStep = k.optBoolean("holdStep", false)
                         )
                     )
                 }
