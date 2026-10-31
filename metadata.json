@@ -1,0 +1,6 @@
+{
+  "name": "FramePollution",
+  "description": "Desktop-class Android motion graphics, multi-track compositing, 3D scene editor, audio reactor, and GPU shader video studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

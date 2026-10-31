@@ -1,0 +1,132 @@
+{
+  "entities": {
+    "MotionProject": {
+      "title": "MotionProject",
+      "description": "Root motion graphics and video compositing project document.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated owner UID."
+        },
+        "name": {
+          "type": "string",
+          "description": "Project title."
+        },
+        "aspectRatioPreset": {
+          "type": "string",
+          "description": "Selected aspect ratio preset label (16:9, 9:16, 1:1, 4:3, 21:9, Custom)."
+        },
+        "width": {
+          "type": "integer",
+          "description": "Canvas/export pixel width (64 to 7680)."
+        },
+        "height": {
+          "type": "integer",
+          "description": "Canvas/export pixel height (64 to 7680)."
+        },
+        "fps": {
+          "type": "integer",
+          "description": "Timeline and export frame rate (1 to 240 FPS)."
+        },
+        "durationMs": {
+          "type": "integer",
+          "description": "Timeline duration in milliseconds."
+        },
+        "codec": {
+          "type": "string",
+          "enum": ["H.264", "H.265"],
+          "description": "Export hardware codec selection."
+        },
+        "bpm": {
+          "type": "integer",
+          "description": "Detected or configured audio BPM."
+        },
+        "layersPayload": {
+          "type": "string",
+          "description": "Serialized layer hierarchy, keyframes, Bezier curves, 3D transforms, and GL effect nodes."
+        },
+        "beatMarkersPayload": {
+          "type": "string",
+          "description": "Serialized audio reactor beat timestamps and frequency band bindings."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last modification via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "aspectRatioPreset",
+        "width",
+        "height",
+        "fps",
+        "durationMs",
+        "codec",
+        "bpm",
+        "layersPayload",
+        "beatMarkersPayload",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CustomEffectPreset": {
+      "title": "CustomEffectPreset",
+      "description": "User-saved shader and procedural effect node chain preset.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated owner UID."
+        },
+        "name": {
+          "type": "string",
+          "description": "Preset display name."
+        },
+        "category": {
+          "type": "string",
+          "description": "Effect category label."
+        },
+        "effectChainPayload": {
+          "type": "string",
+          "description": "Serialized effect node chain parameters."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last modification via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "category",
+        "effectChainPayload",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "MotionProject",
+      "description": "User-isolated motion graphics projects."
+    },
+    "/users/{userId}/presets/{presetId}": {
+      "schema": "CustomEffectPreset",
+      "description": "User-isolated custom effect presets."
+    }
+  }
+}

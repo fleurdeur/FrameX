@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">FramePollution</string>
+    <string name="tagline_studio">Pro Motion Graphics, Node Shaders &amp; Keyframe Compositing</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_out">Sign Out</string>
+    <string name="new_project">New Project</string>
+    <string name="create_project">CREATE PROJECT</string>
+    <string name="recent_projects">Projects</string>
+    <string name="template_gallery">Featured Templates</string>
+    <string name="effects_browser">Add Effect</string>
+    <string name="graph_editor">Easing &amp; Graph</string>
+    <string name="audio_reactor">Audio Reactor</string>
+    <string name="workspace_3d">3D Viewport</string>
+    <string name="export_pipeline">Export</string>
+    <string name="save_project">Sync Cloud</string>
+    <string name="export_mp4">EXPORT</string>
+    <string name="empty_projects_tip">No cloud projects yet. Tap the + button below or pick a template to start animating.</string>
+</resources>

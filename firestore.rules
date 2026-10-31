@@ -1,0 +1,139 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidMotionProject(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.name is string &&
+             data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.aspectRatioPreset is string &&
+             data.aspectRatioPreset.size() >= 1 && data.aspectRatioPreset.size() <= 32 &&
+             data.width is int &&
+             data.width >= 64 && data.width <= 7680 &&
+             data.height is int &&
+             data.height >= 64 && data.height <= 7680 &&
+             data.fps is int &&
+             data.fps >= 1 && data.fps <= 240 &&
+             data.durationMs is int &&
+             data.durationMs >= 100 && data.durationMs <= 3600000 &&
+             data.codec is string &&
+             (data.codec == 'H.264' || data.codec == 'H.265') &&
+             data.bpm is int &&
+             data.bpm >= 30 && data.bpm <= 300 &&
+             data.layersPayload is string &&
+             data.layersPayload.size() <= 500000 &&
+             data.beatMarkersPayload is string &&
+             data.beatMarkersPayload.size() <= 100000 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidCustomEffectPreset(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.name is string &&
+             data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.category is string &&
+             data.category.size() >= 1 && data.category.size() <= 64 &&
+             data.effectChainPayload is string &&
+             data.effectChainPayload.size() <= 100000 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    match /users/{userId}/projects/{projectId} {
+      allow get: if isOwner(userId) && isValidId(userId) && isValidId(projectId) && existing().userId == request.auth.uid;
+      allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidId(projectId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'name', 'aspectRatioPreset', 'width', 'height',
+                         'fps', 'durationMs', 'codec', 'bpm', 'layersPayload',
+                         'beatMarkersPayload', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'name', 'aspectRatioPreset', 'width', 'height',
+                         'fps', 'durationMs', 'codec', 'bpm', 'layersPayload',
+                         'beatMarkersPayload', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidMotionProject(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidId(projectId) &&
+                       isValidMotionProject(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name', 'aspectRatioPreset', 'width', 'height',
+                         'fps', 'durationMs', 'codec', 'bpm', 'layersPayload',
+                         'beatMarkersPayload', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(projectId) && existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId}/presets/{presetId} {
+      allow get: if isOwner(userId) && isValidId(userId) && isValidId(presetId) && existing().userId == request.auth.uid;
+      allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidId(presetId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'name', 'category', 'effectChainPayload', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'name', 'category', 'effectChainPayload', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCustomEffectPreset(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidId(presetId) &&
+                       isValidCustomEffectPreset(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name', 'category', 'effectChainPayload', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId) && isValidId(presetId) && existing().userId == request.auth.uid;
+    }
+  }
+}
