@@ -162,6 +162,38 @@ object AnimationEvaluator {
         )
     }
 
+    fun evaluatePluginUniformFloats(
+        plugin: InstalledPluginEffect,
+        effect: EffectNode,
+        timeMs: Long,
+        audio: AudioSpectrumSnapshot = AudioSpectrumSnapshot()
+    ): Map<String, Float> {
+        val out = LinkedHashMap<String, Float>(plugin.parameters.size)
+        var firstFloatBoosted = false
+        val nodeAudioMod = audio.levelFor(effect.audioBoundBand) * effect.audioSensitivity
+        plugin.parameters.forEach { param ->
+            when (param.type) {
+                PluginParamType.FLOAT -> {
+                    val prop = effect.customParams[param.key] ?: AnimatableProperty(param.defaultFloat)
+                    var evaluated = evaluateProperty(prop, timeMs, audio)
+                    if (!firstFloatBoosted && nodeAudioMod != 0f) {
+                        val span = (param.max - param.min).coerceAtLeast(0.01f)
+                        evaluated += nodeAudioMod * span * 0.35f
+                        firstFloatBoosted = true
+                    }
+                    out[param.key] = evaluated.coerceIn(param.min, param.max)
+                }
+                PluginParamType.BOOL -> {
+                    val prop = effect.customParams[param.key] ?: AnimatableProperty(param.defaultFloat)
+                    val evaluated = evaluateProperty(prop, timeMs, audio)
+                    out[param.key] = if (evaluated >= 0.5f) 1f else 0f
+                }
+                PluginParamType.COLOR -> Unit
+            }
+        }
+        return out
+    }
+
     /**
      * Evaluates procedural expressions & KeyFlow by Angkin physics modifiers:
      * - spring(freq, decay): Inertial harmonic bounce after keyframes

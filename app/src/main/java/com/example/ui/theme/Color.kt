@@ -35,3 +35,14 @@ val TextPrimary = Color(0xFFF3F5FA)
 val TextSecondary = Color(0xFF949BB0)
 val TextMuted = Color(0xFF646B80)
 val OutlineSubtle = Color(0xFF303748)
+
+// KeyFlow Studio Inspector, Gizmo & Property Ruler Palette
+val KeyflowBlue = Color(0xFF537FFF)
+val KeyflowBlueBright = Color(0xFF7096FF)
+val KeyflowBlueDim = Color(0xFF1E2D59)
+val KeyflowDrawerBg = Color(0xFF0B0C0F)
+val KeyflowCardSurface = Color(0xFF1A1C22)
+val KeyflowCardBorder = Color(0xFF262932)
+val KeyflowRailDivider = Color(0xFF1D2028)
+val KeyflowDangerRed = Color(0xFFEF4444)
+

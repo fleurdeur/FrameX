@@ -44,6 +44,8 @@ import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
 import com.example.data.model.PropertyTarget
 import com.example.engine.EffectsCatalog
+import com.example.engine.PluginPackManager
+import com.example.engine.PluginParamType
 import com.example.ui.components.AmControllableCurveEditor
 import com.example.ui.components.AmKeyframeCluster
 import com.example.ui.components.AmSegmentChip
@@ -66,12 +68,14 @@ fun GraphEditorScreen(
     selectedProperty: PropertyTarget,
     selectedEffectId: String? = null,
     selectedEffectSlot: EffectParamSlot = EffectParamSlot.PRIMARY,
+    selectedPluginParamKey: String? = null,
     initialTargetsEffect: Boolean = false,
     hasCopiedCurve: Boolean = false,
     playheadMs: Long,
     onSelectProperty: (PropertyTarget) -> Unit,
     onSelectEffect: (String) -> Unit = {},
     onSelectEffectSlot: (EffectParamSlot) -> Unit = {},
+    onSelectPluginParamKey: (String) -> Unit = {},
     onToggleKeyframe: (isEffect: Boolean) -> Unit = {},
     onJumpKeyframe: (forward: Boolean, isEffect: Boolean) -> Unit = { _, _ -> },
     onUpdateBezierHandles: (outX: Float, outY: Float, inX: Float, inY: Float, holdStep: Boolean, isEffect: Boolean) -> Unit,
@@ -89,26 +93,75 @@ fun GraphEditorScreen(
     val activeFx = remember(layerEffects, selectedEffectId) {
         layerEffects.firstOrNull { it.id == selectedEffectId } ?: layerEffects.firstOrNull()
     }
+    val activePlugin = remember(activeFx?.effectId) {
+        activeFx?.let { PluginPackManager.findPluginEffect(it.effectId) }
+    }
+    val numericPluginParams = remember(activePlugin) {
+        activePlugin?.parameters?.filter { it.type != PluginParamType.COLOR }.orEmpty()
+    }
+    val resolvedPluginKey: String? = remember(activePlugin, numericPluginParams, selectedPluginParamKey) {
+        if (activePlugin == null) null else when {
+            selectedPluginParamKey == PLUGIN_MIX_KEY -> PLUGIN_MIX_KEY
+            selectedPluginParamKey != null && numericPluginParams.any { it.key == selectedPluginParamKey } -> selectedPluginParamKey
+            numericPluginParams.isNotEmpty() -> numericPluginParams.first().key
+            else -> PLUGIN_MIX_KEY
+        }
+    }
+    val activePluginParam = remember(numericPluginParams, resolvedPluginKey) {
+        numericPluginParams.firstOrNull { it.key == resolvedPluginKey }
+    }
+
     val activeFxSpecs = remember(activeFx?.effectId) {
         activeFx?.let { EffectsCatalog.findById(it.effectId).paramSpecs() }.orEmpty()
     }
     val activeFxSpec = activeFxSpecs.firstOrNull { it.slot == selectedEffectSlot } ?: activeFxSpecs.firstOrNull()
 
     val activeProp: AnimatableProperty = when {
+        editingEffectMode && activeFx != null && activePlugin != null -> {
+            if (resolvedPluginKey == PLUGIN_MIX_KEY) {
+                activeFx.mixProp
+            } else if (activePluginParam != null) {
+                activeFx.customParamFor(activePluginParam.key, activePluginParam.defaultFloat)
+            } else {
+                activeFx.propertyFor(selectedEffectSlot)
+            }
+        }
         editingEffectMode && activeFx != null -> activeFx.propertyFor(selectedEffectSlot)
         selectedLayer != null -> selectedLayer.propertyFor(selectedProperty)
         else -> AnimatableProperty(0f)
     }
-    val minDomain = if (editingEffectMode && activeFxSpec != null) activeFxSpec.minVal else selectedProperty.minVal
-    val maxDomain = if (editingEffectMode && activeFxSpec != null) activeFxSpec.maxVal else selectedProperty.maxVal
-    val activeTitle = if (editingEffectMode && activeFx != null && activeFxSpec != null) {
-        "${activeFx.displayName} • ${activeFxSpec.label}"
-    } else {
-        selectedProperty.label
+    val minDomain = when {
+        editingEffectMode && activePlugin != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 0f
+        editingEffectMode && activePluginParam != null -> activePluginParam.min
+        editingEffectMode && activeFxSpec != null -> activeFxSpec.minVal
+        else -> selectedProperty.minVal
+    }
+    val maxDomain = when {
+        editingEffectMode && activePlugin != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 100f
+        editingEffectMode && activePluginParam != null -> activePluginParam.max
+        editingEffectMode && activeFxSpec != null -> activeFxSpec.maxVal
+        else -> selectedProperty.maxVal
+    }
+    val activeTitle = when {
+        editingEffectMode && activeFx != null && activePlugin != null && resolvedPluginKey == PLUGIN_MIX_KEY ->
+            "${activeFx.displayName} • Mix"
+        editingEffectMode && activeFx != null && activePluginParam != null ->
+            "${activeFx.displayName} • ${activePluginParam.label}"
+        editingEffectMode && activeFx != null && activeFxSpec != null ->
+            "${activeFx.displayName} • ${activeFxSpec.label}"
+        else -> selectedProperty.label
     }
 
     var expressionText by remember { mutableStateOf(activeProp.expression) }
-    LaunchedEffect(selectedLayer?.id, selectedProperty, activeFx?.id, selectedEffectSlot, editingEffectMode, activeProp.expression) {
+    LaunchedEffect(
+        selectedLayer?.id,
+        selectedProperty,
+        activeFx?.id,
+        selectedEffectSlot,
+        resolvedPluginKey,
+        editingEffectMode,
+        activeProp.expression
+    ) {
         expressionText = activeProp.expression
     }
 
@@ -127,12 +180,12 @@ fun GraphEditorScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Curve & Value Graph Editor",
+                            text = "Graph",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${selectedLayer?.name ?: "No Layer"} • $activeTitle (${activeProp.keyframes.size} ◆)",
+                            text = activeTitle,
                             style = MaterialTheme.typography.labelSmall,
                             color = AmTealBright
                         )
@@ -173,12 +226,12 @@ fun GraphEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     AmSegmentChip(
-                        label = "Layer Transform",
+                        label = "Transform",
                         selected = !editingEffectMode,
                         onClick = { editingEffectMode = false }
                     )
                     AmSegmentChip(
-                        label = "Effect Properties (${layerEffects.size})",
+                        label = "Effects",
                         selected = editingEffectMode,
                         onClick = {
                             editingEffectMode = true
@@ -220,7 +273,6 @@ fun GraphEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Effect:", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                     layerEffects.forEach { fx ->
                         AmSegmentChip(
                             label = fx.displayName,
@@ -238,15 +290,33 @@ fun GraphEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Param:", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                    activeFxSpecs.forEach { spec ->
-                        val kfs = activeFx?.propertyFor(spec.slot)?.keyframes?.size ?: 0
+                    if (activePlugin != null) {
+                        numericPluginParams.forEach { param ->
+                            val kfs = activeFx?.customParamFor(param.key, param.defaultFloat)?.keyframes?.size ?: 0
+                            AmSegmentChip(
+                                label = if (kfs > 0) "${param.label} ◆$kfs" else param.label,
+                                selected = resolvedPluginKey == param.key,
+                                compact = true,
+                                onClick = { onSelectPluginParamKey(param.key) }
+                            )
+                        }
+                        val mixKfs = activeFx?.mixProp?.keyframes?.size ?: 0
                         AmSegmentChip(
-                            label = if (kfs > 0) "${spec.label} ◆$kfs" else spec.label,
-                            selected = selectedEffectSlot == spec.slot,
+                            label = if (mixKfs > 0) "Mix ◆$mixKfs" else "Mix",
+                            selected = resolvedPluginKey == PLUGIN_MIX_KEY,
                             compact = true,
-                            onClick = { onSelectEffectSlot(spec.slot) }
+                            onClick = { onSelectPluginParamKey(PLUGIN_MIX_KEY) }
                         )
+                    } else {
+                        activeFxSpecs.forEach { spec ->
+                            val kfs = activeFx?.propertyFor(spec.slot)?.keyframes?.size ?: 0
+                            AmSegmentChip(
+                                label = if (kfs > 0) "${spec.label} ◆$kfs" else spec.label,
+                                selected = selectedEffectSlot == spec.slot,
+                                compact = true,
+                                onClick = { onSelectEffectSlot(spec.slot) }
+                            )
+                        }
                     }
                 }
             }
@@ -289,7 +359,7 @@ fun GraphEditorScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "fx Procedural Expression Engine ($activeTitle)",
+                        text = "Expression",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -299,7 +369,7 @@ fun GraphEditorScreen(
                             expressionText = it
                             onUpdateExpression(it, editingEffectMode)
                         },
-                        label = { Text("Expression (e.g. sin(time * 4) * 50)") },
+                        placeholder = { Text("sin(time * 4) * 50") },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
@@ -313,11 +383,11 @@ fun GraphEditorScreen(
                         val amp = if ((maxDomain - minDomain) <= 6f) "0.35" else "50"
                         listOf(
                             "Clear" to "",
-                            "KeyFlow Spring" to if (amp == "0.35") "spring(3, 4, 0.45)" else "spring(3, 4, 65)",
-                            "KeyFlow Pendulum" to if (amp == "0.35") "pendulum(2.2, 0.35)" else "pendulum(2.2, 35)",
-                            "Sine Wave" to "sin(time * 4) * $amp",
-                            "Oscillate / Wiggle" to "wiggle(5, $amp)",
-                            "BPM Beat Pulse" to "pulse(128) * $amp"
+                            "Spring" to if (amp == "0.35") "spring(3, 4, 0.45)" else "spring(3, 4, 65)",
+                            "Pendulum" to if (amp == "0.35") "pendulum(2.2, 0.35)" else "pendulum(2.2, 35)",
+                            "Sine" to "sin(time * 4) * $amp",
+                            "Wiggle" to "wiggle(5, $amp)",
+                            "Pulse" to "pulse(128) * $amp"
                         ).forEach { (label, expr) ->
                             AmSegmentChip(
                                 label = label,

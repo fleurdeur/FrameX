@@ -58,6 +58,7 @@ class GlSequentialVideoSession(
     @Volatile private var frameArrived = false
 
     private var lastDecodedPtsUs: Long = -1L
+    private var trackDurationUs: Long = 0L
     private var inputEos = false
     private var outputEos = false
     private val bufferInfo = MediaCodec.BufferInfo()
@@ -116,6 +117,11 @@ class GlSequentialVideoSession(
             val rawW = if (format.containsKey(MediaFormat.KEY_WIDTH)) format.getInteger(MediaFormat.KEY_WIDTH) else 1280
             val rawH = if (format.containsKey(MediaFormat.KEY_HEIGHT)) format.getInteger(MediaFormat.KEY_HEIGHT) else 720
             val rot = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger(MediaFormat.KEY_ROTATION) else 0
+            trackDurationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                runCatching { format.getLong(MediaFormat.KEY_DURATION) }.getOrDefault(0L)
+            } else {
+                0L
+            }
             if (rot == 90 || rot == 270) {
                 videoWidth = rawH.coerceAtLeast(16)
                 videoHeight = rawW.coerceAtLeast(16)
@@ -151,7 +157,13 @@ class GlSequentialVideoSession(
         val st = surfaceTexture ?: return false
         if (!isReady) return false
 
-        val targetUs = targetTimeMs.coerceAtLeast(0L) * 1000L
+        val rawTargetUs = targetTimeMs.coerceAtLeast(0L) * 1000L
+        // Clamp slightly inside container duration so reversed clips starting at sourceDurationMs always hit a real frame
+        val targetUs = if (trackDurationUs > 45_000L) {
+            rawTargetUs.coerceAtMost(trackDurationUs - 38_000L)
+        } else {
+            rawTargetUs
+        }
         // Reuse current texture immediately if already within half a 60fps frame (~9ms)
         if (lastDecodedPtsUs >= 0L && abs(targetUs - lastDecodedPtsUs) <= 9_000L) {
             return true
@@ -200,7 +212,8 @@ class GlSequentialVideoSession(
                     if (isEos) outputEos = true
 
                     val ptsUs = bufferInfo.presentationTimeUs
-                    val reachedTarget = ptsUs >= targetUs - 14_000L || outputEos
+                    val nearStreamEnd = inputEos && ext.sampleTime < 0L
+                    val reachedTarget = ptsUs >= targetUs - 18_000L || outputEos || nearStreamEnd
                     val renderToSurface = bufferInfo.size > 0 && reachedTarget
 
                     if (renderToSurface) {
@@ -284,6 +297,7 @@ object SequentialVideoDecoder {
         sortedTimestampsMs: List<Long>,
         maxEdge: Int,
         cancelled: AtomicBoolean? = null,
+        preferRgb565: Boolean = true,
         onFrameDecoded: (bucketMs: Long, bitmap: Bitmap) -> Unit
     ): Boolean {
         if (sortedTimestampsMs.isEmpty()) return true
@@ -296,6 +310,7 @@ object SequentialVideoDecoder {
             var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
             var session: GlSequentialVideoSession? = null
             var oesProgram = 0
+            var scratchArgb: Bitmap? = null
             try {
                 eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
                 if (eglDisplay == EGL14.EGL_NO_DISPLAY) return@Runnable
@@ -367,6 +382,8 @@ object SequentialVideoDecoder {
                 val matLoc = GLES20.glGetUniformLocation(oesProgram, "uTexMatrix")
                 val texLoc = GLES20.glGetUniformLocation(oesProgram, "uOesTex")
                 val readBuf = ByteBuffer.allocateDirect(dstW * dstH * 4).order(ByteOrder.nativeOrder())
+                val reusableArgb = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
+                scratchArgb = reusableArgb
 
                 var decodedCount = 0
                 for (tMs in sortedTimestampsMs) {
@@ -389,16 +406,20 @@ object SequentialVideoDecoder {
                         readBuf.position(0)
                         GLES20.glReadPixels(0, 0, dstW, dstH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, readBuf)
                         readBuf.position(0)
-                        val outBmp = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
-                        outBmp.copyPixelsFromBuffer(readBuf)
-                        onFrameDecoded(tMs, outBmp)
-                        decodedCount++
+                        reusableArgb.copyPixelsFromBuffer(readBuf)
+                        val targetCfg = if (preferRgb565) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+                        val outBmp = reusableArgb.copy(targetCfg, false) ?: reusableArgb.copy(Bitmap.Config.ARGB_8888, false)
+                        if (outBmp != null) {
+                            onFrameDecoded(tMs, outBmp)
+                            decodedCount++
+                        }
                     }
                 }
                 succeeded = decodedCount > 0
             } catch (_: Throwable) {
                 succeeded = false
             } finally {
+                runCatching { scratchArgb?.recycle() }
                 runCatching { session?.release() }
                 if (oesProgram != 0) runCatching { GLES20.glDeleteProgram(oesProgram) }
                 if (eglDisplay != EGL14.EGL_NO_DISPLAY) {

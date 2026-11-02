@@ -231,7 +231,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.Movie,
                                 title = "Video",
-                                subtitle = "MP4 / Remap",
                                 tint = ElectricBlue,
                                 onClick = {
                                     onDismiss()
@@ -242,7 +241,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.Image,
                                 title = "Image",
-                                subtitle = "PNG / JPG",
                                 tint = KeyframeAmber,
                                 onClick = {
                                     onDismiss()
@@ -253,7 +251,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.MusicNote,
                                 title = "Audio",
-                                subtitle = "MP3 / M4A",
                                 tint = AmTealBright,
                                 onClick = {
                                     onDismiss()
@@ -271,8 +268,7 @@ fun AmAddElementBottomSheet(
                         ) {
                             AmCompactMediaButton(
                                 icon = Icons.Default.MusicNote,
-                                title = "Audio File",
-                                subtitle = "MP3 / WAV",
+                                title = "Audio",
                                 tint = AmTealBright,
                                 onClick = {
                                     onDismiss()
@@ -283,7 +279,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.GraphicEq,
                                 title = "Reactor",
-                                subtitle = "FFT Sync",
                                 tint = AudioCyan,
                                 onClick = {
                                     onDismiss()
@@ -294,7 +289,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.BookmarkAdd,
                                 title = "Bookmark",
-                                subtitle = "Add Flag",
                                 tint = NeonPink,
                                 onClick = {
                                     onAddBeatBookmark()
@@ -313,7 +307,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.Videocam,
                                 title = "Camera",
-                                subtitle = "2D/3D Lens",
                                 tint = KeyframeAmber,
                                 onClick = {
                                     onAddLayerType(LayerType.CAMERA)
@@ -324,7 +317,6 @@ fun AmAddElementBottomSheet(
                             AmCompactMediaButton(
                                 icon = Icons.Default.ViewInAr,
                                 title = "3D Mesh",
-                                subtitle = "Cube / Torus",
                                 tint = AudioCyan,
                                 onClick = {
                                     onAddLayerType(LayerType.MODEL_3D)
@@ -334,8 +326,7 @@ fun AmAddElementBottomSheet(
                             )
                             AmCompactMediaButton(
                                 icon = Icons.Default.ViewInAr,
-                                title = "3D Stage",
-                                subtitle = "Orbit & .OBJ",
+                                title = "3D",
                                 tint = AmTeal,
                                 onClick = {
                                     onDismiss()
@@ -353,8 +344,7 @@ fun AmAddElementBottomSheet(
                         ) {
                             AmCompactMediaButton(
                                 icon = Icons.Default.AccountTree,
-                                title = "Null Rig",
-                                subtitle = "Parent Helper",
+                                title = "Null",
                                 tint = RigGreen,
                                 onClick = {
                                     onAddLayerType(LayerType.NULL_OBJECT)
@@ -364,8 +354,7 @@ fun AmAddElementBottomSheet(
                             )
                             AmCompactMediaButton(
                                 icon = Icons.Default.ContentPaste,
-                                title = if (hasCopiedLayer) "Paste Layer" else "Clipboard",
-                                subtitle = if (hasCopiedLayer) "Insert Copy" else "Empty",
+                                title = "Paste",
                                 tint = if (hasCopiedLayer) AmTealBright else TextMuted,
                                 onClick = {
                                     if (hasCopiedLayer) {
@@ -553,14 +542,14 @@ fun AmShapePreviewGlyph(
 private fun AmCompactMediaButton(
     icon: ImageVector,
     title: String,
-    subtitle: String,
     tint: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    subtitle: String? = null
 ) {
     Row(
         modifier = modifier
-            .height(52.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(PanelDark)
             .border(1.dp, OutlineSubtle, RoundedCornerShape(10.dp))
@@ -587,13 +576,15 @@ private fun AmCompactMediaButton(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -605,6 +596,7 @@ private fun AmCompactMediaButton(
 fun AmProjectSettingsDialog(
     project: Project,
     onSaveSettings: (name: String, width: Int, height: Int, fps: Int, durationSec: Int, backgroundColor: String) -> Unit,
+    onRequestEyedropperForBg: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     var name by remember(project.name) { mutableStateOf(project.name) }
@@ -613,6 +605,9 @@ fun AmProjectSettingsDialog(
     var fps by remember(project.fps) { mutableIntStateOf(project.fps) }
     var durationSecText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000L).coerceAtLeast(1L).toString()) }
     var bgColor by remember(project.backgroundColor) { mutableStateOf(project.backgroundColor) }
+    var showCustomBgPicker by remember(project.backgroundColor) {
+        mutableStateOf(project.backgroundColor.startsWith("#"))
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -638,7 +633,7 @@ fun AmProjectSettingsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Project Settings",
+                        text = "Settings",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -650,13 +645,13 @@ fun AmProjectSettingsDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Project Name") },
+                    label = { Text("Name") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Text("Aspect Ratio Presets", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                Text("Ratio", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -679,7 +674,7 @@ fun AmProjectSettingsDialog(
                     OutlinedTextField(
                         value = widthText,
                         onValueChange = { widthText = it.filter(Char::isDigit) },
-                        label = { Text("Width (px)") },
+                        label = { Text("Width") },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
@@ -687,14 +682,14 @@ fun AmProjectSettingsDialog(
                     OutlinedTextField(
                         value = heightText,
                         onValueChange = { heightText = it.filter(Char::isDigit) },
-                        label = { Text("Height (px)") },
+                        label = { Text("Height") },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                Text("Frame Rate (FPS)", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                Text("FPS", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -703,7 +698,7 @@ fun AmProjectSettingsDialog(
                 ) {
                     listOf(24, 25, 30, 48, 60, 120).forEach { rate ->
                         AmSegmentChip(
-                            label = "${rate}fps",
+                            label = "$rate",
                             selected = fps == rate,
                             onClick = { fps = rate }
                         )
@@ -713,30 +708,66 @@ fun AmProjectSettingsDialog(
                 OutlinedTextField(
                     value = durationSecText,
                     onValueChange = { durationSecText = it.filter(Char::isDigit) },
-                    label = { Text("Composition Duration (seconds)") },
+                    label = { Text("Duration (s)") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Text("Composition Background", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                Text("Background", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("Black", "Dark Gray", "White", "Transparent").forEach { opt ->
+                    listOf("Black", "Dark Gray", "Light Gray", "White", "Transparent").forEach { opt ->
                         AmSegmentChip(
                             label = opt,
-                            selected = bgColor == opt,
-                            onClick = { bgColor = opt }
+                            selected = !showCustomBgPicker && bgColor == opt,
+                            onClick = {
+                                showCustomBgPicker = false
+                                bgColor = opt
+                            }
                         )
                     }
+                    AmSegmentChip(
+                        label = if (bgColor.startsWith("#")) bgColor else "Custom",
+                        selected = showCustomBgPicker || bgColor.startsWith("#"),
+                        onClick = {
+                            showCustomBgPicker = true
+                            if (!bgColor.startsWith("#")) {
+                                bgColor = "#101622"
+                            }
+                        }
+                    )
+                }
+
+                if (showCustomBgPicker || bgColor.startsWith("#")) {
+                    com.example.ui.components.AmCustomColorAndGradientPicker(
+                        primaryHex = if (bgColor.startsWith("#")) bgColor else "#101622",
+                        onPrimaryHexChange = { hex -> bgColor = hex },
+                        onRequestEyedropper = {
+                            onSaveSettings(
+                                name,
+                                widthText.toIntOrNull() ?: project.width,
+                                heightText.toIntOrNull() ?: project.height,
+                                fps,
+                                durationSecText.toIntOrNull() ?: 10,
+                                bgColor
+                            )
+                            onDismiss()
+                            onRequestEyedropperForBg?.invoke()
+                        },
+                        primaryEyedropperSlot = com.example.ui.components.EyedropperColorSlot.PROJECT_BG,
+                        supportsGradient = false,
+                        compact = true,
+                        testTagPrefix = "project_bg_color_picker"
+                    )
                 }
 
                 AmPrimaryCtaButton(
-                    text = "APPLY SETTINGS",
+                    text = "Apply",
                     onClick = {
                         onSaveSettings(
                             name,

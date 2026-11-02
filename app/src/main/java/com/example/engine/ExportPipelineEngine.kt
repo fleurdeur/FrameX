@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -40,6 +41,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.cos
+import kotlin.math.sin
 
 data class ExportOutcome(
     val outputPath: String,
@@ -194,10 +197,57 @@ object ExportPipelineEngine {
         val paintStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         val paintText = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
 
+        val nonlinearExportLayers = project.layers.filter {
+            it.visible && it.type == LayerType.VIDEO && it.mediaUri.isNotBlank() &&
+                (it.reversed || it.timeRemapEnabled)
+        }
+        val exportWarmEdge = maxOf(encW, encH).coerceIn(320, 720)
+
         try {
             for (frameIdx in 0 until totalFrames) {
                 val timeMs = (frameIdx * 1000L) / fps
                 val audio = audioEngine.sampleTimelineSpectrum(timeMs, project.bpm, project.beatMarkers)
+
+                // Batch-decode reversed / time-remapped video frames in bounded 90-frame hardware GOP windows
+                // so export never stalls on backward MediaMetadataRetriever seeks!
+                if (nonlinearExportLayers.isNotEmpty()) {
+                    for (nlLayer in nonlinearExportLayers) {
+                        if (timeMs !in nlLayer.startTimeMs..nlLayer.endTimeMs) continue
+                        val curSrc = AnimationEvaluator.evaluateSourceMediaTimeMs(nlLayer, timeMs, audio)
+                        val clampedSrc = if (nlLayer.sourceDurationMs > 50L) {
+                            curSrc.coerceIn(0L, nlLayer.sourceDurationMs - 36L)
+                        } else curSrc.coerceAtLeast(0L)
+                        val curBucket = MediaEngine.quantizeVideoBucketMs(clampedSrc)
+                        if (!MediaEngine.hasCachedVideoBucket(nlLayer.mediaUri, curBucket)) {
+                            val windowEnd = minOf(totalFrames, frameIdx + 90)
+                            val needed = (frameIdx until windowEnd)
+                                .map { fIdx -> (fIdx * 1000L) / fps }
+                                .filter { it in nlLayer.startTimeMs..nlLayer.endTimeMs }
+                                .map { tMs ->
+                                    val a = audioEngine.sampleTimelineSpectrum(tMs, project.bpm, project.beatMarkers)
+                                    val rawS = AnimationEvaluator.evaluateSourceMediaTimeMs(nlLayer, tMs, a)
+                                    val safeS = if (nlLayer.sourceDurationMs > 50L) {
+                                        rawS.coerceIn(0L, nlLayer.sourceDurationMs - 36L)
+                                    } else rawS.coerceAtLeast(0L)
+                                    MediaEngine.quantizeVideoBucketMs(safeS)
+                                }
+                                .distinct()
+                                .filter { !MediaEngine.hasCachedVideoBucket(nlLayer.mediaUri, it) }
+                                .sorted()
+                            if (needed.isNotEmpty()) {
+                                SequentialVideoDecoder.decodeSortedTimestampsHardware(
+                                    context = context.applicationContext,
+                                    uriStr = nlLayer.mediaUri,
+                                    sortedTimestampsMs = needed,
+                                    maxEdge = exportWarmEdge,
+                                    preferRgb565 = true
+                                ) { vBucket, bmp ->
+                                    MediaEngine.putPreDecodedVideoFrame(nlLayer.mediaUri, vBucket, bmp)
+                                }
+                            }
+                        }
+                    }
+                }
 
                 val canvas = inputSurface.lockCanvas(null)
                 try {
@@ -245,9 +295,13 @@ object ExportPipelineEngine {
         paintText: Paint
     ) {
         paintFill.shader = null
-        paintFill.color = when (project.backgroundColor) {
-            "White" -> Color.WHITE
-            "Dark Gray" -> Color.rgb(28, 32, 40)
+        paintFill.color = when {
+            project.backgroundColor == "White" -> Color.WHITE
+            project.backgroundColor == "Dark Gray" -> Color.rgb(28, 32, 40)
+            project.backgroundColor == "Light Gray" -> Color.rgb(209, 214, 222)
+            project.backgroundColor.startsWith("#") -> {
+                runCatching { Color.parseColor(project.backgroundColor) }.getOrDefault(Color.BLACK)
+            }
             else -> Color.BLACK
         }
         canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paintFill)
@@ -276,6 +330,8 @@ object ExportPipelineEngine {
 
             val baseCol = runCatching { Color.parseColor(layer.colorHex) }.getOrDefault(Color.rgb(0, 210, 168))
             val col = Color.argb(alpha, Color.red(baseCol), Color.green(baseCol), Color.blue(baseCol))
+            val rawEndCol = runCatching { Color.parseColor(layer.gradientEndColorHex) }.getOrDefault(Color.rgb(0, 148, 255))
+            val endCol = Color.argb(alpha, Color.red(rawEndCol), Color.green(rawEndCol), Color.blue(rawEndCol))
 
             when (layer.type) {
                 LayerType.VIDEO, LayerType.IMAGE -> {
@@ -286,26 +342,63 @@ object ExportPipelineEngine {
                     if (bmp != null && !bmp.isRecycled) {
                         val bmpAspect = bmp.width.toFloat().coerceAtLeast(1f) / bmp.height.toFloat().coerceAtLeast(1f)
                         val compAspect = w.toFloat() / h.toFloat().coerceAtLeast(1f)
-                        val hw = if (bmpAspect >= compAspect) w * 0.42f else (h * 0.42f * bmpAspect)
-                        val hh = if (bmpAspect >= compAspect) (w * 0.42f / bmpAspect) else h * 0.42f
+                        val hw = if (bmpAspect >= compAspect) w * 0.50f else (h * 0.50f * bmpAspect)
+                        val hh = if (bmpAspect >= compAspect) (w * 0.50f / bmpAspect) else h * 0.50f
+                        paintFill.shader = null
                         paintFill.alpha = alpha
                         canvas.drawBitmap(bmp, null, RectF(-hw, -hh, hw, hh), paintFill)
                         paintFill.alpha = 255
-                    } else {
+                    } else if (layer.mediaUri.isBlank()) {
                         val r = RectF(-w * 0.3f, -h * 0.22f, w * 0.3f, h * 0.22f)
+                        paintFill.shader = null
                         paintFill.color = col
                         canvas.drawRoundRect(r, 18f, 18f, paintFill)
                     }
                 }
                 LayerType.TEXT -> {
+                    val txt = layer.textContent.ifBlank { layer.name }
                     paintText.color = col
                     paintText.textSize = (minOf(w, h) * 0.085f).coerceAtLeast(20f)
-                    paintText.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-                    canvas.drawText(layer.textContent.ifBlank { layer.name }, 0f, paintText.textSize * 0.35f, paintText)
+                    paintText.typeface = CustomFontRegistry.resolveTypeface(context, layer.fontFamilyName)
+                    val span = (paintText.measureText(txt) * 0.5f).coerceAtLeast(24f)
+                    paintText.shader = when (layer.fillMode) {
+                        "LINEAR_GRADIENT" -> {
+                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
+                            LinearGradient(
+                                -(cos(rad) * span).toFloat(),
+                                -(sin(rad) * span).toFloat(),
+                                (cos(rad) * span).toFloat(),
+                                (sin(rad) * span).toFloat(),
+                                col,
+                                endCol,
+                                Shader.TileMode.CLAMP
+                            )
+                        }
+                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, span, col, endCol, Shader.TileMode.CLAMP)
+                        else -> null
+                    }
+                    canvas.drawText(txt, 0f, paintText.textSize * 0.35f, paintText)
+                    paintText.shader = null
                 }
                 else -> {
                     val half = minOf(w, h) * 0.22f
                     paintFill.color = col
+                    paintFill.shader = when (layer.fillMode) {
+                        "LINEAR_GRADIENT" -> {
+                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
+                            LinearGradient(
+                                -(cos(rad) * half).toFloat(),
+                                -(sin(rad) * half).toFloat(),
+                                (cos(rad) * half).toFloat(),
+                                (sin(rad) * half).toFloat(),
+                                col,
+                                endCol,
+                                Shader.TileMode.CLAMP
+                            )
+                        }
+                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, half.coerceAtLeast(8f), col, endCol, Shader.TileMode.CLAMP)
+                        else -> null
+                    }
                     when (layer.shapeKind) {
                         "Circle" -> canvas.drawCircle(0f, 0f, half, paintFill)
                         "Rectangle" -> canvas.drawRect(RectF(-half, -half * 0.75f, half, half * 0.75f), paintFill)
@@ -314,6 +407,7 @@ object ExportPipelineEngine {
                         "Hexagon" -> canvas.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(6, half, null), paintFill)
                         else -> canvas.drawRoundRect(RectF(-half, -half * 0.75f, half, half * 0.75f), 24f, 24f, paintFill)
                     }
+                    paintFill.shader = null
                 }
             }
             canvas.restore()

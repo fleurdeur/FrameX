@@ -23,7 +23,7 @@ enum class PreviewQuality(
 ) {
     FULL(
         title = "Full",
-        badge = "1/1",
+        badge = "Full",
         scaleFactor = 1.0f,
         maxGlDimension = 1080,
         maxVideoEdge = 960,
@@ -46,7 +46,7 @@ enum class PreviewQuality(
         shaderDetailLevel = 1
     ),
     EIGHTH(
-        title = "Low (Draft)",
+        title = "Low",
         badge = "1/8",
         scaleFactor = 0.125f,
         maxGlDimension = 200,
@@ -60,10 +60,10 @@ enum class BitrateProfile(
     val targetMbps: Int,
     val bppFactor: Float
 ) {
-    ECONOMY_8M("Economy (8 Mbps)", 8, 0.08f),
-    STANDARD_16M("Standard (16 Mbps)", 16, 0.14f),
-    HIGH_32M("High Quality (32 Mbps)", 32, 0.24f),
-    MASTER_50M("Studio Master (50 Mbps)", 50, 0.36f)
+    ECONOMY_8M("8 Mbps", 8, 0.08f),
+    STANDARD_16M("16 Mbps", 16, 0.14f),
+    HIGH_32M("32 Mbps", 32, 0.24f),
+    MASTER_50M("50 Mbps", 50, 0.36f)
 }
 
 data class HardwareCodecCapabilities(

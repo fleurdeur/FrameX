@@ -283,23 +283,16 @@ fun AmMoveTransformPanel(
                             strokeWidth = 1.2f
                         )
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = if (isPivotMode) "Swipe to offset Pivot" else "Swipe here to move",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                        Text(
-                            text = if (isPivotMode) {
-                                "${evalPivotX.toInt()}, ${evalPivotY.toInt()} px"
-                            } else {
-                                "${evalX.toInt()}, ${evalY.toInt()} px"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AmTealBright,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Text(
+                        text = if (isPivotMode) {
+                            "${evalPivotX.toInt()}, ${evalPivotY.toInt()}"
+                        } else {
+                            "${evalX.toInt()}, ${evalY.toInt()}"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AmTealBright,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
@@ -320,7 +313,7 @@ fun AmMoveTransformPanel(
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("KeyFlow:", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                Text("Expr", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                 listOf(
                     "Off" to "",
                     "Spring" to "spring(3, 4, 55)",
@@ -423,7 +416,7 @@ fun AmInlineEasingPanel(
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("${selectedProperty.label} Easing", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
+                Text(selectedProperty.label, style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
             }
 
             Row(
@@ -438,7 +431,7 @@ fun AmInlineEasingPanel(
             ) {
                 Icon(Icons.Default.Timeline, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Full Graph", style = MaterialTheme.typography.labelSmall, color = AmTealBright, fontWeight = FontWeight.Bold)
+                Text("Graph", style = MaterialTheme.typography.labelSmall, color = AmTealBright, fontWeight = FontWeight.Bold)
             }
         }
 

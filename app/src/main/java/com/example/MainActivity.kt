@@ -1,11 +1,14 @@
 package com.example
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -18,6 +21,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.model.LayerType
 import com.example.data.repository.ProjectRepository
+import com.example.engine.PluginPackManager
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.authStateFlow
 import com.example.ui.auth.signOutUser
@@ -28,6 +32,7 @@ import com.example.ui.screens.EffectsBrowserScreen
 import com.example.ui.screens.ExportPipelineScreen
 import com.example.ui.screens.GraphEditorScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.PluginManagerScreen
 import com.example.ui.screens.Workspace3DScreen
 import com.example.ui.theme.FramePollutionTheme
 import com.example.viewmodel.StudioDestination
@@ -35,21 +40,51 @@ import com.example.viewmodel.StudioViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
+
+    private val _incomingPluginPackUri = MutableStateFlow<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PluginPackManager.ensureInitialized(applicationContext)
+        handleIncomingPluginIntent(intent)
         enableEdgeToEdge()
         setContent {
             FramePollutionTheme {
-                FramePollutionAppRoot()
+                FramePollutionAppRoot(
+                    incomingPluginPackFlow = _incomingPluginPackUri.asStateFlow(),
+                    onConsumeIncomingPluginPack = { _incomingPluginPackUri.value = null }
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingPluginIntent(intent)
+    }
+
+    private fun handleIncomingPluginIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val dataUri = intent.data ?: return
+        // Pre-unpack into disk storage immediately so even unauthenticated launches persist the pack
+        runCatching {
+            PluginPackManager.importPackFromUri(applicationContext, dataUri)
+        }
+        _incomingPluginPackUri.value = dataUri
     }
 }
 
 @Composable
-fun FramePollutionAppRoot() {
+fun FramePollutionAppRoot(
+    incomingPluginPackFlow: StateFlow<Uri?> = MutableStateFlow<Uri?>(null).asStateFlow(),
+    onConsumeIncomingPluginPack: () -> Unit = {}
+) {
     val auth = Firebase.auth
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     val user = currentUser
@@ -57,12 +92,20 @@ fun FramePollutionAppRoot() {
     if (user == null) {
         AuthScreen()
     } else {
-        AuthenticatedStudioShell(currentUserId = user.uid)
+        AuthenticatedStudioShell(
+            currentUserId = user.uid,
+            incomingPluginPackFlow = incomingPluginPackFlow,
+            onConsumeIncomingPluginPack = onConsumeIncomingPluginPack
+        )
     }
 }
 
 @Composable
-private fun AuthenticatedStudioShell(currentUserId: String) {
+private fun AuthenticatedStudioShell(
+    currentUserId: String,
+    incomingPluginPackFlow: StateFlow<Uri?>,
+    onConsumeIncomingPluginPack: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
@@ -88,6 +131,22 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
     val cloudPresets by studioViewModel.cloudPresets.collectAsStateWithLifecycle()
     val spectrum by studioViewModel.liveSpectrum.collectAsStateWithLifecycle()
     val isLiveMic by studioViewModel.isLiveMicActive.collectAsStateWithLifecycle()
+    val installedPluginSuites by studioViewModel.installedPluginSuites.collectAsStateWithLifecycle()
+    val pluginShaderDiagnostics by studioViewModel.pluginShaderDiagnostics.collectAsStateWithLifecycle()
+    val incomingPluginUri by incomingPluginPackFlow.collectAsStateWithLifecycle()
+
+    LaunchedEffect(incomingPluginUri) {
+        val uri = incomingPluginUri ?: return@LaunchedEffect
+        studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = true)
+        onConsumeIncomingPluginPack()
+    }
+
+    val pluginSuitesRevision = remember(installedPluginSuites) {
+        installedPluginSuites.hashCode()
+    }
+    val totalPluginEffectsCount = remember(installedPluginSuites) {
+        installedPluginSuites.sumOf { it.effects.size }
+    }
 
     val waveformBins = remember(
         wsState.activeProject.layers,
@@ -126,18 +185,57 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                     )
                 },
                 defaultPreferences = preferences,
-                onOpenSettings = { studioViewModel.navigateTo(StudioDestination.SETTINGS) }
+                onOpenSettings = { studioViewModel.navigateTo(StudioDestination.SETTINGS) },
+                onOpenPlugins = { studioViewModel.navigateTo(StudioDestination.PLUGIN_MANAGER) }
             )
         }
         StudioDestination.SETTINGS -> {
             AppSettingsScreen(
                 preferences = preferences,
                 codecCapabilities = studioViewModel.codecCapabilities,
+                installedSuitesCount = installedPluginSuites.size,
+                installedPluginEffectsCount = totalPluginEffectsCount,
+                onOpenPluginManager = { studioViewModel.navigateTo(StudioDestination.PLUGIN_MANAGER) },
+                onImportPluginUri = { uri ->
+                    studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = true)
+                },
                 onUpdatePreferences = studioViewModel::updateStudioPreferences,
                 onApplyQualityNow = studioViewModel::setPreviewQuality,
                 onClearCaches = studioViewModel::clearAllPlaybackAndMediaCaches,
                 onResetDefaults = studioViewModel::resetStudioPreferences,
                 onBack = { studioViewModel.navigateTo(StudioDestination.HOME) }
+            )
+        }
+        StudioDestination.PLUGIN_MANAGER -> {
+            PluginManagerScreen(
+                suites = installedPluginSuites,
+                shaderDiagnostics = pluginShaderDiagnostics,
+                onImportPackUri = { uri ->
+                    studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = false)
+                },
+                onExportSuiteUri = { suiteId, uri ->
+                    studioViewModel.exportPluginSuiteToUri(context, suiteId, uri)
+                },
+                onToggleSuiteEnabled = studioViewModel::togglePluginSuiteEnabled,
+                onRemoveSuite = studioViewModel::removePluginSuite,
+                onRestoreStarterSuite = studioViewModel::restoreStarterPluginSuite,
+                onCreateCustomPlugin = { effectName, suiteName, author, category, expandBounds, usesMotionBlur, glsl, params, ext ->
+                    studioViewModel.createCustomPluginSuite(
+                        effectName = effectName,
+                        suiteName = suiteName,
+                        author = author,
+                        category = category,
+                        expandBounds = expandBounds,
+                        usesNativeMotionBlur = usesMotionBlur,
+                        glslSource = glsl,
+                        parameters = params,
+                        extension = ext
+                    )
+                },
+                onApplyPluginEffect = { definition ->
+                    studioViewModel.addEffectToSelectedLayer(definition)
+                },
+                onBack = studioViewModel::navigateBackToParent
             )
         }
         StudioDestination.EDITOR -> {
@@ -176,7 +274,10 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 onUpdateBezierHandles = studioViewModel::updateBezierHandlesForActiveSegment,
                 onSelectEffectForInspection = studioViewModel::selectEffectForInspection,
                 onSelectEffectSlot = studioViewModel::selectEffectParamSlot,
+                onSelectPluginParamKey = studioViewModel::selectPluginParamKey,
                 onUpdateEffectSlotValue = studioViewModel::updateSelectedEffectParamValue,
+                onUpdateCustomPluginParamValue = studioViewModel::updateCustomPluginParamValue,
+                onUpdateCustomPluginColor = studioViewModel::updateCustomPluginColor,
                 onToggleEffectKeyframe = studioViewModel::toggleEffectKeyframeAtPlayhead,
                 onJumpEffectKeyframe = studioViewModel::jumpToAdjacentEffectKeyframe,
                 onUpdateEffectBezierHandles = studioViewModel::updateEffectBezierHandles,
@@ -229,6 +330,13 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 onSetLayerParent = studioViewModel::setLayerParent,
                 onUpdateTextLayer = studioViewModel::updateLayerTextAndFont,
                 onUpdateLayerColor = studioViewModel::updateLayerColor,
+                onUpdateLayerGradientFill = studioViewModel::updateLayerGradientFill,
+                onUpdateAudioEffects = studioViewModel::updateLayerAudioEffects,
+                onImportCustomFont = { uri -> studioViewModel.importCustomFont(context, uri) },
+                onMoveLayerTimeRange = studioViewModel::moveLayerTimeRange,
+                onAutoDetectBassBeats = { sens -> studioViewModel.autoDetectNotableBassBeats(context, sens) },
+                onClearAllBeatMarkers = studioViewModel::clearAllBeatMarkers,
+                onBindAudioToProperty = studioViewModel::bindAudioReactorToSelectedProperty,
                 onUpdateShapeKind = studioViewModel::updateLayerShapeKind,
                 onUpdateBlendMode = studioViewModel::updateLayerBlendMode,
                 onUpdateBorderShadow = studioViewModel::updateLayerBorderAndShadow,
@@ -256,11 +364,20 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
         StudioDestination.EFFECTS_BROWSER -> {
             EffectsBrowserScreen(
                 selectedLayer = selectedLayer,
+                playheadMs = wsState.playheadMs,
+                audioSpectrum = spectrum,
                 searchQuery = wsState.effectSearchQuery,
                 selectedCategory = wsState.selectedEffectCategory,
+                selectedPluginSubcategory = wsState.selectedPluginCategoryFilter,
+                pluginSuitesRevision = pluginSuitesRevision,
                 cloudPresetsState = cloudPresets,
                 onSearchChange = studioViewModel::setEffectSearchQuery,
                 onCategoryChange = studioViewModel::setSelectedEffectCategory,
+                onPluginSubcategoryChange = studioViewModel::setSelectedPluginCategoryFilter,
+                onOpenPluginManager = { studioViewModel.navigateTo(StudioDestination.PLUGIN_MANAGER) },
+                onImportPluginPackUri = { uri ->
+                    studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = false)
+                },
                 onAddEffect = studioViewModel::addEffectToSelectedLayer,
                 onUpdateEffectNode = { updated ->
                     if (selectedLayer != null) {
@@ -284,12 +401,14 @@ private fun AuthenticatedStudioShell(currentUserId: String) {
                 selectedProperty = wsState.selectedProperty,
                 selectedEffectId = wsState.selectedEffectId,
                 selectedEffectSlot = wsState.selectedEffectSlot,
+                selectedPluginParamKey = wsState.selectedPluginParamKey,
                 initialTargetsEffect = wsState.graphTargetsEffect,
                 hasCopiedCurve = wsState.hasCopiedCurve,
                 playheadMs = wsState.playheadMs,
                 onSelectProperty = studioViewModel::selectProperty,
                 onSelectEffect = studioViewModel::selectEffectForInspection,
                 onSelectEffectSlot = studioViewModel::selectEffectParamSlot,
+                onSelectPluginParamKey = studioViewModel::selectPluginParamKey,
                 onToggleKeyframe = { isEffect ->
                     if (isEffect) studioViewModel.toggleEffectKeyframeAtPlayhead()
                     else studioViewModel.toggleKeyframeAtPlayhead()

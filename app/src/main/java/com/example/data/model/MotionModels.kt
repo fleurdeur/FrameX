@@ -109,7 +109,9 @@ data class EffectNode(
     val angleProp: AnimatableProperty = AnimatableProperty(angleParam),
     val mixProp: AnimatableProperty = AnimatableProperty(mixParam),
     val audioBoundBand: AudioBand = AudioBand.NONE,
-    val audioSensitivity: Float = 1.0f
+    val audioSensitivity: Float = 1.0f,
+    val customParams: Map<String, AnimatableProperty> = emptyMap(),
+    val customColors: Map<String, String> = emptyMap()
 ) {
     fun propertyFor(slot: EffectParamSlot): AnimatableProperty = when (slot) {
         EffectParamSlot.PRIMARY -> primaryProp
@@ -127,8 +129,22 @@ data class EffectNode(
         EffectParamSlot.MIX -> copy(mixParam = updated.baseValue, mixProp = updated)
     }
 
-    fun allKeyframeTimes(): List<Long> = EffectParamSlot.entries
-        .flatMap { slot -> propertyFor(slot).keyframes.map { it.timeMs } }
+    fun customParamFor(key: String, defaultVal: Float = 0f): AnimatableProperty =
+        customParams[key] ?: AnimatableProperty(defaultVal)
+
+    fun updateCustomParam(key: String, updated: AnimatableProperty): EffectNode =
+        copy(customParams = customParams + (key to updated))
+
+    fun customColorFor(key: String, defaultHex: String = "#FFFFFF"): String =
+        customColors[key] ?: defaultHex
+
+    fun updateCustomColor(key: String, hex: String): EffectNode =
+        copy(customColors = customColors + (key to hex), tintColorHex = hex)
+
+    fun allKeyframeTimes(): List<Long> = (
+        EffectParamSlot.entries.flatMap { slot -> propertyFor(slot).keyframes.map { it.timeMs } } +
+            customParams.values.flatMap { prop -> prop.keyframes.map { it.timeMs } }
+        )
         .distinct()
         .sorted()
 }
@@ -267,7 +283,8 @@ data class Layer(
                     secondaryProp = shiftProp(fx.secondaryProp),
                     frequencyProp = shiftProp(fx.frequencyProp),
                     angleProp = shiftProp(fx.angleProp),
-                    mixProp = shiftProp(fx.mixProp)
+                    mixProp = shiftProp(fx.mixProp),
+                    customParams = fx.customParams.mapValues { (_, p) -> shiftProp(p) }
                 )
             }
         )
@@ -529,6 +546,16 @@ object ProjectPayloadSerializer {
                     put("mixProp", encodeProp(fx.mixProp))
                     put("audioBoundBand", fx.audioBoundBand.name)
                     put("audioSensitivity", fx.audioSensitivity.toDouble())
+                    if (fx.customParams.isNotEmpty()) {
+                        val cpObj = JSONObject()
+                        fx.customParams.forEach { (k, prop) -> cpObj.put(k, encodeProp(prop)) }
+                        put("customParams", cpObj)
+                    }
+                    if (fx.customColors.isNotEmpty()) {
+                        val ccObj = JSONObject()
+                        fx.customColors.forEach { (k, hex) -> ccObj.put(k, hex) }
+                        put("customColors", ccObj)
+                    }
                 }
             )
         }
@@ -550,6 +577,22 @@ object ProjectPayloadSerializer {
                 val p3 = decodeProp(o.optJSONObject("frequencyProp"), defFreq)
                 val p4 = decodeProp(o.optJSONObject("angleProp"), defAng)
                 val p5 = decodeProp(o.optJSONObject("mixProp"), defMix)
+                val customParamsMap = LinkedHashMap<String, AnimatableProperty>()
+                o.optJSONObject("customParams")?.let { cpObj ->
+                    val keys = cpObj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        customParamsMap[k] = decodeProp(cpObj.optJSONObject(k), 0f)
+                    }
+                }
+                val customColorsMap = LinkedHashMap<String, String>()
+                o.optJSONObject("customColors")?.let { ccObj ->
+                    val keys = ccObj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        customColorsMap[k] = ccObj.optString(k, "#FFFFFF")
+                    }
+                }
                 add(
                     EffectNode(
                         id = o.optString("id", UUID.randomUUID().toString()),
@@ -569,7 +612,9 @@ object ProjectPayloadSerializer {
                         angleProp = p4,
                         mixProp = p5,
                         audioBoundBand = runCatching { AudioBand.valueOf(o.optString("audioBoundBand", "NONE")) }.getOrDefault(AudioBand.NONE),
-                        audioSensitivity = o.optDouble("audioSensitivity", 1.0).toFloat()
+                        audioSensitivity = o.optDouble("audioSensitivity", 1.0).toFloat(),
+                        customParams = customParamsMap,
+                        customColors = customColorsMap
                     )
                 )
             }

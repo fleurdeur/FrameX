@@ -304,24 +304,7 @@ fun AuthScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(AmTeal.copy(alpha = 0.16f))
-                            .border(1.dp, AmTeal.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 10.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "PRO MOTION STUDIO • 130+ GPU FX",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = AmTealBright
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
                         text = stringResource(id = R.string.app_name),
@@ -436,15 +419,6 @@ fun AuthScreen(
                             )
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Text(
-                        text = "Cloud projects, custom shader presets, and multi-track keyframe rigs sync privately to your account.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center
-                    )
                 }
             }
         }

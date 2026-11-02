@@ -89,6 +89,7 @@ object MediaEngine {
     }
 
     private val cachedTimestampsByUri = ConcurrentHashMap<String, MutableSet<Long>>()
+    private val lastGoodFrameByUri = ConcurrentHashMap<String, Bitmap>()
     private val pendingDecodeTimeMs = ConcurrentHashMap<String, AtomicLong>()
     private val workerRunningForUri = ConcurrentHashMap<String, AtomicBoolean>()
     private val hwWarmRunningForUri = ConcurrentHashMap<String, AtomicBoolean>()
@@ -151,6 +152,7 @@ object MediaEngine {
             bitmapCache.evictAll()
         }
         cachedTimestampsByUri.clear()
+        lastGoodFrameByUri.clear()
         pendingDecodeTimeMs.clear()
         releaseRetrieverPool()
     }
@@ -218,6 +220,7 @@ object MediaEngine {
                 val bmp = decodeImageInternal(appCtx, finalUriStr)
                 if (bmp != null) {
                     putCachedBitmap("img|$finalUriStr", bmp)
+                    lastGoodFrameByUri[finalUriStr] = bmp
                 }
                 ImportedMediaInfo(
                     localUri = finalUriStr,
@@ -292,33 +295,66 @@ object MediaEngine {
     }
 
     /**
-     * Warms full frame buckets in hardware when a user enables Reverse Video or Time Remapping on a clip.
+     * Warms full 40ms frame buckets in hardware when a user enables Reverse Video or Time Remapping on a clip.
+     * Reversed clips warm from the end of the source clip backwards in 1.6s GOP windows (each decoded forward
+     * in hardware) so reversed playback starts immediately with zero stutter or LruCache self-eviction.
      */
-    fun warmNonlinearVideoClipAsync(context: Context, layer: Layer) {
+    fun warmNonlinearVideoClipAsync(
+        context: Context,
+        layer: Layer,
+        focusSourceMs: Long = -1L,
+        onFrameReady: (() -> Unit)? = null
+    ) {
         if (layer.type != LayerType.VIDEO || layer.mediaUri.isBlank()) return
         val uriStr = layer.mediaUri
         val guard = hwWarmRunningForUri.getOrPut("nl|$uriStr") { AtomicBoolean(false) }
         if (!guard.compareAndSet(false, true)) return
         val appCtx = context.applicationContext
-        val dur = layer.sourceDurationMs.coerceIn(300L, 15_000L)
+        val clipSpanMs = (layer.endTimeMs - layer.startTimeMs).coerceAtLeast(300L)
+        val rawDur = if (layer.sourceDurationMs > 0L) layer.sourceDurationMs else (layer.sourceOffsetMs + clipSpanMs)
+        val dur = rawDur.coerceIn(300L, 60_000L)
+        val safeMaxMs = (dur - BUCKET_MS).coerceAtLeast(0L)
+        val winStartMs = if (focusSourceMs >= 0L) {
+            (focusSourceMs - 2_800L).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val winEndMs = if (focusSourceMs >= 0L) {
+            (focusSourceMs + 2_800L).coerceAtMost(safeMaxMs)
+        } else {
+            safeMaxMs.coerceAtMost(10_000L)
+        }
+
         engineScope.launch {
             try {
                 val timestamps = ArrayList<Long>()
-                var t = 0L
-                val step = BUCKET_MS * 2L
-                while (t <= dur && timestamps.size < 180) {
-                    val b = quantizeVideoBucketMs(t)
-                    if (!hasCachedVideoBucket(uriStr, b)) timestamps.add(b)
-                    t += step
+                var t = quantizeVideoBucketMs(winStartMs)
+                while (t <= winEndMs && timestamps.size < 220) {
+                    if (!hasCachedVideoBucket(uriStr, t)) timestamps.add(t)
+                    t += BUCKET_MS
                 }
                 if (timestamps.isNotEmpty()) {
-                    SequentialVideoDecoder.decodeSortedTimestampsHardware(
-                        context = appCtx,
-                        uriStr = uriStr,
-                        sortedTimestampsMs = timestamps,
-                        maxEdge = activePreviewQuality.maxVideoEdge.coerceIn(192, 540)
-                    ) { bucketMs, bmp ->
-                        cacheVideoFrame(uriStr, bucketMs, bmp)
+                    // Partition into ~1.6s (40-bucket) ascending GOP chunks; decode tail-first when reversed!
+                    val chunks = timestamps.chunked(40).let { list ->
+                        if (layer.reversed) list.asReversed() else list
+                    }
+                    val targetEdge = activePreviewQuality.maxVideoEdge.coerceIn(192, 540)
+                    for (chunk in chunks) {
+                        var emittedInChunk = 0
+                        SequentialVideoDecoder.decodeSortedTimestampsHardware(
+                            context = appCtx,
+                            uriStr = uriStr,
+                            sortedTimestampsMs = chunk,
+                            maxEdge = targetEdge,
+                            preferRgb565 = true
+                        ) { bucketMs, bmp ->
+                            cacheVideoFrame(uriStr, bucketMs, bmp)
+                            emittedInChunk++
+                            if (emittedInChunk == 1 || emittedInChunk % 10 == 0) {
+                                onFrameReady?.invoke()
+                            }
+                        }
+                        if (emittedInChunk > 0) onFrameReady?.invoke()
                     }
                 }
             } finally {
@@ -329,8 +365,8 @@ object MediaEngine {
 
     /**
      * Non-blocking O(1) lookup for OpenGL ES 2.0 60fps preview thread!
-     * When [allowRetrieverFallback] is false (because [HardwareVideoPreviewEngine] is streaming via OES),
-     * avoids spawning competing CPU retriever tasks while still returning any cached initial frame.
+     * Always falls back to the nearest cached timestamp or [lastGoodFrameByUri] so media layers never
+     * flash a fallback colored rectangle during rapid seeks, cache pressure, or Reverse toggling.
      */
     fun getMediaBitmapNonBlocking(
         context: Context,
@@ -344,7 +380,10 @@ object MediaEngine {
 
         if (layer.type == LayerType.IMAGE) {
             val key = "img|$uriStr"
-            synchronized(bitmapCache) { bitmapCache.get(key) }?.let { return it }
+            synchronized(bitmapCache) { bitmapCache.get(key) }?.takeIf { !it.isRecycled }?.let {
+                lastGoodFrameByUri[uriStr] = it
+                return it
+            }
             if (loadingImages.add(uriStr)) {
                 val appCtx = context.applicationContext
                 engineScope.launch {
@@ -352,6 +391,7 @@ object MediaEngine {
                         val decoded = decodeImageInternal(appCtx, uriStr)
                         if (decoded != null) {
                             putCachedBitmap(key, decoded)
+                            lastGoodFrameByUri[uriStr] = decoded
                             onAsyncFrameReady()
                         }
                     } finally {
@@ -359,15 +399,29 @@ object MediaEngine {
                     }
                 }
             }
-            return null
+            return lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
         }
 
         if (layer.type == LayerType.VIDEO) {
-            val bucketMs = quantizeVideoBucketMs(sourceTimeMs)
+            val clampedSourceMs = if (layer.sourceDurationMs > 50L) {
+                sourceTimeMs.coerceIn(0L, layer.sourceDurationMs - 36L)
+            } else {
+                sourceTimeMs.coerceAtLeast(0L)
+            }
+            val bucketMs = quantizeVideoBucketMs(clampedSourceMs)
             val exactKey = "vid|$uriStr|$bucketMs"
-            synchronized(bitmapCache) { bitmapCache.get(exactKey) }?.let { return it }
+            synchronized(bitmapCache) { bitmapCache.get(exactKey) }?.takeIf { !it.isRecycled }?.let {
+                lastGoodFrameByUri[uriStr] = it
+                return it
+            }
 
-            if (allowRetrieverFallback) {
+            if (layer.reversed || layer.timeRemapEnabled) {
+                warmNonlinearVideoClipAsync(context, layer, focusSourceMs = clampedSourceMs, onFrameReady = onAsyncFrameReady)
+            }
+
+            val nlWarmActive = hwWarmRunningForUri["nl|$uriStr"]?.get() == true
+            val hasStickyFrame = lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled } != null
+            if (allowRetrieverFallback && !(nlWarmActive && hasStickyFrame)) {
                 scheduleCoalescedVideoDecode(
                     context = context.applicationContext,
                     uriStr = uriStr,
@@ -384,9 +438,15 @@ object MediaEngine {
                     knownSet.minByOrNull { abs(it - bucketMs) }
                 }
                 if (nearest != null) {
-                    synchronized(bitmapCache) { bitmapCache.get("vid|$uriStr|$nearest") }?.let { return it }
+                    synchronized(bitmapCache) { bitmapCache.get("vid|$uriStr|$nearest") }
+                        ?.takeIf { !it.isRecycled }
+                        ?.let {
+                            lastGoodFrameByUri[uriStr] = it
+                            return it
+                        }
                 }
             }
+            return lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
         }
         return null
     }
@@ -406,7 +466,8 @@ object MediaEngine {
             if (!layer.visible || layer.type != LayerType.VIDEO || layer.mediaUri.isBlank()) return@forEach
             if (HardwareVideoPreviewEngine.isEligibleForLiveOesStream(layer)) return@forEach
             if (playheadMs !in (layer.startTimeMs - 200L)..layer.endTimeMs) return@forEach
-            warmNonlinearVideoClipAsync(appCtx, layer)
+            val srcMs = AnimationEvaluator.evaluateSourceMediaTimeMs(layer, playheadMs.coerceAtLeast(layer.startTimeMs), audio)
+            warmNonlinearVideoClipAsync(appCtx, layer, focusSourceMs = srcMs)
         }
     }
 
@@ -423,16 +484,27 @@ object MediaEngine {
         if (uriStr.isBlank()) return null
         if (layer.type == LayerType.IMAGE) {
             val key = "img|$uriStr"
-            synchronized(bitmapCache) { bitmapCache.get(key) }?.let { return it }
-            return decodeImageInternal(context, uriStr)?.also { putCachedBitmap(key, it) }
+            synchronized(bitmapCache) { bitmapCache.get(key) }?.takeIf { !it.isRecycled }?.let { return it }
+            return decodeImageInternal(context, uriStr)?.also {
+                putCachedBitmap(key, it)
+                lastGoodFrameByUri[uriStr] = it
+            } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
         }
         if (layer.type == LayerType.VIDEO) {
-            val bucketMs = quantizeVideoBucketMs(sourceTimeMs)
-            synchronized(bitmapCache) { bitmapCache.get("vid|$uriStr|$bucketMs") }?.let { return it }
+            val clampedSourceMs = if (layer.sourceDurationMs > 50L) {
+                sourceTimeMs.coerceIn(0L, layer.sourceDurationMs - 36L)
+            } else {
+                sourceTimeMs.coerceAtLeast(0L)
+            }
+            val bucketMs = quantizeVideoBucketMs(clampedSourceMs)
+            synchronized(bitmapCache) { bitmapCache.get("vid|$uriStr|$bucketMs") }?.takeIf { !it.isRecycled }?.let {
+                lastGoodFrameByUri[uriStr] = it
+                return it
+            }
             return withPooledRetriever(context.applicationContext, uriStr) { retriever ->
                 extractScaledFrame(
                     retriever = retriever,
-                    timeMs = bucketMs,
+                    timeMs = clampedSourceMs,
                     srcW = layer.mediaWidth.takeIf { it > 0 } ?: 1280,
                     srcH = layer.mediaHeight.takeIf { it > 0 } ?: 720,
                     maxEdge = maxEdgePx.coerceIn(64, 960),
@@ -440,7 +512,7 @@ object MediaEngine {
                 )?.also {
                     if (maxEdgePx >= 180) cacheVideoFrame(uriStr, bucketMs, it)
                 }
-            }
+            } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
         }
         return null
     }
@@ -457,22 +529,33 @@ object MediaEngine {
         if (uriStr.isBlank()) return null
         if (layer.type == LayerType.IMAGE) {
             val key = "img|$uriStr"
-            synchronized(bitmapCache) { bitmapCache.get(key) }?.let { return it }
-            return decodeImageInternal(context, uriStr)?.also { putCachedBitmap(key, it) }
+            synchronized(bitmapCache) { bitmapCache.get(key) }?.takeIf { !it.isRecycled }?.let { return it }
+            return decodeImageInternal(context, uriStr)?.also {
+                putCachedBitmap(key, it)
+                lastGoodFrameByUri[uriStr] = it
+            } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
         }
         if (layer.type == LayerType.VIDEO) {
-            val bucketMs = ((sourceTimeMs.coerceAtLeast(0L) + 16L) / 33L) * 33L
-            synchronized(bitmapCache) { bitmapCache.get("vid|$uriStr|$bucketMs") }?.let { return it }
+            val clampedSourceMs = if (layer.sourceDurationMs > 50L) {
+                sourceTimeMs.coerceIn(0L, layer.sourceDurationMs - 36L)
+            } else {
+                sourceTimeMs.coerceAtLeast(0L)
+            }
+            val bucketMs = quantizeVideoBucketMs(clampedSourceMs)
+            synchronized(bitmapCache) { bitmapCache.get("vid|$uriStr|$bucketMs") }?.takeIf { !it.isRecycled }?.let {
+                lastGoodFrameByUri[uriStr] = it
+                return it
+            }
             return withPooledRetriever(context.applicationContext, uriStr) { retriever ->
                 extractScaledFrame(
                     retriever = retriever,
-                    timeMs = sourceTimeMs,
+                    timeMs = clampedSourceMs,
                     srcW = layer.mediaWidth.takeIf { it > 0 } ?: 1280,
                     srcH = layer.mediaHeight.takeIf { it > 0 } ?: 720,
                     maxEdge = 960,
                     syncOnly = false
                 )?.also { cacheVideoFrame(uriStr, bucketMs, it) }
-            }
+            } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
         }
         return null
     }
@@ -851,18 +934,32 @@ object MediaEngine {
         } else {
             MediaMetadataRetriever.OPTION_CLOSEST
         }
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        val rawDecoded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             retriever.getScaledFrameAtTime(timeUs, primaryOption, dstW, dstH)
                 ?: retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, dstW, dstH)
         } else {
             retriever.getFrameAtTime(timeUs, primaryOption)
                 ?: retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } ?: return null
+
+        // Store preview-sized video frames in compact RGB_565 (50% less RAM, doubles LruCache frame retention)
+        return if (safeEdge <= 640 && rawDecoded.config == Bitmap.Config.ARGB_8888 && !rawDecoded.hasAlpha()) {
+            val compact = rawDecoded.copy(Bitmap.Config.RGB_565, false)
+            if (compact != null) {
+                rawDecoded.recycle()
+                compact
+            } else {
+                rawDecoded
+            }
+        } else {
+            rawDecoded
         }
     }
 
     private fun cacheVideoFrame(uriStr: String, bucketMs: Long, bmp: Bitmap) {
         val key = "vid|$uriStr|$bucketMs"
         putCachedBitmap(key, bmp)
+        lastGoodFrameByUri[uriStr] = bmp
         val set = cachedTimestampsByUri.getOrPut(uriStr) { HashSet() }
         synchronized(set) { set.add(bucketMs) }
     }

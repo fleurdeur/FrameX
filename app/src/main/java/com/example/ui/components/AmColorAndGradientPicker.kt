@@ -84,12 +84,12 @@ import com.example.ui.theme.TextSecondary
 import kotlin.math.roundToInt
 
 enum class EyedropperColorSlot(val label: String) {
-    LAYER_PRIMARY("Layer Fill Color"),
-    LAYER_GRADIENT_END("Gradient End Color"),
-    LAYER_STROKE("Border / Stroke Color"),
-    LAYER_SHADOW("Shadow / Glow Color"),
-    EFFECT_TINT("Effect Color / Key"),
-    PROJECT_BG("Canvas Background")
+    LAYER_PRIMARY("Fill"),
+    LAYER_GRADIENT_END("Gradient"),
+    LAYER_STROKE("Stroke"),
+    LAYER_SHADOW("Shadow"),
+    EFFECT_TINT("Tint"),
+    PROJECT_BG("Background")
 }
 
 /**
@@ -253,9 +253,9 @@ fun AmCustomColorAndGradientPicker(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 listOf(
-                    "SOLID" to "Solid Color",
-                    "LINEAR_GRADIENT" to "Linear Gradient",
-                    "RADIAL_GRADIENT" to "Radial Gradient"
+                    "SOLID" to "Solid",
+                    "LINEAR_GRADIENT" to "Linear",
+                    "RADIAL_GRADIENT" to "Radial"
                 ).forEach { (modeKey, modeLabel) ->
                     AmSegmentChip(
                         label = modeLabel,
@@ -726,19 +726,12 @@ fun AmInteractiveEyedropperOverlay(
                 tint = AmTealBright,
                 modifier = Modifier.size(16.dp)
             )
-            Column {
-                Text(
-                    text = "Eyedropper • $targetLabel",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Text(
-                    text = "Drag anywhere on preview, then tap Pick",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted
-                )
-            }
+            Text(
+                text = targetLabel,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
 
             Row(
                 modifier = Modifier

@@ -160,7 +160,7 @@ fun AmControllableCurveEditor(
             verticalAlignment = Alignment.CenterVertically
         ) {
             AmSegmentChip(
-                label = "Easing Curve",
+                label = "Curve",
                 selected = !showValueGraph && !holdStep,
                 compact = true,
                 onClick = {
@@ -172,7 +172,7 @@ fun AmControllableCurveEditor(
                 }
             )
             AmSegmentChip(
-                label = "Step Hold",
+                label = "Step",
                 selected = holdStep && !showValueGraph,
                 compact = true,
                 onClick = {
@@ -184,7 +184,7 @@ fun AmControllableCurveEditor(
             )
             if (onDragKeyframeNode != null) {
                 AmSegmentChip(
-                    label = "Value Graph (${sortedKfs.size}◆)",
+                    label = "Graph (${sortedKfs.size}◆)",
                     selected = showValueGraph,
                     compact = true,
                     onClick = { showValueGraph = true },
@@ -520,16 +520,6 @@ fun AmControllableCurveEditor(
                         drawPath(diamond, Color.White, style = Stroke(width = 1.8f))
                     }
                 }
-
-                Text(
-                    text = if (sortedKfs.isEmpty()) "Add ◆ keyframes to drag points on Value Graph"
-                    else "Drag ◆ keyframe points directly in Time & Value",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AudioCyan,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                )
             }
         }
 
@@ -592,7 +582,7 @@ fun AmControllableCurveEditor(
                 "Overshoot" to floatArrayOf(0.34f, 1.36f, 0.64f, 1.0f),
                 "Anticipate" to floatArrayOf(0.36f, -0.32f, 0.66f, 1.0f),
                 "Bounce" to floatArrayOf(0.22f, 1.38f, 0.36f, 0.92f),
-                "Velocity Whip" to floatArrayOf(0.08f, 0.96f, 0.18f, 1.0f)
+                "Whip" to floatArrayOf(0.08f, 0.96f, 0.18f, 1.0f)
             )
             presets.forEach { (name, pts) ->
                 AmSegmentChip(

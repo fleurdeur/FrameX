@@ -2,7 +2,10 @@
 
 package com.example.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +31,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Memory
@@ -41,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -93,6 +99,10 @@ import com.example.ui.theme.TextSecondary
 fun AppSettingsScreen(
     preferences: StudioPreferences,
     codecCapabilities: HardwareCodecCapabilities,
+    installedSuitesCount: Int = 1,
+    installedPluginEffectsCount: Int = 4,
+    onOpenPluginManager: () -> Unit = {},
+    onImportPluginUri: (Uri) -> Unit = {},
     onUpdatePreferences: ((StudioPreferences) -> StudioPreferences) -> Unit,
     onApplyQualityNow: (PreviewQuality) -> Unit,
     onClearCaches: () -> Unit,
@@ -100,6 +110,14 @@ fun AppSettingsScreen(
     onBack: () -> Unit
 ) {
     BackHandler(onBack = onBack)
+
+    val importPluginLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onImportPluginUri(uri)
+        }
+    }
 
     var cacheRefreshTick by remember { mutableIntStateOf(0) }
     val usedRamMb = remember(cacheRefreshTick, preferences.playbackCacheLimitMb) {
@@ -123,19 +141,12 @@ fun AppSettingsScreen(
                     )
                 },
                 title = {
-                    Column {
-                        Text(
-                            text = stringResource(id = R.string.settings_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Playback Cache • Video Codecs • Engine Defaults",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                    }
+                    Text(
+                        text = stringResource(id = R.string.settings_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
                 },
                 actions = {
                     TextButton(
@@ -172,15 +183,82 @@ fun AppSettingsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // SECTION 0: KEYFLOW EFFECT SUITES / PLUGINS (.kfpack • .fppack)
+                item {
+                    SettingsSectionCard(
+                        icon = Icons.Default.Extension,
+                        title = stringResource(id = R.string.plugin_suites_title),
+                        accentColor = AmTealBright
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "$installedSuitesCount Suites • $installedPluginEffectsCount Shaders",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = ".kfpack • .fppack",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = AmTealBright
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = onOpenPluginManager,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AmTealBright,
+                                    contentColor = Color(0xFF041410)
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_open_plugins_button")
+                            ) {
+                                Icon(Icons.Default.Extension, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Suites", fontWeight = FontWeight.Bold)
+                            }
+                            OutlinedButton(
+                                onClick = { importPluginLauncher.launch(arrayOf("*/*")) },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_import_kfpack_button")
+                            ) {
+                                Icon(
+                                    Icons.Default.FileUpload,
+                                    contentDescription = null,
+                                    tint = AmTealBright,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(id = R.string.import_plugin_label),
+                                    color = AmTealBright,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // SECTION 1: PREVIEW & PLAYBACK CACHE OPTIMIZATIONS
                 item {
                     SettingsSectionCard(
                         icon = Icons.Default.Speed,
-                        title = "Preview & Playback Cache",
+                        title = "Preview",
                         accentColor = AmTealBright
                     ) {
                         Text(
-                            text = "Default Preview Quality",
+                            text = "Quality",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -190,7 +268,7 @@ fun AppSettingsScreen(
                         ) {
                             PreviewQuality.entries.forEach { q ->
                                 AmSegmentChip(
-                                    label = "${q.title} (${q.badge})",
+                                    label = q.badge,
                                     selected = preferences.defaultPreviewQuality == q,
                                     onClick = {
                                         onUpdatePreferences { it.copy(defaultPreviewQuality = q) }
@@ -202,7 +280,7 @@ fun AppSettingsScreen(
                         }
 
                         Text(
-                            text = "RAM Playback Cache Budget",
+                            text = "Cache",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -247,13 +325,13 @@ fun AppSettingsScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Active RAM Cache",
+                                        text = "RAM",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = TextPrimary
                                     )
                                 }
                                 Text(
-                                    text = "${"%.1f".format(usedRamMb)} / ${preferences.playbackCacheLimitMb} MB • Hit ${PlaybackCacheEngine.getCacheHitRatePercent()}%",
+                                    text = "${"%.1f".format(usedRamMb)} / ${preferences.playbackCacheLimitMb} MB",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontFamily = FontFamily.Monospace,
                                     color = AmTealBright
@@ -298,8 +376,7 @@ fun AppSettingsScreen(
                         }
 
                         SettingsToggleRow(
-                            title = "Auto-Cache Pre-Rendered Frames",
-                            subtitle = "Serve cached RAM frames via 1-draw-call GPU blit during playback",
+                            title = "Auto-Cache",
                             checked = preferences.autoCachePlaybackFrames,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(autoCachePlaybackFrames = enabled) }
@@ -308,8 +385,7 @@ fun AppSettingsScreen(
                         )
 
                         SettingsToggleRow(
-                            title = "Fast Keyframe Video Scrubbing",
-                            subtitle = "Use nearest hardware I-frame (OPTION_CLOSEST_SYNC) while dragging ruler",
+                            title = "Fast Scrub",
                             checked = preferences.fastKeyframeScrub,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(fastKeyframeScrub = enabled) }
@@ -318,12 +394,12 @@ fun AppSettingsScreen(
                         )
 
                         Text(
-                            text = "Preview Frame Rate Cap",
+                            text = "FPS Cap",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(30 to "30 FPS (Battery Saver)", 60 to "60 FPS (Smooth)").forEach { (fps, label) ->
+                            listOf(30 to "30 fps", 60 to "60 fps").forEach { (fps, label) ->
                                 AmSegmentChip(
                                     label = label,
                                     selected = preferences.previewFpsCap == fps,
@@ -334,8 +410,7 @@ fun AppSettingsScreen(
                         }
 
                         SettingsToggleRow(
-                            title = "Show Live Performance HUD",
-                            subtitle = "Overlay real-time FPS, GPU frame ms, and RAM cache hit % on canvas",
+                            title = "Performance HUD",
                             checked = preferences.showPerformanceHud,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(showPerformanceHud = enabled) }
@@ -349,30 +424,29 @@ fun AppSettingsScreen(
                 item {
                     SettingsSectionCard(
                         icon = Icons.Default.HighQuality,
-                        title = "Video Codec & Hardware Pipeline",
+                        title = "Codec & Export",
                         accentColor = ElectricBlue
                     ) {
                         Text(
-                            text = "Preferred Video Export Codec",
+                            text = "Codec",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             AmSegmentChip(
-                                label = "H.264 (AVC • Max Compatibility)",
+                                label = "H.264",
                                 selected = preferences.preferredVideoCodec == "H.264",
                                 onClick = { onUpdatePreferences { it.copy(preferredVideoCodec = "H.264") } },
                                 testTag = "settings_codec_H264"
                             )
                             AmSegmentChip(
-                                label = "H.265 (HEVC • High Efficiency)",
+                                label = "H.265",
                                 selected = preferences.preferredVideoCodec == "H.265",
                                 onClick = { onUpdatePreferences { it.copy(preferredVideoCodec = "H.265") } },
                                 testTag = "settings_codec_H265"
                             )
                         }
 
-                        // Hardware Encoder Detection Readout
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -395,14 +469,14 @@ fun AppSettingsScreen(
                                 codecCapabilities.primaryAvcEncoderName
                             }
                             Text(
-                                text = "Detected Encoder: $encoderName",
+                                text = encoderName,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = TextSecondary,
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = if (hwAvailable) "HW ACCEL" else "SW FALLBACK",
+                                text = if (hwAvailable) "HW" else "SW",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = if (hwAvailable) RigGreen else NeonPink
@@ -410,8 +484,7 @@ fun AppSettingsScreen(
                         }
 
                         SettingsToggleRow(
-                            title = "Hardware Accelerated Video Pipeline",
-                            subtitle = "Prefer dedicated MediaCodec Silicon for decode & MP4 muxing",
+                            title = "Hardware Acceleration",
                             checked = preferences.hardwareAcceleratedCodecs,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(hardwareAcceleratedCodecs = enabled) }
@@ -420,7 +493,7 @@ fun AppSettingsScreen(
                         )
 
                         Text(
-                            text = "Export Bitrate Profile",
+                            text = "Bitrate",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -439,12 +512,12 @@ fun AppSettingsScreen(
                         }
 
                         Text(
-                            text = "Keyframe (I-Frame GOP) Interval",
+                            text = "GOP",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(1 to "1s (Edit Friendly)", 2 to "2s (Balanced)", 5 to "5s (Compact)").forEach { (sec, label) ->
+                            listOf(1 to "1s", 2 to "2s", 5 to "5s").forEach { (sec, label) ->
                                 AmSegmentChip(
                                     label = label,
                                     selected = preferences.keyframeIntervalSec == sec,
@@ -455,12 +528,12 @@ fun AppSettingsScreen(
                         }
 
                         Text(
-                            text = "Audio Export Sample Rate",
+                            text = "Sample Rate",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(44100 to "44.1 kHz", 48000 to "48 kHz Studio").forEach { (hz, label) ->
+                            listOf(44100 to "44.1 kHz", 48000 to "48 kHz").forEach { (hz, label) ->
                                 AmSegmentChip(
                                     label = label,
                                     selected = preferences.exportAudioSampleRateHz == hz,
@@ -476,12 +549,11 @@ fun AppSettingsScreen(
                 item {
                     SettingsSectionCard(
                         icon = Icons.Default.GraphicEq,
-                        title = "Audio Sync & Timeline Workflow",
+                        title = "Audio & Timeline",
                         accentColor = NeonPink
                     ) {
                         SettingsToggleRow(
-                            title = "Loop Playback by Default",
-                            subtitle = "Wrap playhead seamlessly to 00:00 (also accessible by holding Play)",
+                            title = "Loop Playback",
                             checked = preferences.defaultLoopPlayback,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(defaultLoopPlayback = enabled) }
@@ -490,12 +562,12 @@ fun AppSettingsScreen(
                         )
 
                         Text(
-                            text = "Audio Drift Resync Tolerance",
+                            text = "Sync",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(100 to "100 ms (Tight)", 160 to "160 ms (Smooth)", 260 to "260 ms (Relaxed)").forEach { (ms, label) ->
+                            listOf(100 to "100 ms", 160 to "160 ms", 260 to "260 ms").forEach { (ms, label) ->
                                 AmSegmentChip(
                                     label = label,
                                     selected = preferences.audioSyncThresholdMs == ms,
@@ -506,8 +578,7 @@ fun AppSettingsScreen(
                         }
 
                         SettingsToggleRow(
-                            title = "Mute Audio During Rapid Scrub",
-                            subtitle = "Prevent audio crackle and MediaPlayer seek thrashing while dragging",
+                            title = "Mute While Scrubbing",
                             checked = preferences.muteAudioDuringFastScrub,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(muteAudioDuringFastScrub = enabled) }
@@ -516,8 +587,7 @@ fun AppSettingsScreen(
                         )
 
                         SettingsToggleRow(
-                            title = "Magnetic Snap to Bookmarks & Keyframes",
-                            subtitle = "Snap timeline playhead onto nearby beat bookmarks and diamonds",
+                            title = "Snap",
                             checked = preferences.snapToBookmarksAndKeys,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(snapToBookmarksAndKeys = enabled) }
@@ -527,15 +597,14 @@ fun AppSettingsScreen(
                     }
                 }
 
-                // SECTION 4: NEW PROJECT DEFAULTS
                 item {
                     SettingsSectionCard(
                         icon = Icons.Default.MovieCreation,
-                        title = "New Project Defaults",
+                        title = "Defaults",
                         accentColor = RigGreen
                     ) {
                         Text(
-                            text = "Default Aspect Ratio",
+                            text = "Ratio",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -560,7 +629,7 @@ fun AppSettingsScreen(
                         }
 
                         Text(
-                            text = "Default Frame Rate & Length",
+                            text = "FPS & Duration",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -587,7 +656,7 @@ fun AppSettingsScreen(
                         }
 
                         Text(
-                            text = "Default Canvas Background",
+                            text = "Background",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -652,7 +721,7 @@ private fun SettingsSectionCard(
 @Composable
 private fun SettingsToggleRow(
     title: String,
-    subtitle: String,
+    subtitle: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     testTag: String
@@ -673,11 +742,13 @@ private fun SettingsToggleRow(
                 fontWeight = FontWeight.SemiBold,
                 color = TextPrimary
             )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted
-            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
         }
         Switch(
             checked = checked,

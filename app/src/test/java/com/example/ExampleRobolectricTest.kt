@@ -529,5 +529,486 @@ class ExampleRobolectricTest {
         com.example.engine.HardwareVideoPreviewEngine.releaseAll()
         tmpImgFile.delete()
     }
+
+    @Test
+    fun `verify Text Transform effect, Chroma Key, and authentic per-effect Alight Motion parameter specs`() {
+        val textTransform = EffectsCatalog.findById("Text_Transform")
+        assertEquals("Text_Transform", textTransform.id)
+        assertEquals(11, textTransform.shaderMode)
+        val ttSpecs = textTransform.paramSpecs()
+        assertEquals("Start", ttSpecs[0].label)
+        assertEquals("%", ttSpecs[0].unit)
+        assertEquals("End", ttSpecs[1].label)
+        assertEquals("%", ttSpecs[1].unit)
+
+        val chromaKey = EffectsCatalog.findById("Chroma_Key")
+        assertEquals("Chroma_Key", chromaKey.id)
+        assertEquals(12, chromaKey.shaderMode)
+        assertTrue(chromaKey.colorLabel.startsWith("Key Color"))
+
+        val tilesSpecs = EffectsCatalog.findById("Tiles").paramSpecs()
+        val exposureSpecs = EffectsCatalog.findById("Exposure_Gamma").paramSpecs()
+        val oscillateSpecs = EffectsCatalog.findById("Oscillate").paramSpecs()
+        assertTrue(
+            "Different effect families should expose distinct authentic parameter labels",
+            tilesSpecs[0].label != exposureSpecs[0].label && exposureSpecs[0].label != oscillateSpecs[0].label
+        )
+    }
+
+    @Test
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    fun `verify current-frame compressed RGB_565 effect thumbnail evaluates layer at playheadMs`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.engine.EffectThumbnailPreviewer.clearThumbnails()
+
+        val animatedLayer = Layer(
+            id = "anim_thumb_layer",
+            name = "Moving Neon Shape",
+            type = LayerType.SHAPE,
+            shapeKind = "Circle",
+            colorHex = "#00F5D4",
+            posX = AnimatableProperty(
+                baseValue = -420f,
+                keyframes = listOf(
+                    Keyframe(timeMs = 0L, value = -420f),
+                    Keyframe(timeMs = 2000L, value = 420f)
+                )
+            )
+        )
+        val sig0 = com.example.engine.EffectThumbnailPreviewer.layerSignature(animatedLayer, 0L)
+        val sig2000 = com.example.engine.EffectThumbnailPreviewer.layerSignature(animatedLayer, 2000L)
+        assertTrue("Current-frame cache signature must advance with playheadMs", sig0 != sig2000)
+
+        val effect = EffectsCatalog.findById("RGB_Split")
+
+        val bmpAtStart = com.example.engine.EffectThumbnailPreviewer.generateThumbnailSync(
+            context = context,
+            selectedLayer = animatedLayer,
+            effect = effect,
+            playheadMs = 0L
+        )
+        val bmpAtEnd = com.example.engine.EffectThumbnailPreviewer.generateThumbnailSync(
+            context = context,
+            selectedLayer = animatedLayer,
+            effect = effect,
+            playheadMs = 2000L
+        )
+
+        assertEquals(56, bmpAtStart.width)
+        assertEquals(56, bmpAtStart.height)
+        assertEquals(android.graphics.Bitmap.Config.RGB_565, bmpAtStart.config)
+        assertEquals(android.graphics.Bitmap.Config.RGB_565, bmpAtEnd.config)
+
+        val pxStart = IntArray(56 * 56)
+        val pxEnd = IntArray(56 * 56)
+        bmpAtStart.getPixels(pxStart, 0, 56, 0, 0, 56, 56)
+        bmpAtEnd.getPixels(pxEnd, 0, 56, 0, 0, 56, 56)
+        val diffPixels = pxStart.indices.count { pxStart[it] != pxEnd[it] }
+        assertTrue(
+            "Thumbnail pixels must reflect the layer's current keyframed frame at playheadMs (diff=$diffPixels)",
+            diffPixels > 40
+        )
+    }
+
+    @Test
+    fun `verify zero black bars 100 percent edge-to-edge media fit and timeline squeeze plus hold-to-drag`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val vm = com.example.viewmodel.StudioViewModel(appContext = context)
+        vm.createNewProject(
+            name = "Edge Fit & Timeline Drag Test",
+            preset = AspectRatioPreset.LANDSCAPE_16_9,
+            customWidth = 1920,
+            customHeight = 1080,
+            fps = 60,
+            durationSec = 10,
+            bpm = 128
+        )
+
+        // Add a shape layer, trim [1000ms..4000ms], and test timeline squeeze/zoom + hold-to-drag
+        vm.addShapeLayerWithKind("Rectangle")
+        val layerId = vm.state.value.selectedLayerId!!
+        vm.scrubPlayhead(1000L)
+        vm.pullStartToPlayhead()
+        vm.scrubPlayhead(4000L)
+        vm.pullEndToPlayhead()
+
+        // Verify timeline pinch-to-squeeze (0.5x) and pinch-out expand (4.8x)
+        vm.setTimelineZoom(0.5f)
+        assertEquals(0.5f, vm.state.value.timelineZoom, 0.001f)
+        vm.setTimelineZoom(4.8f)
+        assertEquals(4.8f, vm.state.value.timelineZoom, 0.001f)
+
+        // Add keyframe at 1500ms, then hold-drag layer duration +2500ms along timeline
+        vm.selectProperty(com.example.data.model.PropertyTarget.POS_X)
+        vm.scrubPlayhead(1500L)
+        vm.toggleKeyframeAtPlayhead(com.example.data.model.PropertyTarget.POS_X)
+        vm.updateSelectedPropertyValue(120f)
+
+        val preStart = vm.state.value.activeProject.layers.first { it.id == layerId }.startTimeMs
+        val preEnd = vm.state.value.activeProject.layers.first { it.id == layerId }.endTimeMs
+        val preKfTime = vm.state.value.activeProject.layers.first { it.id == layerId }.posX.keyframes.first().timeMs
+        val expectedDuration = preEnd - preStart
+
+        vm.moveLayerTimeRange(layerId, rawNewStartMs = preStart + 2500L, recordUndo = true)
+        val movedLayer = vm.state.value.activeProject.layers.first { it.id == layerId }
+        val actualShift = movedLayer.startTimeMs - preStart
+        assertEquals("Shift delta should be ~2500ms (frame-snapped at 60fps)", 2500f, actualShift.toFloat(), 20f)
+        assertEquals("Duration should remain intact after hold-to-drag", expectedDuration, movedLayer.endTimeMs - movedLayer.startTimeMs)
+        assertEquals(
+            "Layer keyframes should shift by the exact clip delta",
+            preKfTime + actualShift,
+            movedLayer.posX.keyframes.first().timeMs
+        )
+
+        // Verify 100% edge-to-edge media Fit on matching 16:9 image layer
+        val mediaImgFile = java.io.File(context.cacheDir, "widescreen_16_9.png")
+        val bmp = android.graphics.Bitmap.createBitmap(192, 108, android.graphics.Bitmap.Config.ARGB_8888)
+        bmp.eraseColor(android.graphics.Color.MAGENTA)
+        java.io.FileOutputStream(mediaImgFile).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 90, it) }
+        val info = kotlinx.coroutines.runBlocking {
+            com.example.engine.MediaEngine.importMediaUri(context, android.net.Uri.fromFile(mediaImgFile), LayerType.IMAGE)
+        }
+        vm.addLayer(LayerType.IMAGE, info.localUri)
+        vm.fitOrFillSelectedLayerToComposition(fill = false)
+        val fittedImg = vm.state.value.activeProject.layers.first { it.id == vm.state.value.selectedLayerId }
+        assertEquals("16:9 image in 16:9 comp must fit 100% edge-to-edge with zero black bars", 100f, fittedImg.scale.baseValue, 0.5f)
+        mediaImgFile.delete()
+    }
+
+    @Test
+    fun `verify notable bass onset picker ignores quiet noise and enforces refractory cooldown`() {
+        // 1. Quiet background hiss / room noise should produce ZERO beat markers
+        val backgroundNoise = FloatArray(220) { idx -> 0.008f + (idx % 3) * 0.002f }
+        val noisePeaks = AudioReactorEngine.pickNotableBassPeaks(
+            hopEnergies = backgroundNoise,
+            hopDurationMs = 20L,
+            sensitivity = 0.70f
+        )
+        assertTrue("Quiet background noise must never spam beat markers", noisePeaks.isEmpty())
+
+        // 2. Four notable kick/bass hits at 500ms, 1000ms, 1500ms, 2000ms + tiny micro-chatter right next to hits
+        val kickEnvelope = FloatArray(140) { 0.02f }
+        val hitIndices = listOf(25, 50, 75, 100) // * 20ms = 500, 1000, 1500, 2000ms
+        for (h in hitIndices) {
+            kickEnvelope[h - 1] = 0.18f
+            kickEnvelope[h] = 0.92f
+            kickEnvelope[h + 1] = 0.35f
+            // Nearby secondary sub-ripple 80ms later (within 300ms cooldown) should NOT create spam marker
+            kickEnvelope[h + 4] = 0.48f
+        }
+        val detected = AudioReactorEngine.pickNotableBassPeaks(
+            hopEnergies = kickEnvelope,
+            hopDurationMs = 20L,
+            sensitivity = 0.65f,
+            minCooldownMs = 300L
+        )
+        assertEquals("Should cleanly isolate the 4 notable bass kicks without double-triggering", 4, detected.size)
+        assertEquals(500L, detected[0].timeMs)
+        assertEquals(1000L, detected[1].timeMs)
+        assertEquals(1500L, detected[2].timeMs)
+        assertEquals(2000L, detected[3].timeMs)
+    }
+
+    @Test
+    fun `verify gradient fill, Studio DSP audio effects PCM processor, and custom font registry`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        // 1. Verify bundled Google Fonts resolve and custom .ttf registration works
+        val bebasTf = com.example.engine.CustomFontRegistry.resolveTypeface(context, "Bebas Neue")
+        org.junit.Assert.assertNotNull("Bundled Bebas Neue font should resolve non-null Typeface", bebasTf)
+
+        val customFontTmp = java.io.File(context.cacheDir, "UnitTestDisplayFont.ttf")
+        context.resources.openRawResource(R.font.pacifico).use { input ->
+            java.io.FileOutputStream(customFontTmp).use { output -> input.copyTo(output) }
+        }
+        val registered = com.example.engine.CustomFontRegistry.registerLocalFontFile("UnitTest Pacifico", customFontTmp)
+        assertTrue("Valid .ttf font file should register into CustomFontRegistry", registered)
+        assertTrue(
+            com.example.engine.CustomFontRegistry.allAvailableFonts(context).any { it.displayName == "UnitTest Pacifico" }
+        )
+        customFontTmp.delete()
+
+        // 2. Verify StudioDspAudioProcessor real-time stereo 16-bit PCM reverb + sub-bass + echo processing
+        val dsp = com.example.engine.StudioDspAudioProcessor()
+        val format = androidx.media3.common.audio.AudioProcessor.AudioFormat(
+            44100,
+            2,
+            androidx.media3.common.C.ENCODING_PCM_16BIT
+        )
+        dsp.configure(format)
+        dsp.flush()
+        dsp.reverbMix = 0.45f
+        dsp.roomSize = 0.72f
+        dsp.bassBoost = 0.60f
+        dsp.echoMix = 0.30f
+        dsp.filterCutoff = 0.55f
+        assertTrue(dsp.hasActiveDsp())
+
+        val sampleFrames = 256
+        val pcmIn = java.nio.ByteBuffer.allocateDirect(sampleFrames * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until sampleFrames) {
+            val s = (kotlin.math.sin(i * 0.12) * 14000.0).toInt().toShort()
+            pcmIn.putShort(s)
+            pcmIn.putShort(s)
+        }
+        pcmIn.flip()
+        dsp.queueInput(pcmIn)
+        val pcmOut = dsp.output
+        assertEquals("Processed PCM byte count must match input stereo buffer", sampleFrames * 4, pcmOut.remaining())
+
+        // 3. Verify ProjectPayloadSerializer roundtrips Gradient Fill + Audio DSP fields losslessly
+        val richLayer = Layer(
+            name = "Gradient + Cathedral Audio Layer",
+            type = LayerType.VIDEO,
+            colorHex = "#00F5D4",
+            fillMode = "LINEAR_GRADIENT",
+            gradientEndColorHex = "#FF2E93",
+            gradientAngleDeg = 135f,
+            audioPreset = "Cathedral Reverb",
+            audioReverbMix = 0.58f,
+            audioRoomSize = 0.86f,
+            audioBassBoost = 0.42f,
+            audioEchoMix = 0.24f,
+            audioEchoDelayMs = 310f,
+            audioFilterCutoff = 0.76f,
+            audioPitchSemitones = -2.0f
+        )
+        val envelope = ProjectPayloadSerializer.encodeProjectEnvelope(
+            layers = listOf(richLayer),
+            backgroundColor = "#0A0C10"
+        )
+        val restored = ProjectPayloadSerializer.decodeLayers(envelope).first()
+        assertEquals("LINEAR_GRADIENT", restored.fillMode)
+        assertEquals("#FF2E93", restored.gradientEndColorHex)
+        assertEquals(135f, restored.gradientAngleDeg, 0.01f)
+        assertEquals("Cathedral Reverb", restored.audioPreset)
+        assertEquals(0.58f, restored.audioReverbMix, 0.005f)
+        assertEquals(0.86f, restored.audioRoomSize, 0.005f)
+        assertEquals(0.42f, restored.audioBassBoost, 0.005f)
+        assertEquals(0.24f, restored.audioEchoMix, 0.005f)
+        assertEquals(310f, restored.audioEchoDelayMs, 0.1f)
+        assertEquals(0.76f, restored.audioFilterCutoff, 0.005f)
+        assertEquals(-2.0f, restored.audioPitchSemitones, 0.01f)
+    }
+
+    @Test
+    fun `verify KeyFlow kfpack and fppack custom plugin import comment-safe JSON multi-pass uniforms keyframes and serialization`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.engine.PluginPackManager.ensureInitialized(context)
+
+        // 1. Verify uniform naming rules from PLUGIN_MAKER_GUIDE.txt
+        assertEquals("uAmplitude", com.example.engine.PluginPackManager.toUniformName("amplitude"))
+        assertEquals("uGlowColor", com.example.engine.PluginPackManager.toUniformName("glowColor"))
+        assertEquals("uTileEdges", com.example.engine.PluginPackManager.toUniformName("tileEdges"))
+
+        // 2. Verify starter KeyFlow Cinema 1.4.9 suite & EffectsCatalog dynamic registration
+        val starterSuites = com.example.engine.PluginPackManager.installedSuites.value
+        assertTrue("Starter KeyFlow suite should be pre-installed", starterSuites.isNotEmpty())
+        val ultraGlow = com.example.engine.PluginPackManager.findPluginEffect("s_ultraglow")
+        org.junit.Assert.assertNotNull("Multi-pass s_ultraglow plugin should be registered", ultraGlow)
+        assertEquals(4, ultraGlow!!.passes.size)
+        assertEquals(0.35f, ultraGlow.expandBounds, 0.001f)
+        assertTrue(EffectsCatalog.allEffects.any { it.id == "s_ultraglow" && it.category == com.example.engine.EffectCategory.PLUGINS })
+
+        // 3. Build a real .kfpack ZIP archive with /* block */ and // line comments, multi-pass GLSL, FLOAT, BOOL, and COLOR
+        val zipBaos = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(zipBaos).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("suite.json"))
+            zos.write(
+                """
+                {
+                  /* Official KeyFlow 1.4.9+ Suite Manifest */
+                  "id": "unit_test_sapphire_pack",
+                  "name": "Sapphire Test Pack",
+                  "category": "Warna", // Color & Glows
+                  "author": "StudioQA",
+                  "version": "1.5.0",
+                  "minAppVersion": "1.4.9",
+                  "effects": ["aurora_bloom"],
+                }
+                """.trimIndent().toByteArray()
+            )
+            zos.closeEntry()
+
+            zos.putNextEntry(java.util.zip.ZipEntry("effects/aurora_bloom/effect.json"))
+            zos.write(
+                """
+                {
+                  "id": "aurora_bloom",
+                  "name": "Aurora Bloom",
+                  "category": "Warna",
+                  "expandBounds": 0.30,
+                  "usesNativeMotionBlur": true,
+                  "passes": ["pass1_extract.glsl", "pass2_composite.glsl"],
+                  "parameters": [
+                    { "key": "exposure", "label": "Exposure", "type": "FLOAT", "default": 1.2, "min": 0.0, "max": 5.0 },
+                    { "key": "glowColor", "label": "Glow Tint", "type": "COLOR", "default": "#00FFCC" },
+                    { "key": "mirrorEdges", "label": "Mirror Edges", "type": "BOOL", "default": true }
+                  ]
+                }
+                """.trimIndent().toByteArray()
+            )
+            zos.closeEntry()
+
+            zos.putNextEntry(java.util.zip.ZipEntry("effects/aurora_bloom/pass1_extract.glsl"))
+            zos.write(
+                """
+                precision mediump float;
+                varying vec2 vTex;
+                uniform sampler2D uTexture;
+                uniform float uExposure;
+                void main() {
+                    vec4 c = texture2D(uTexture, vTex);
+                    gl_FragColor = vec4(c.rgb * uExposure, c.a);
+                }
+                """.trimIndent().toByteArray()
+            )
+            zos.closeEntry()
+
+            zos.putNextEntry(java.util.zip.ZipEntry("effects/aurora_bloom/pass2_composite.glsl"))
+            zos.write(
+                """
+                precision mediump float;
+                varying vec2 vTex;
+                uniform sampler2D uTexture;
+                uniform sampler2D uOriginalTexture;
+                uniform vec3 uGlowColor;
+                uniform float uMirrorEdges;
+                void main() {
+                    vec4 glow = texture2D(uTexture, vTex);
+                    vec4 orig = texture2D(uOriginalTexture, vTex);
+                    vec3 boost = glow.rgb * uGlowColor * (uMirrorEdges > 0.5 ? 1.0 : 0.5);
+                    gl_FragColor = vec4(clamp(orig.rgb + boost, 0.0, 1.0), orig.a);
+                }
+                """.trimIndent().toByteArray()
+            )
+            zos.closeEntry()
+        }
+
+        val imported = com.example.engine.PluginPackManager.importPackFromBytes(
+            context = context,
+            zipBytes = zipBaos.toByteArray(),
+            archiveExtension = ".kfpack"
+        ).getOrThrow()
+        assertEquals("unit_test_sapphire_pack", imported.id)
+        assertEquals(".kfpack", imported.archiveExtension)
+        val aurora = imported.effects.single()
+        assertEquals(2, aurora.passes.size)
+        assertEquals(0.30f, aurora.expandBounds, 0.001f)
+        assertTrue(aurora.usesNativeMotionBlur)
+
+        // 4. Export as .fppack and verify round-trip archive import
+        val fppackBytes = com.example.engine.PluginPackManager.exportSuiteAsZipBytes(imported)
+        assertTrue(".fppack export archive should be non-empty", fppackBytes.size > 120)
+        val reimportedFppack = com.example.engine.PluginPackManager.importPackFromBytes(
+            context = context,
+            zipBytes = fppackBytes,
+            archiveExtension = ".fppack"
+        ).getOrThrow()
+        assertEquals(".fppack", reimportedFppack.archiveExtension)
+        assertEquals("aurora_bloom", reimportedFppack.effects.single().id)
+
+        // 5. Apply plugin to layer in StudioViewModel, keyframe FLOAT, toggle BOOL, update COLOR, and serialize
+        val vm = com.example.viewmodel.StudioViewModel(appContext = context)
+        vm.addShapeLayerWithKind("Hexagon")
+        val auroraDef = EffectsCatalog.findById("aurora_bloom")
+        vm.addEffectToSelectedLayer(auroraDef)
+        assertEquals("exposure", vm.state.value.selectedPluginParamKey)
+
+        vm.scrubPlayhead(0L)
+        vm.toggleEffectKeyframeAtPlayhead()
+        vm.scrubPlayhead(2000L)
+        vm.updateCustomPluginParamValue("exposure", 3.8f)
+        vm.updateCustomPluginParamValue("mirrorEdges", 0f)
+        vm.updateCustomPluginColor("glowColor", "#FF3366")
+
+        val layer = vm.state.value.activeProject.layers.single()
+        val fxNode = layer.effects.single()
+        val audio = AudioReactorEngine().sampleTimelineSpectrum(1000L, 128, emptyList())
+        val midUniforms = AnimationEvaluator.evaluatePluginUniformFloats(aurora, fxNode, 1000L, audio)
+        assertEquals("Keyframed exposure should interpolate cleanly at 1000ms", 2.5f, midUniforms["exposure"] ?: 0f, 0.25f)
+        assertEquals("Toggled BOOL switch should evaluate to 0.0", 0f, midUniforms["mirrorEdges"] ?: 1f, 0.001f)
+        assertEquals("#FF3366", fxNode.customColorFor("glowColor", "#00FFCC"))
+
+        val envelope = ProjectPayloadSerializer.encodeProjectEnvelope(listOf(layer), "#000000")
+        val restoredFx = ProjectPayloadSerializer.decodeLayers(envelope).single().effects.single()
+        assertEquals(2, restoredFx.customParamFor("exposure", 1.2f).keyframes.size)
+        assertEquals("#FF3366", restoredFx.customColorFor("glowColor", "#00FFCC"))
+
+        com.example.engine.PluginPackManager.removeSuite(context, "unit_test_sapphire_pack")
+    }
+
+    @Test
+    fun `verify sticky reversed media frame cache prevents flicker and reversed prerender succeeds`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.engine.PlaybackCacheEngine.clearAll()
+
+        val fakeVideoUri = "file:///tmp/reversed_test_clip.mp4"
+        val seedFrame = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.RGB_565)
+        seedFrame.eraseColor(android.graphics.Color.rgb(40, 140, 240))
+
+        // Seed a single decoded bucket at 1960ms (tail of a 2000ms reversed video clip)
+        com.example.engine.MediaEngine.putPreDecodedVideoFrame(fakeVideoUri, 1960L, seedFrame)
+
+        val reversedLayer = Layer(
+            id = "rev_vid_layer",
+            name = "Clip.mp4",
+            type = LayerType.VIDEO,
+            mediaUri = fakeVideoUri,
+            sourceDurationMs = 2000L,
+            mediaWidth = 96,
+            mediaHeight = 96,
+            reversed = true,
+            startTimeMs = 0L,
+            endTimeMs = 2000L,
+            colorHex = "#FF00FF" // Bright magenta fallback color that MUST NOT flicker when lagging!
+        )
+
+        // Request an uncached reversed timestamp (e.g. 1200ms -> source 800ms):
+        // Sticky lastGoodFrameByUri must immediately return seedFrame instead of null so no rectangle flickers!
+        val nonBlockingDuringSeek = com.example.engine.MediaEngine.getMediaBitmapNonBlocking(
+            context = context,
+            layer = reversedLayer,
+            sourceTimeMs = 800L,
+            onAsyncFrameReady = {}
+        )
+        assertTrue(
+            "Sticky lastGoodFrameByUri must hold previous video frame instead of returning null during lag/seek",
+            nonBlockingDuringSeek != null && nonBlockingDuringSeek.width == 96
+        )
+
+        // Pre-render composition with the reversed video layer and verify cached output does not draw magenta fallback
+        val vm = com.example.viewmodel.StudioViewModel(appContext = context)
+        vm.createNewProject(
+            name = "Reversed PreRender Test",
+            preset = AspectRatioPreset.SQUARE_1_1,
+            customWidth = 360,
+            customHeight = 360,
+            fps = 24,
+            durationSec = 2,
+            bpm = 120
+        )
+        val projectWithReversed = vm.state.value.activeProject.copy(layers = listOf(reversedLayer))
+        kotlinx.coroutines.runBlocking {
+            com.example.engine.PlaybackCacheEngine.preRenderComposition(
+                context = context,
+                project = projectWithReversed,
+                projectRevision = 77L,
+                quality = com.example.data.preferences.PreviewQuality.QUARTER,
+                fpsCap = 24,
+                audioEngine = vm.audioEngine
+            )
+        }
+        val cachedMid = com.example.engine.PlaybackCacheEngine.getCachedFrame(
+            projectRevision = 77L,
+            quality = com.example.data.preferences.PreviewQuality.QUARTER,
+            timeMs = 500L,
+            fps = 24
+        )
+        assertTrue("Reversed video pre-render should produce cached frames", cachedMid != null && cachedMid.width > 0)
+    }
 }
+
+
+
 

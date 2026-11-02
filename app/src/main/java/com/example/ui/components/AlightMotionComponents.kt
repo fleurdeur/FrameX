@@ -62,11 +62,22 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.sp
 import com.example.data.model.AspectRatioPreset
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.AmTealContainer
 import com.example.ui.theme.DeepBlack
+import com.example.ui.theme.KeyflowBlue
+import com.example.ui.theme.KeyflowBlueBright
+import com.example.ui.theme.KeyflowCardBorder
+import com.example.ui.theme.KeyflowCardSurface
 import com.example.ui.theme.KeyframeAmber
 import com.example.ui.theme.OutlineSubtle
 import com.example.ui.theme.PanelDark
@@ -75,6 +86,10 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.log10
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -757,3 +772,283 @@ private fun AmBottomNavItem(
         )
     }
 }
+
+/**
+ * KeyFlow Signature Property Ruler Card (Screenshot 4):
+ * - Sleek dark `#1A1C22` rounded card (`12.dp` radius)
+ * - Left: Property label (`KeyflowBlue` when selected, crisp white when unselected, tappable to bind Keyframe/Curve rail)
+ * - Right: Centered `KeyflowBlue` rounded value pill (`0.030`, `0`, `0.50`, tappable for exact numeric entry)
+ *   directly above a numbered horizontal graduated tick-ruler scrubber!
+ */
+@Composable
+fun KeyflowPropertyRulerCard(
+    label: String,
+    value: Float,
+    minValue: Float,
+    maxValue: Float,
+    unit: String = "",
+    selected: Boolean = false,
+    keyframeCount: Int = 0,
+    hasKeyframeAtPlayhead: Boolean = false,
+    onSelect: () -> Unit = {},
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    labelTestTag: String? = null,
+    scrubberTestTag: String? = null
+) {
+    val currentValState by rememberUpdatedState(value)
+    val currentOnSelect by rememberUpdatedState(onSelect)
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val density = LocalDensity.current
+
+    val span = (maxValue - minValue).coerceAtLeast(0.001f)
+    val formattedCapsuleValue = remember(value, span, unit) {
+        val base = when {
+            abs(value) < 0.0005f -> "0"
+            span <= 1.2f -> String.format("%.3f", value)
+            span <= 12f -> String.format("%.2f", value)
+            span <= 120f -> String.format("%.2f", value).trimEnd('0').trimEnd('.')
+            else -> String.format("%.1f", value).trimEnd('0').trimEnd('.')
+        }
+        if (unit.isEmpty() || unit == "%") base else "$base$unit"
+    }
+
+    // Compute clean major tick step for the graduated ruler
+    val majorStep = remember(span) {
+        val raw = span / 10f
+        val exp = floor(log10(raw.toDouble())).toInt()
+        val mag = 10.0.pow(exp.toDouble()).toFloat().coerceAtLeast(0.001f)
+        val norm = raw / mag
+        val nice = when {
+            norm <= 1.4f -> 1f
+            norm <= 3.2f -> 2f
+            norm <= 7.0f -> 5f
+            else -> 10f
+        }
+        (nice * mag).coerceAtLeast(0.01f)
+    }
+
+    val tickTextPaint = remember(density) {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(175, 168, 178, 196)
+            textSize = with(density) { 8.5.sp.toPx() }
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.NORMAL)
+        }
+    }
+
+    var showExactDialog by remember { mutableStateOf(false) }
+    var exactDraft by remember(value) { mutableStateOf(formattedCapsuleValue.removeSuffix(unit)) }
+
+    if (showExactDialog) {
+        AlertDialog(
+            onDismissRequest = { showExactDialog = false },
+            containerColor = SurfaceDark,
+            title = {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = exactDraft,
+                    onValueChange = { exactDraft = it },
+                    singleLine = true,
+                    label = { Text("${formatRulerTick(minValue, majorStep)} .. ${formatRulerTick(maxValue, majorStep)}") },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        exactDraft.trim().toFloatOrNull()?.let { parsed ->
+                            currentOnSelect()
+                            currentOnValueChange(parsed.coerceIn(minValue, maxValue))
+                        }
+                        showExactDialog = false
+                    }
+                ) {
+                    Text("Apply", color = KeyflowBlueBright, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExactDialog = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(KeyflowCardSurface)
+            .border(
+                width = if (selected) 1.1.dp else 0.8.dp,
+                color = if (selected) KeyflowBlue.copy(alpha = 0.55f) else KeyflowCardBorder,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable { currentOnSelect() }
+            .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Left: Property Label (KeyFlow Blue when selected, White when unselected)
+        Row(
+            modifier = Modifier
+                .weight(0.39f)
+                .then(if (labelTestTag != null) Modifier.testTag(labelTestTag) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (selected) KeyflowBlueBright else TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            if (keyframeCount > 0) {
+                Text(
+                    text = "◆",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (hasKeyframeAtPlayhead) KeyframeAmber else KeyflowBlueBright
+                )
+            }
+        }
+
+        // Right: Centered Blue Value Pill + Graduated Numbered Tick-Ruler Scrubber
+        Column(
+            modifier = Modifier
+                .weight(0.61f)
+                .fillMaxHeight()
+                .pointerInput(minValue, maxValue, majorStep) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { currentOnSelect() },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            val pxPerMajor = 56.dp.toPx().coerceAtLeast(24f)
+                            // Dragging left increases value (pulls higher ruler numbers under center needle),
+                            // or dragging right increases value? Standard KeyFlow/AM ruler: dragging left advances
+                            // ruler numbers to the right, dragging right decreases; wait—let's make dragging RIGHT
+                            // increase value when moving thumb right OR let ruler scroll naturally with value!
+                            // Making dragAmount > 0 increase value feels intuitive for sliders while ruler ticks track `value`.
+                            val delta = (dragAmount / pxPerMajor) * majorStep
+                            val next = (currentValState + delta).coerceIn(minValue, maxValue)
+                            currentOnValueChange(next)
+                        }
+                    )
+                }
+                .then(if (scrubberTestTag != null) Modifier.testTag(scrubberTestTag) else Modifier),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // KeyFlow Blue Value Capsule
+            Box(
+                modifier = Modifier
+                    .height(20.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(KeyflowBlue)
+                    .clickable {
+                        currentOnSelect()
+                        exactDraft = formattedCapsuleValue.removeSuffix(unit)
+                        showExactDialog = true
+                    }
+                    .padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = formattedCapsuleValue,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF060912),
+                    maxLines = 1
+                )
+            }
+
+            // Graduated Numbered Tick-Ruler Canvas
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(30.dp)
+            ) {
+                val w = size.width
+                val h = size.height
+                val cx = w * 0.5f
+                val pxPerMajor = 56.dp.toPx().coerceAtLeast(28f)
+                val minorStep = majorStep / 10f
+                val pxPerMinor = pxPerMajor / 10f
+
+                val halfVisibleMinors = ((w * 0.5f) / pxPerMinor).toInt() + 2
+                val centerMinorIdx = (value / minorStep).roundToInt()
+
+                for (offsetIdx in -halfVisibleMinors..halfVisibleMinors) {
+                    val mIdx = centerMinorIdx + offsetIdx
+                    val tickVal = mIdx * minorStep
+                    if (tickVal < minValue - minorStep * 0.25f || tickVal > maxValue + minorStep * 0.25f) continue
+
+                    val x = cx + ((tickVal - value) / minorStep) * pxPerMinor
+                    if (x < 1f || x > w - 1f) continue
+
+                    val edgeFade = (1f - (abs(x - cx) / (w * 0.52f))).coerceIn(0.14f, 1f)
+                    val isMajor = (mIdx % 10 == 0)
+                    val isMid = (abs(mIdx % 10) == 5)
+
+                    val tickTop = when {
+                        isMajor -> h * 0.42f
+                        isMid -> h * 0.56f
+                        else -> h * 0.68f
+                    }
+                    val tickColor = when {
+                        isMajor -> Color(0xFFB8C2D4).copy(alpha = 0.85f * edgeFade)
+                        isMid -> Color(0xFF7D8799).copy(alpha = 0.72f * edgeFade)
+                        else -> Color(0xFF555E6E).copy(alpha = 0.58f * edgeFade)
+                    }
+                    drawLine(
+                        color = tickColor,
+                        start = Offset(x, tickTop),
+                        end = Offset(x, h - 1.dp.toPx()),
+                        strokeWidth = if (isMajor) 1.35f else 1f
+                    )
+
+                    if (isMajor && abs(x - cx) > 6.dp.toPx()) {
+                        tickTextPaint.alpha = (195f * edgeFade).toInt().coerceIn(30, 215)
+                        drawContext.canvas.nativeCanvas.drawText(
+                            formatRulerTick(tickVal, majorStep),
+                            x,
+                            h * 0.33f,
+                            tickTextPaint
+                        )
+                    }
+                }
+
+                // Crisp Center Vertical Needle pointing from capsule down through ticks
+                drawLine(
+                    color = if (selected) KeyflowBlueBright else Color.White.copy(alpha = 0.90f),
+                    start = Offset(cx, 1.dp.toPx()),
+                    end = Offset(cx, h),
+                    strokeWidth = 1.9.dp.toPx()
+                )
+            }
+        }
+    }
+}
+
+private fun formatRulerTick(v: Float, majorStep: Float): String {
+    if (abs(v) < 0.0004f) return "0"
+    return when {
+        majorStep < 0.09f -> String.format("%.2f", v).trimEnd('0').trimEnd('.')
+        majorStep < 0.95f -> String.format("%.1f", v)
+        else -> v.roundToInt().toString()
+    }
+}
+

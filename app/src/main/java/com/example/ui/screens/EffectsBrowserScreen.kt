@@ -2,6 +2,9 @@
 
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -35,6 +38,8 @@ import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -79,10 +84,12 @@ import com.example.data.model.AudioBand
 import com.example.data.model.CustomEffectPresetDocument
 import com.example.data.model.EffectNode
 import com.example.data.model.Layer
+import com.example.engine.AudioSpectrumSnapshot
 import com.example.engine.EffectCategory
 import com.example.engine.EffectDefinition
 import com.example.engine.EffectThumbnailPreviewer
 import com.example.engine.EffectsCatalog
+import com.example.engine.PluginPackManager
 import com.example.ui.components.AmPrimaryCtaButton
 import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
@@ -103,11 +110,18 @@ import kotlin.math.sin
 @Composable
 fun EffectsBrowserScreen(
     selectedLayer: Layer?,
+    playheadMs: Long = 0L,
+    audioSpectrum: AudioSpectrumSnapshot = AudioSpectrumSnapshot(),
     searchQuery: String,
     selectedCategory: EffectCategory?,
+    selectedPluginSubcategory: String? = null,
+    pluginSuitesRevision: Int = 0,
     cloudPresetsState: UiState<List<CustomEffectPresetDocument>>,
     onSearchChange: (String) -> Unit,
     onCategoryChange: (EffectCategory?) -> Unit,
+    onPluginSubcategoryChange: (String?) -> Unit = {},
+    onOpenPluginManager: () -> Unit = {},
+    onImportPluginPackUri: (Uri) -> Unit = {},
     onAddEffect: (EffectDefinition) -> Unit,
     onUpdateEffectNode: (EffectNode) -> Unit,
     onRemoveEffectNode: (String) -> Unit,
@@ -116,21 +130,39 @@ fun EffectsBrowserScreen(
     onOpenEffectInspector: (String) -> Unit = {},
     onBack: () -> Unit
 ) {
-    val filteredEffects by remember(searchQuery, selectedCategory) {
+    val importPluginLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onImportPluginPackUri(uri)
+        }
+    }
+
+    val filteredEffects by remember(searchQuery, selectedCategory, selectedPluginSubcategory, pluginSuitesRevision) {
         derivedStateOf {
             EffectsCatalog.allEffects.filter { fx ->
                 val matchesCat = selectedCategory == null || fx.category == selectedCategory
+                val matchesPluginSub = if (selectedCategory == EffectCategory.PLUGINS && selectedPluginSubcategory != null) {
+                    val plug = PluginPackManager.findPluginEffect(fx.id)
+                    plug?.category?.equals(selectedPluginSubcategory, ignoreCase = true) == true
+                } else {
+                    true
+                }
                 val matchesQuery = searchQuery.isBlank() ||
                     fx.name.contains(searchQuery, ignoreCase = true) ||
                     fx.id.contains(searchQuery, ignoreCase = true) ||
                     fx.summary.contains(searchQuery, ignoreCase = true)
-                matchesCat && matchesQuery
+                matchesCat && matchesPluginSub && matchesQuery
             }
         }
     }
 
-    var highlightedEffect by remember { mutableStateOf(EffectsCatalog.allEffects.first()) }
-    val layerSig = remember(selectedLayer) { EffectThumbnailPreviewer.layerSignature(selectedLayer) }
+    var highlightedEffect by remember(pluginSuitesRevision) {
+        mutableStateOf(EffectsCatalog.allEffects.first())
+    }
+    val layerSig = remember(selectedLayer, playheadMs / 100L) {
+        EffectThumbnailPreviewer.layerSignature(selectedLayer, playheadMs, audioSpectrum)
+    }
     val addedByEffectId = remember(selectedLayer?.effects) {
         selectedLayer?.effects?.associateBy { it.effectId }.orEmpty()
     }
@@ -148,31 +180,52 @@ fun EffectsBrowserScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Add Effect (${EffectsCatalog.allEffects.size})",
+                            text = "Effects",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = if (selectedLayer != null) {
-                                "Live Low-Res Preview: ${selectedLayer.name} • ${selectedLayer.effects.size} stacked"
-                            } else {
-                                "Select a layer to preview & stack GPU shaders"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AmTealBright
-                        )
+                        if (selectedLayer != null) {
+                            Text(
+                                text = selectedLayer.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AmTealBright
+                            )
+                        }
                     }
                 },
                 actions = {
-                    if (selectedLayer != null && selectedLayer.effects.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
                         AmSquareIconButton(
-                            icon = Icons.Default.BookmarkAdd,
-                            contentDescription = "Save effect chain to Cloud",
-                            tint = AmTeal,
-                            onClick = { onSaveChainAsPreset("${selectedLayer.name} Stack") },
-                            testTag = "save_effect_preset_button",
-                            modifier = Modifier.padding(end = 10.dp)
+                            icon = Icons.Default.FileUpload,
+                            contentDescription = "Import .kfpack / .fppack",
+                            tint = AmTealBright,
+                            onClick = { importPluginLauncher.launch(arrayOf("*/*")) },
+                            sizeDp = 34.dp,
+                            testTag = "effects_import_kfpack_button"
                         )
+                        AmSquareIconButton(
+                            icon = Icons.Default.Extension,
+                            contentDescription = "Effect Suites",
+                            active = selectedCategory == EffectCategory.PLUGINS,
+                            tint = AmTealBright,
+                            onClick = onOpenPluginManager,
+                            sizeDp = 34.dp,
+                            testTag = "effects_open_plugins_button"
+                        )
+                        if (selectedLayer != null && selectedLayer.effects.isNotEmpty()) {
+                            AmSquareIconButton(
+                                icon = Icons.Default.BookmarkAdd,
+                                contentDescription = "Save effect chain to Cloud",
+                                tint = AmTeal,
+                                onClick = { onSaveChainAsPreset("${selectedLayer.name} Stack") },
+                                sizeDp = 34.dp,
+                                testTag = "save_effect_preset_button"
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = SurfaceDark)
@@ -191,7 +244,7 @@ fun EffectsBrowserScreen(
                 value = searchQuery,
                 onValueChange = onSearchChange,
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AmTeal) },
-                placeholder = { Text("Search Effects (S_Glow, Wave Warp, Tiles, RGB...)") },
+                placeholder = { Text("Search") },
                 singleLine = true,
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier
@@ -199,7 +252,6 @@ fun EffectsBrowserScreen(
                     .testTag("effects_search_input")
             )
 
-            // Alight Motion Category Tabs
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -207,7 +259,7 @@ fun EffectsBrowserScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 AmSegmentChip(
-                    label = "All (${EffectsCatalog.allEffects.size})",
+                    label = "All",
                     selected = selectedCategory == null,
                     onClick = { onCategoryChange(null) },
                     compact = true
@@ -223,7 +275,38 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            // Cloud Saved FX Stacks
+            if (selectedCategory == EffectCategory.PLUGINS) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AmSegmentChip(
+                        label = "Suites",
+                        selected = false,
+                        compact = true,
+                        onClick = onOpenPluginManager,
+                        testTag = "effects_manage_suites_chip"
+                    )
+                    AmSegmentChip(
+                        label = "All",
+                        selected = selectedPluginSubcategory == null,
+                        compact = true,
+                        onClick = { onPluginSubcategoryChange(null) }
+                    )
+                    PluginPackManager.OFFICIAL_CATEGORIES.forEach { kfCat ->
+                        AmSegmentChip(
+                            label = kfCat,
+                            selected = selectedPluginSubcategory == kfCat,
+                            compact = true,
+                            onClick = { onPluginSubcategoryChange(kfCat) }
+                        )
+                    }
+                }
+            }
+
             if (cloudPresetsState is UiState.Success && cloudPresetsState.data.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -232,7 +315,6 @@ fun EffectsBrowserScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Saved Presets:", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                     cloudPresetsState.data.forEach { preset ->
                         AmSegmentChip(
                             label = preset.name,
@@ -279,28 +361,22 @@ fun EffectsBrowserScreen(
                 ) {
                     AmEffectThumbnailBox(
                         selectedLayer = selectedLayer,
+                        playheadMs = playheadMs,
+                        audioSpectrum = audioSpectrum,
                         layerSig = layerSig,
                         effect = highlightedEffect,
                         accent = AmTealBright,
                         sizeDp = 50.dp
                     )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = highlightedEffect.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = AmTealBright
-                        )
-                        Text(
-                            text = highlightedEffect.summary,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        text = highlightedEffect.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AmTealBright,
+                        modifier = Modifier.weight(1f)
+                    )
                     AmPrimaryCtaButton(
-                        text = "+ STANDARD",
+                        text = "Add",
                         icon = Icons.Default.Add,
                         onClick = { onAddEffect(highlightedEffect) },
                         compact = true
@@ -324,6 +400,8 @@ fun EffectsBrowserScreen(
                     AmEffectGridTile(
                         effect = fx,
                         selectedLayer = selectedLayer,
+                        playheadMs = playheadMs,
+                        audioSpectrum = audioSpectrum,
                         layerSig = layerSig,
                         isHighlighted = highlightedEffect.id == fx.id,
                         addedNode = existingNode,
@@ -344,6 +422,8 @@ fun EffectsBrowserScreen(
 @Composable
 private fun AmEffectThumbnailBox(
     selectedLayer: Layer?,
+    playheadMs: Long,
+    audioSpectrum: AudioSpectrumSnapshot,
     layerSig: String,
     effect: EffectDefinition,
     accent: Color,
@@ -362,7 +442,9 @@ private fun AmEffectThumbnailBox(
             value = EffectThumbnailPreviewer.generateLowResEffectThumbnail(
                 context = context,
                 selectedLayer = selectedLayer,
-                effect = effect
+                effect = effect,
+                playheadMs = playheadMs,
+                audio = audioSpectrum
             )
         }
     }
@@ -390,11 +472,18 @@ private fun AmEffectThumbnailBox(
                 val cx = size.width * 0.5f
                 val cy = size.height * 0.5f
                 when (effect.category) {
-                    EffectCategory.DESKTOP_HOMAGES -> {
+                    EffectCategory.PLUGINS -> {
+                        drawCircle(AmTealBright.copy(alpha = 0.28f), radius = size.minDimension * 0.46f)
+                        drawRect(AmTealBright, style = Stroke(width = 2.2f))
+                    }
+                    EffectCategory.DESKTOP_HOMAGE,
+                    EffectCategory.BLUR_OPTICS,
+                    EffectCategory.PARTICLES_LIGHT -> {
                         drawCircle(accent.copy(alpha = 0.3f), radius = size.minDimension * 0.48f)
                         drawCircle(accent, radius = size.minDimension * 0.26f, style = Stroke(width = 2.4f))
                     }
-                    EffectCategory.NODE_PROCEDURAL -> {
+                    EffectCategory.TRANSITIONS,
+                    EffectCategory.CAMERA_SHAKE -> {
                         val wave = Path().apply {
                             moveTo(0f, cy)
                             for (x in 0..20) {
@@ -405,12 +494,14 @@ private fun AmEffectThumbnailBox(
                         }
                         drawPath(wave, accent, style = Stroke(width = 2.4f))
                     }
-                    EffectCategory.ALIGHT_STAPLES -> {
+                    EffectCategory.ALIGHT_STAPLES,
+                    EffectCategory.STYLIZE_EDGES -> {
                         drawRect(accent, style = Stroke(width = 2.2f))
                         drawLine(accent.copy(alpha = 0.6f), Offset(0f, cy), Offset(size.width, cy), strokeWidth = 1.4f)
                         drawLine(accent.copy(alpha = 0.6f), Offset(cx, 0f), Offset(cx, size.height), strokeWidth = 1.4f)
                     }
-                    EffectCategory.VIRAL_SOCIAL -> {
+                    EffectCategory.COLOR_LUTS,
+                    EffectCategory.GLITCH_VHS -> {
                         drawCircle(ElectricBlue.copy(alpha = 0.8f), radius = 7f, center = Offset(cx - 3f, cy))
                         drawCircle(NeonPink.copy(alpha = 0.8f), radius = 7f, center = Offset(cx + 3f, cy))
                     }
@@ -424,6 +515,8 @@ private fun AmEffectThumbnailBox(
 private fun AmEffectGridTile(
     effect: EffectDefinition,
     selectedLayer: Layer?,
+    playheadMs: Long,
+    audioSpectrum: AudioSpectrumSnapshot,
     layerSig: String,
     isHighlighted: Boolean,
     addedNode: EffectNode?,
@@ -431,10 +524,11 @@ private fun AmEffectGridTile(
     onRemoveAdded: (() -> Unit)?
 ) {
     val accent = when (effect.category) {
-        EffectCategory.DESKTOP_HOMAGES -> ElectricBlue
-        EffectCategory.NODE_PROCEDURAL -> AudioCyan
-        EffectCategory.ALIGHT_STAPLES -> AmTeal
-        EffectCategory.VIRAL_SOCIAL -> NeonPink
+        EffectCategory.PLUGINS -> AmTealBright
+        EffectCategory.DESKTOP_HOMAGE, EffectCategory.BLUR_OPTICS -> ElectricBlue
+        EffectCategory.TRANSITIONS, EffectCategory.PARTICLES_LIGHT -> AudioCyan
+        EffectCategory.ALIGHT_STAPLES, EffectCategory.STYLIZE_EDGES -> AmTeal
+        EffectCategory.COLOR_LUTS, EffectCategory.GLITCH_VHS, EffectCategory.CAMERA_SHAKE -> NeonPink
     }
 
     Box(
@@ -461,9 +555,11 @@ private fun AmEffectGridTile(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Live Low-Quality Layer + Effect Thumbnail Preview!
+            // Live Current-Frame Compressed (RGB_565) Layer + Effect Thumbnail Preview!
             AmEffectThumbnailBox(
                 selectedLayer = selectedLayer,
+                playheadMs = playheadMs,
+                audioSpectrum = audioSpectrum,
                 layerSig = layerSig,
                 effect = effect,
                 accent = accent,
@@ -479,6 +575,24 @@ private fun AmEffectGridTile(
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
+        }
+
+        if (effect.category == EffectCategory.PLUGINS && addedNode == null) {
+            val plug = remember(effect.id) { PluginPackManager.findPluginEffect(effect.id) }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(AmTealBright.copy(alpha = 0.22f))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = if ((plug?.passes?.size ?: 1) > 1) "${plug?.passes?.size}P" else "KF",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = AmTealBright
+                )
+            }
         }
 
         // Quick Delete badge when this effect is already stacked on the selected layer
@@ -552,21 +666,14 @@ private fun AmActiveEffectStripCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Column {
-                        Text(
-                            text = node.displayName,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "Tap for 5 Params • ◆ Keyframes & Curve ▸",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AmTealBright
-                        )
-                    }
+                    Text(
+                        text = node.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 IconButton(
                     onClick = { onUpdate(node.copy(enabled = !node.enabled)) },
@@ -595,7 +702,7 @@ private fun AmActiveEffectStripCard(
             }
 
             Text(
-                text = "Strength ${(node.intensity * 100).toInt()}%",
+                text = "${(node.intensity * 100).toInt()}%",
                 style = MaterialTheme.typography.labelSmall,
                 color = TextSecondary
             )
@@ -608,7 +715,7 @@ private fun AmActiveEffectStripCard(
             )
 
             Text(
-                text = "Frequency / Radius ${(node.secondaryParam * 100).toInt()}%",
+                text = "${(node.secondaryParam * 100).toInt()}%",
                 style = MaterialTheme.typography.labelSmall,
                 color = TextSecondary
             )
@@ -626,7 +733,7 @@ private fun AmActiveEffectStripCard(
             ) {
                 AudioBand.entries.forEach { band ->
                     AmSegmentChip(
-                        label = if (band == AudioBand.NONE) "Manual" else band.name,
+                        label = if (band == AudioBand.NONE) "Off" else band.name,
                         selected = node.audioBoundBand == band,
                         onClick = { onUpdate(node.copy(audioBoundBand = band)) },
                         compact = true

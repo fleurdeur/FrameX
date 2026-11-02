@@ -146,6 +146,27 @@ class FramePollutionGlRenderer(
     private var fboAllocW = 0
     private var fboAllocH = 0
 
+    private val pluginFboIds = IntArray(3)
+    private val pluginFboTexIds = IntArray(3)
+    private var pluginFboW = 0
+    private var pluginFboH = 0
+
+    private class CompiledPluginPass(
+        val program: Int,
+        val posLoc: Int,
+        val uvLoc: Int,
+        val texLoc: Int,
+        val origTexLoc: Int,
+        val timeLoc: Int,
+        val texelSizeLoc: Int,
+        val resLoc: Int,
+        val flipLoc: Int,
+        val paramLocs: Map<String, Int>
+    )
+
+    private val compiledPluginCache = HashMap<String, List<CompiledPluginPass>>()
+    private var compiledPluginGen = -1L
+
     private var cachedPlaybackTexId = 0
     private var cachedPlaybackTexW = 0
     private var cachedPlaybackTexH = 0
@@ -216,6 +237,13 @@ class FramePollutionGlRenderer(
         fboAllocH = 0
         fboIds[0] = 0
         fboIds[1] = 0
+        pluginFboW = 0
+        pluginFboH = 0
+        pluginFboIds[0] = 0
+        pluginFboIds[1] = 0
+        pluginFboIds[2] = 0
+        compiledPluginCache.clear()
+        compiledPluginGen = -1L
         cachedPlaybackTexId = 0
         cachedPlaybackTexW = 0
         cachedPlaybackTexH = 0
@@ -357,8 +385,14 @@ class FramePollutionGlRenderer(
             .asSequence()
             .filter { it.visible && timeMs in it.startTimeMs..it.endTimeMs }
             .flatMap { lyr ->
+                val is2DLayer = lyr.type != LayerType.MODEL_3D &&
+                    lyr.type != LayerType.NULL_OBJECT &&
+                    lyr.type != LayerType.CAMERA &&
+                    lyr.type != LayerType.AUDIO
                 lyr.effects.asSequence().filter { fx ->
-                    fx.enabled && !(lyr.type == LayerType.TEXT && (fx.effectId == "Text_Transform" || fx.effectId == "Text_Spacing"))
+                    fx.enabled &&
+                        !(lyr.type == LayerType.TEXT && (fx.effectId == "Text_Transform" || fx.effectId == "Text_Spacing")) &&
+                        !(is2DLayer && PluginPackManager.isPluginEffect(fx.effectId))
                 }
             }
             .toList()
@@ -396,19 +430,32 @@ class FramePollutionGlRenderer(
             val evalFx = AnimationEvaluator.evaluateEffectNode(fx, timeMs, audio)
             if (evalFx.mixFraction <= 0.002f) return@forEach
 
-            val writeIndex = 1 - readIndex
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
-            GLES20.glViewport(0, 0, internalW, internalH)
-            drawEffectPass(
-                inputTex = fboTexIds[readIndex],
-                effect = fx,
-                evalFx = evalFx,
-                timeMs = timeMs,
-                resW = internalW.toFloat(),
-                resH = internalH.toFloat(),
-                shaderDetailLevel = quality.shaderDetailLevel
-            )
-            readIndex = writeIndex
+            val pluginDef = PluginPackManager.findPluginEffect(fx.effectId)
+            if (pluginDef != null) {
+                readIndex = runCompositionPluginEffect(
+                    plugin = pluginDef,
+                    effect = fx,
+                    readIndex = readIndex,
+                    timeMs = timeMs,
+                    audio = audio,
+                    w = internalW,
+                    h = internalH
+                )
+            } else {
+                val writeIndex = 1 - readIndex
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
+                GLES20.glViewport(0, 0, internalW, internalH)
+                drawEffectPass(
+                    inputTex = fboTexIds[readIndex],
+                    effect = fx,
+                    evalFx = evalFx,
+                    timeMs = timeMs,
+                    resW = internalW.toFloat(),
+                    resH = internalH.toFloat(),
+                    shaderDetailLevel = quality.shaderDetailLevel
+                )
+                readIndex = writeIndex
+            }
         }
 
         // Final Output Pass to Screen Surface
@@ -455,24 +502,42 @@ class FramePollutionGlRenderer(
         var readIndex = 0
         project.layers.forEach { layer ->
             if (!layer.visible || timeMs !in layer.startTimeMs..layer.endTimeMs) return@forEach
+            val is2DLayer = layer.type != LayerType.MODEL_3D &&
+                layer.type != LayerType.NULL_OBJECT &&
+                layer.type != LayerType.CAMERA &&
+                layer.type != LayerType.AUDIO
             layer.effects.forEach { fx ->
                 if (!fx.enabled) return@forEach
                 if (layer.type == LayerType.TEXT && (fx.effectId == "Text_Transform" || fx.effectId == "Text_Spacing")) return@forEach
+                if (is2DLayer && PluginPackManager.isPluginEffect(fx.effectId)) return@forEach
                 val evalFx = AnimationEvaluator.evaluateEffectNode(fx, timeMs, audio)
                 if (evalFx.mixFraction > 0.002f) {
-                    val writeIndex = 1 - readIndex
-                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
-                    GLES20.glViewport(0, 0, w, h)
-                    drawEffectPass(
-                        inputTex = fboTexIds[readIndex],
-                        effect = fx,
-                        evalFx = evalFx,
-                        timeMs = timeMs,
-                        resW = w.toFloat(),
-                        resH = h.toFloat(),
-                        shaderDetailLevel = quality.shaderDetailLevel
-                    )
-                    readIndex = writeIndex
+                    val pluginDef = PluginPackManager.findPluginEffect(fx.effectId)
+                    if (pluginDef != null) {
+                        readIndex = runCompositionPluginEffect(
+                            plugin = pluginDef,
+                            effect = fx,
+                            readIndex = readIndex,
+                            timeMs = timeMs,
+                            audio = audio,
+                            w = w,
+                            h = h
+                        )
+                    } else {
+                        val writeIndex = 1 - readIndex
+                        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
+                        GLES20.glViewport(0, 0, w, h)
+                        drawEffectPass(
+                            inputTex = fboTexIds[readIndex],
+                            effect = fx,
+                            evalFx = evalFx,
+                            timeMs = timeMs,
+                            resW = w.toFloat(),
+                            resH = h.toFloat(),
+                            shaderDetailLevel = quality.shaderDetailLevel
+                        )
+                        readIndex = writeIndex
+                    }
                 }
             }
         }
@@ -620,51 +685,142 @@ class FramePollutionGlRenderer(
 
             // Configure GL blend mode (including Clipping Mask destination-in style when flagged)
             val prevLayerIsMask = idx > 0 && project.layers[idx - 1].isClippingMask && project.layers[idx - 1].visible
-            configureLayerBlendState(layer.blendMode, layer.isClippingMask, prevLayerIsMask)
-
             val (baseHalfW, baseHalfH) = computeLayerBaseHalfSizeFbo(layer, texEntry.aspectWOverH, fboW, fboH)
 
-            if (layer.motionBlurEnabled && quality.shaderDetailLevel >= 1) {
-                val shutterDtMs = ((layer.shutterAngle / 360f) * 28f).toLong().coerceIn(6L, 28L)
-                val prevTr = AnimationEvaluator.evaluateWorldTransform(
-                    layer = layer,
-                    allLayers = project.layers,
-                    timeMs = (timeMs - shutterDtMs).coerceAtLeast(0L),
-                    audio = audio,
-                    applyActiveCamera = true
-                )
-                val moved = abs(currTr.posX - prevTr.posX) > 0.6f ||
-                    abs(currTr.posY - prevTr.posY) > 0.6f ||
-                    abs(currTr.rotZ - prevTr.rotZ) > 0.4f ||
-                    abs(currTr.scale - prevTr.scale) > 0.01f
+            val layerPluginNodes = layer.effects.filter { fx ->
+                fx.enabled && PluginPackManager.isPluginEffect(fx.effectId)
+            }
+            val pluginUsesMotionBlur = layerPluginNodes.any { fx ->
+                PluginPackManager.findPluginEffect(fx.effectId)?.usesNativeMotionBlur == true
+            }
+            val shouldMotionBlur = (layer.motionBlurEnabled || pluginUsesMotionBlur) && quality.shaderDetailLevel >= 1
 
-                if (moved) {
-                    val samples = if (quality.shaderDetailLevel >= 2) 4 else 2
-                    for (s in 0 until samples) {
-                        val f = s.toFloat() / (samples - 1).toFloat()
-                        val interp = EvaluatedTransform(
-                            posX = prevTr.posX + (currTr.posX - prevTr.posX) * f,
-                            posY = prevTr.posY + (currTr.posY - prevTr.posY) * f,
-                            posZ = currTr.posZ,
-                            pivotX = currTr.pivotX,
-                            pivotY = currTr.pivotY,
-                            scale = prevTr.scale + (currTr.scale - prevTr.scale) * f,
-                            rotX = currTr.rotX,
-                            rotY = currTr.rotY,
-                            rotZ = prevTr.rotZ + (currTr.rotZ - prevTr.rotZ) * f,
-                            opacity = (currTr.opacity / samples.toFloat()) * 1.35f
-                        )
-                        drawTransformedLayerEntry(texEntry, layer, interp, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
-                    }
-                    return@forEachIndexed
+            if (layerPluginNodes.isNotEmpty()) {
+                val wInt = fboW.toInt().coerceAtLeast(16)
+                val hInt = fboH.toInt().coerceAtLeast(16)
+                ensurePluginLayerFramebuffers(wInt, hInt)
+
+                // Render isolated layer into pluginFboIds[0] with full composition padding so expandBounds glows/rays never clip!
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[0])
+                GLES20.glViewport(0, 0, wInt, hInt)
+                GLES20.glClearColor(0f, 0f, 0f, 0f)
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+                if (shouldMotionBlur) {
+                    GLES20.glEnable(GLES20.GL_BLEND)
+                    GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                    drawLayerWithOptionalMotionBlur(
+                        texEntry = texEntry,
+                        layer = layer,
+                        project = project,
+                        currTr = currTr,
+                        timeMs = timeMs,
+                        audio = audio,
+                        quality = quality,
+                        baseHalfW = baseHalfW,
+                        baseHalfH = baseHalfH,
+                        scaleToFbo = scaleToFbo,
+                        fboW = fboW,
+                        fboH = fboH,
+                        forceMotionBlur = true
+                    )
+                } else {
+                    GLES20.glDisable(GLES20.GL_BLEND)
+                    drawTransformedLayerEntry(texEntry, layer, currTr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
                 }
+
+                val outIdx = executePluginNodeChain(
+                    pluginNodes = layerPluginNodes,
+                    initialBufIdx = 0,
+                    timeMs = timeMs,
+                    audio = audio,
+                    w = wInt,
+                    h = hInt
+                )
+
+                // Composite processed plugin layer back onto fboIds[0] with exact layer blend mode & clipping mask
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[0])
+                GLES20.glViewport(0, 0, wInt, hInt)
+                GLES20.glEnable(GLES20.GL_BLEND)
+                configureLayerBlendState(layer.blendMode, layer.isClippingMask, prevLayerIsMask)
+                drawQuadWithTexture(pluginFboTexIds[outIdx], flipY = false)
+                return@forEachIndexed
             }
 
-            drawTransformedLayerEntry(texEntry, layer, currTr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
+            GLES20.glEnable(GLES20.GL_BLEND)
+            configureLayerBlendState(layer.blendMode, layer.isClippingMask, prevLayerIsMask)
+            drawLayerWithOptionalMotionBlur(
+                texEntry = texEntry,
+                layer = layer,
+                project = project,
+                currTr = currTr,
+                timeMs = timeMs,
+                audio = audio,
+                quality = quality,
+                baseHalfW = baseHalfW,
+                baseHalfH = baseHalfH,
+                scaleToFbo = scaleToFbo,
+                fboW = fboW,
+                fboH = fboH,
+                forceMotionBlur = shouldMotionBlur
+            )
         }
 
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    private fun drawLayerWithOptionalMotionBlur(
+        texEntry: GpuLayerTexture,
+        layer: Layer,
+        project: Project,
+        currTr: EvaluatedTransform,
+        timeMs: Long,
+        audio: AudioSpectrumSnapshot,
+        quality: PreviewQuality,
+        baseHalfW: Float,
+        baseHalfH: Float,
+        scaleToFbo: Float,
+        fboW: Float,
+        fboH: Float,
+        forceMotionBlur: Boolean
+    ) {
+        if (forceMotionBlur) {
+            val shutterDtMs = ((layer.shutterAngle / 360f) * 28f).toLong().coerceIn(6L, 28L)
+            val prevTr = AnimationEvaluator.evaluateWorldTransform(
+                layer = layer,
+                allLayers = project.layers,
+                timeMs = (timeMs - shutterDtMs).coerceAtLeast(0L),
+                audio = audio,
+                applyActiveCamera = true
+            )
+            val moved = abs(currTr.posX - prevTr.posX) > 0.6f ||
+                abs(currTr.posY - prevTr.posY) > 0.6f ||
+                abs(currTr.rotZ - prevTr.rotZ) > 0.4f ||
+                abs(currTr.scale - prevTr.scale) > 0.01f
+
+            if (moved) {
+                val samples = if (quality.shaderDetailLevel >= 2) 4 else 2
+                for (s in 0 until samples) {
+                    val f = s.toFloat() / (samples - 1).toFloat()
+                    val interp = EvaluatedTransform(
+                        posX = prevTr.posX + (currTr.posX - prevTr.posX) * f,
+                        posY = prevTr.posY + (currTr.posY - prevTr.posY) * f,
+                        posZ = currTr.posZ,
+                        pivotX = currTr.pivotX,
+                        pivotY = currTr.pivotY,
+                        scale = prevTr.scale + (currTr.scale - prevTr.scale) * f,
+                        rotX = currTr.rotX,
+                        rotY = currTr.rotY,
+                        rotZ = prevTr.rotZ + (currTr.rotZ - prevTr.rotZ) * f,
+                        opacity = (currTr.opacity / samples.toFloat()) * 1.35f
+                    )
+                    drawTransformedLayerEntry(texEntry, layer, interp, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
+                }
+                return
+            }
+        }
+        drawTransformedLayerEntry(texEntry, layer, currTr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
     }
 
     private fun configureLayerBlendState(blendMode: String, isMaskSource: Boolean, maskedByBelow: Boolean) {
@@ -884,14 +1040,24 @@ class FramePollutionGlRenderer(
 
                 if (mediaBmp != null && !mediaBmp.isRecycled) {
                     val bmpId = System.identityHashCode(mediaBmp)
-                    if (bmpId != entry.bitmapIdentity) {
+                    if (bmpId != entry.bitmapIdentity || entry.signature != "media") {
                         uploadBitmapToEntry(entry, mediaBmp, "media")
                         entry.bitmapIdentity = bmpId
                     }
                     return entry
                 }
 
-                // Fallback sleek media card ONLY if mediaUri is blank (e.g., template card) or decoding first frame
+                // Frame-Hold: if a real video/image frame was already uploaded to GPU, keep displaying it
+                // instead of overwriting the texture with a colored fallback rectangle during seeks/lag!
+                if (entry.signature == "media" && entry.texW > 0 && entry.texH > 0) {
+                    return entry
+                }
+
+                // Never flash a colored rectangle while an imported video/image decodes its very first frame
+                if (layer.mediaUri.isNotBlank()) {
+                    return null
+                }
+
                 val fallbackSig = "fallback|${layer.type}|${layer.colorHex}|${layer.strokeEnabled}|${layer.strokeWidth}"
                 if (entry.signature != fallbackSig) {
                     val bmp = rasterizeFallbackMediaCard(layer)
@@ -1436,6 +1602,291 @@ class FramePollutionGlRenderer(
         fboAllocH = h
     }
 
+    private fun ensurePluginLayerFramebuffers(w: Int, h: Int) {
+        if (pluginFboW == w && pluginFboH == h && pluginFboIds[0] != 0) return
+        if (pluginFboIds[0] != 0) {
+            GLES20.glDeleteFramebuffers(3, pluginFboIds, 0)
+            GLES20.glDeleteTextures(3, pluginFboTexIds, 0)
+        }
+        GLES20.glGenFramebuffers(3, pluginFboIds, 0)
+        GLES20.glGenTextures(3, pluginFboTexIds, 0)
+        for (i in 0..2) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, pluginFboTexIds[i])
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[i])
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, pluginFboTexIds[i], 0)
+        }
+        pluginFboW = w
+        pluginFboH = h
+    }
+
+    private fun executePluginNodeChain(
+        pluginNodes: List<EffectNode>,
+        initialBufIdx: Int,
+        timeMs: Long,
+        audio: AudioSpectrumSnapshot,
+        w: Int,
+        h: Int
+    ): Int {
+        GLES20.glDisable(GLES20.GL_BLEND)
+        var curIdx = initialBufIdx
+        pluginNodes.forEach { fxNode ->
+            val plugin = PluginPackManager.findPluginEffect(fxNode.effectId) ?: return@forEach
+            val mixFraction = (AnimationEvaluator.evaluateProperty(fxNode.mixProp, timeMs, audio) / 100f).coerceIn(0f, 1f)
+            if (mixFraction <= 0.002f) return@forEach
+
+            val compiledPasses = getOrCompilePluginPasses(plugin)
+            if (compiledPasses.isEmpty()) return@forEach
+
+            val evalFloats = AnimationEvaluator.evaluatePluginUniformFloats(plugin, fxNode, timeMs, audio)
+            val origIdx = curIdx
+            val scratchA = (origIdx + 1) % 3
+            val scratchB = (origIdx + 2) % 3
+            var passReadIdx = origIdx
+
+            compiledPasses.forEachIndexed { passIdx, passProg ->
+                val writeIdx = if (passIdx % 2 == 0) scratchA else scratchB
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[writeIdx])
+                GLES20.glViewport(0, 0, w, h)
+                GLES20.glClearColor(0f, 0f, 0f, 0f)
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                drawSinglePluginPass(
+                    pass = passProg,
+                    plugin = plugin,
+                    fxNode = fxNode,
+                    evalFloats = evalFloats,
+                    inputTex = pluginFboTexIds[passReadIdx],
+                    origTex = pluginFboTexIds[origIdx],
+                    timeSec = timeMs / 1000f,
+                    resW = w.toFloat(),
+                    resH = h.toFloat()
+                )
+                passReadIdx = writeIdx
+            }
+            curIdx = passReadIdx
+        }
+        return curIdx
+    }
+
+    private fun runCompositionPluginEffect(
+        plugin: InstalledPluginEffect,
+        effect: EffectNode,
+        readIndex: Int,
+        timeMs: Long,
+        audio: AudioSpectrumSnapshot,
+        w: Int,
+        h: Int
+    ): Int {
+        ensurePluginLayerFramebuffers(w, h)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[0])
+        GLES20.glViewport(0, 0, w, h)
+        drawQuadWithTexture(fboTexIds[readIndex], flipY = false)
+
+        val outPluginIdx = executePluginNodeChain(
+            pluginNodes = listOf(effect),
+            initialBufIdx = 0,
+            timeMs = timeMs,
+            audio = audio,
+            w = w,
+            h = h
+        )
+        val writeIndex = 1 - readIndex
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
+        GLES20.glViewport(0, 0, w, h)
+        drawQuadWithTexture(pluginFboTexIds[outPluginIdx], flipY = false)
+        return writeIndex
+    }
+
+    private fun drawSinglePluginPass(
+        pass: CompiledPluginPass,
+        plugin: InstalledPluginEffect,
+        fxNode: EffectNode,
+        evalFloats: Map<String, Float>,
+        inputTex: Int,
+        origTex: Int,
+        timeSec: Float,
+        resW: Float,
+        resH: Float
+    ) {
+        GLES20.glUseProgram(pass.program)
+
+        if (pass.posLoc >= 0) {
+            quadBuffer.position(0)
+            GLES20.glEnableVertexAttribArray(pass.posLoc)
+            GLES20.glVertexAttribPointer(pass.posLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuffer)
+        }
+        if (pass.uvLoc >= 0) {
+            quadBuffer.position(2)
+            GLES20.glEnableVertexAttribArray(pass.uvLoc)
+            GLES20.glVertexAttribPointer(pass.uvLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuffer)
+        }
+        if (pass.flipLoc >= 0) {
+            GLES20.glUniform1f(pass.flipLoc, 0f)
+        }
+        if (pass.timeLoc >= 0) {
+            GLES20.glUniform1f(pass.timeLoc, timeSec)
+        }
+        if (pass.texelSizeLoc >= 0) {
+            GLES20.glUniform2f(pass.texelSizeLoc, 1f / resW.coerceAtLeast(1f), 1f / resH.coerceAtLeast(1f))
+        }
+        if (pass.resLoc >= 0) {
+            GLES20.glUniform2f(pass.resLoc, resW, resH)
+        }
+
+        plugin.parameters.forEach { param ->
+            val loc = pass.paramLocs[param.key] ?: -1
+            if (loc >= 0) {
+                when (param.type) {
+                    PluginParamType.FLOAT, PluginParamType.BOOL -> {
+                        val v = evalFloats[param.key] ?: param.defaultFloat
+                        GLES20.glUniform1f(loc, v)
+                    }
+                    PluginParamType.COLOR -> {
+                        val hex = fxNode.customColorFor(param.key, param.defaultColorHex)
+                        val cInt = runCatching { Color.parseColor(hex) }.getOrDefault(Color.WHITE)
+                        GLES20.glUniform3f(
+                            loc,
+                            Color.red(cInt) / 255f,
+                            Color.green(cInt) / 255f,
+                            Color.blue(cInt) / 255f
+                        )
+                    }
+                }
+            }
+        }
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, inputTex)
+        if (pass.texLoc >= 0) {
+            GLES20.glUniform1i(pass.texLoc, 0)
+        }
+
+        if (pass.origTexLoc >= 0) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, origTex)
+            GLES20.glUniform1i(pass.origTexLoc, 1)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        }
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        if (pass.posLoc >= 0) GLES20.glDisableVertexAttribArray(pass.posLoc)
+        if (pass.uvLoc >= 0) GLES20.glDisableVertexAttribArray(pass.uvLoc)
+    }
+
+    private fun getOrCompilePluginPasses(plugin: InstalledPluginEffect): List<CompiledPluginPass> {
+        val gen = PluginPackManager.currentGlGeneration()
+        if (compiledPluginGen != gen) {
+            compiledPluginCache.values.flatten().forEach { pass ->
+                if (pass.program != 0 && pass.program != quadProgram) {
+                    runCatching { GLES20.glDeleteProgram(pass.program) }
+                }
+            }
+            compiledPluginCache.clear()
+            compiledPluginGen = gen
+        }
+        compiledPluginCache[plugin.id]?.let { return it }
+
+        val compiled = mutableListOf<CompiledPluginPass>()
+        var errorSummary: String? = null
+
+        plugin.passes.forEach { shaderPass ->
+            val rawSrc = shaderPass.glslSource.trim()
+            val normalizedFs = if (rawSrc.contains("precision ")) {
+                rawSrc
+            } else {
+                "precision mediump float;\n$rawSrc"
+            }
+            val usesVUv = !normalizedFs.contains("vTex") && normalizedFs.contains("vUv")
+            val vsSrc = if (usesVUv) QUAD_VERTEX_SHADER else PLUGIN_QUAD_VERTEX_SHADER
+
+            val (prog, err) = tryBuildCustomProgram(vsSrc, normalizedFs)
+            if (prog != 0) {
+                val pLocs = plugin.parameters.associate { p ->
+                    p.key to GLES20.glGetUniformLocation(prog, p.uniformName)
+                }
+                compiled.add(
+                    CompiledPluginPass(
+                        program = prog,
+                        posLoc = GLES20.glGetAttribLocation(prog, "aPosition"),
+                        uvLoc = GLES20.glGetAttribLocation(prog, "aTexCoord"),
+                        texLoc = GLES20.glGetUniformLocation(prog, "uTexture"),
+                        origTexLoc = GLES20.glGetUniformLocation(prog, "uOriginalTexture"),
+                        timeLoc = GLES20.glGetUniformLocation(prog, "uTime"),
+                        texelSizeLoc = GLES20.glGetUniformLocation(prog, "uTexelSize"),
+                        resLoc = GLES20.glGetUniformLocation(prog, "uResolution"),
+                        flipLoc = GLES20.glGetUniformLocation(prog, "uFlipY"),
+                        paramLocs = pLocs
+                    )
+                )
+            } else {
+                errorSummary = "${shaderPass.fileName}: ${err ?: "GLSL compile error"}"
+                // Fallback passthrough so an invalid user shader never blanks out the canvas
+                compiled.add(
+                    CompiledPluginPass(
+                        program = quadProgram,
+                        posLoc = quadPosLoc,
+                        uvLoc = quadUvLoc,
+                        texLoc = quadTexLoc,
+                        origTexLoc = -1,
+                        timeLoc = -1,
+                        texelSizeLoc = -1,
+                        resLoc = -1,
+                        flipLoc = quadFlipLoc,
+                        paramLocs = emptyMap()
+                    )
+                )
+            }
+        }
+
+        PluginPackManager.recordShaderDiagnostic(plugin.id, errorSummary)
+        compiledPluginCache[plugin.id] = compiled
+        return compiled
+    }
+
+    private fun tryBuildCustomProgram(vsSrc: String, fsSrc: String): Pair<Int, String?> {
+        val status = IntArray(1)
+        val vs = GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER)
+        GLES20.glShaderSource(vs, vsSrc)
+        GLES20.glCompileShader(vs)
+        GLES20.glGetShaderiv(vs, GLES20.GL_COMPILE_STATUS, status, 0)
+        if (status[0] == 0) {
+            val log = GLES20.glGetShaderInfoLog(vs)
+            GLES20.glDeleteShader(vs)
+            return 0 to log
+        }
+
+        val fs = GLES20.glCreateShader(GLES20.GL_FRAGMENT_SHADER)
+        GLES20.glShaderSource(fs, fsSrc)
+        GLES20.glCompileShader(fs)
+        GLES20.glGetShaderiv(fs, GLES20.GL_COMPILE_STATUS, status, 0)
+        if (status[0] == 0) {
+            val log = GLES20.glGetShaderInfoLog(fs)
+            GLES20.glDeleteShader(vs)
+            GLES20.glDeleteShader(fs)
+            return 0 to log
+        }
+
+        val prog = GLES20.glCreateProgram()
+        GLES20.glAttachShader(prog, vs)
+        GLES20.glAttachShader(prog, fs)
+        GLES20.glLinkProgram(prog)
+        GLES20.glDeleteShader(vs)
+        GLES20.glDeleteShader(fs)
+        GLES20.glGetProgramiv(prog, GLES20.GL_LINK_STATUS, status, 0)
+        if (status[0] == 0) {
+            val log = GLES20.glGetProgramInfoLog(prog)
+            GLES20.glDeleteProgram(prog)
+            return 0 to log
+        }
+        return prog to null
+    }
+
     private fun buildDirectFloatBuffer(arr: FloatArray): FloatBuffer =
         ByteBuffer.allocateDirect(arr.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
             put(arr)
@@ -1481,6 +1932,16 @@ class FramePollutionGlRenderer(
             path.close()
             return path
         }
+
+        const val PLUGIN_QUAD_VERTEX_SHADER = """
+            attribute vec2 aPosition;
+            attribute vec2 aTexCoord;
+            varying vec2 vTex;
+            void main() {
+                gl_Position = vec4(aPosition, 0.0, 1.0);
+                vTex = aTexCoord;
+            }
+        """
 
         const val QUAD_VERTEX_SHADER = """
             attribute vec2 aPosition;

@@ -104,7 +104,7 @@ fun AudioReactorScreen(
             micPermissionNote = null
             onToggleLiveMic(true)
         } else {
-            micPermissionNote = "Microphone declined — running BPM Harmonic Stem Analyzer."
+            micPermissionNote = "Mic off"
         }
     }
 
@@ -123,12 +123,12 @@ fun AudioReactorScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Audio Reactor & Beat Flags",
+                            text = "Audio",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${beatMarkers.size} Beat Flags • $localBpm BPM",
+                            text = "$localBpm BPM",
                             style = MaterialTheme.typography.labelSmall,
                             color = AmTealBright
                         )
@@ -161,7 +161,7 @@ fun AudioReactorScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isLiveMicActive) "LIVE FFT" else "MIC FFT",
+                            text = "Mic",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -226,17 +226,16 @@ fun AudioReactorScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Frequency Isolation (Radix-2 FFT)",
+                        text = "Spectrum",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
-                    BandMeterRow("Sub-Bass / Kick (20–160 Hz)", spectrum.bass, NeonPink)
-                    BandMeterRow("Vocals / Mids (160–2k Hz)", spectrum.mids, ElectricBlue)
-                    BandMeterRow("Hi-Hats / Treble (2k–16k Hz)", spectrum.treble, AmTeal)
+                    BandMeterRow("Bass", spectrum.bass, NeonPink)
+                    BandMeterRow("Mids", spectrum.mids, ElectricBlue)
+                    BandMeterRow("Treble", spectrum.treble, AmTeal)
                 }
             }
 
-            // Alight Motion Tick-Wheel Tempo & Auto-Beat Flag Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                 shape = RoundedCornerShape(12.dp),
@@ -249,7 +248,7 @@ fun AudioReactorScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "Auto-Beat Bookmark Generator",
+                        text = "Beat Detection",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -258,7 +257,7 @@ fun AudioReactorScreen(
                         minValue = 60f,
                         maxValue = 200f,
                         unit = " BPM",
-                        label = "Project Tempo",
+                        label = "BPM",
                         onValueChange = { localBpm = it.toInt() },
                         testTag = "bpm_tick_scrubber"
                     )
@@ -267,12 +266,12 @@ fun AudioReactorScreen(
                         minValue = 20f,
                         maxValue = 100f,
                         unit = "%",
-                        label = "Onset Flux Sensitivity",
+                        label = "Sensitivity",
                         onValueChange = { localSensitivity = (it / 100f).coerceIn(0.2f, 1f) },
                         testTag = "sensitivity_tick_scrubber"
                     )
                     AmPrimaryCtaButton(
-                        text = "GENERATE AUTO-BEAT FLAGS",
+                        text = "Detect Beats",
                         icon = Icons.Default.Bolt,
                         onClick = { onRegenerateBeats(localBpm, localSensitivity) },
                         modifier = Modifier.fillMaxWidth(),
@@ -281,7 +280,6 @@ fun AudioReactorScreen(
                 }
             }
 
-            // Procedural Audio -> Property Reactor Binding
             if (selectedLayer != null && activeProp != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -295,7 +293,7 @@ fun AudioReactorScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "Reactor Property Link • ${selectedLayer.name}",
+                            text = "Link • ${selectedLayer.name}",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -312,7 +310,7 @@ fun AudioReactorScreen(
                             }
                         }
 
-                        Text("Source Frequency Band", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                        Text("Band", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -331,7 +329,7 @@ fun AudioReactorScreen(
                             minValue = 0.1f,
                             maxValue = 2.5f,
                             unit = "x",
-                            label = "Reactor Gain Multiplier",
+                            label = "Gain",
                             onValueChange = { onBindAudioToProperty(activeProp.audioReactorBand, it) },
                             testTag = "reactor_gain_scrubber"
                         )

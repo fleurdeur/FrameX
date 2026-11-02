@@ -1,0 +1,81 @@
+================================================================================
+     KEYFLAW .KFPACK PLUGIN CREATION PROMPT TEMPLATE (FOR AI ASSISTANTS)
+================================================================================
+Copy and paste everything below into ChatGPT, Claude, Gemini, or any AI to have 
+it generate a fully compliant, production-ready .kfpack plugin for Keyflaw 1.4.9+.
+
+--------------------------- [COPY FROM HERE] ---------------------------
+
+You are an expert Graphics Programmer and GLSL Shader Engineer. I need you to create a complete, production-ready custom effect plugin pack (.kfpack) for the Keyflaw Android video editing application (running Keyflaw 1.4.9+).
+
+### 1. WHAT A .KFPACK IS:
+A `.kfpack` is a ZIP archive containing JSON metadata and GLSL fragment shaders.
+The folder structure inside the ZIP MUST be:
+
+my_pack.kfpack (ZIP)
+├── suite.json
+└── effects/
+    └── <effect_id>/
+        ├── effect.json
+        └── shader.glsl  (or pass1.glsl, pass2.glsl if multi-pass)
+
+### 2. NEW CAPABILITIES IN KEYFLAW 1.4.9+ (USE WHEN APPLICABLE):
+1. Multi-Pass Shaders:
+   In `effect.json`, specify `"passes": ["pass1.glsl", "pass2.glsl"]` for separable blurs, blooms, or downsampling.
+2. Bounding Box Padding:
+   In `effect.json`, specify `"expandBounds": 0.3` (30% padding) for glows, rays, and drop shadows so light does not get clipped at clip edges.
+3. Smooth Directional Motion Trails (Zero Choppiness):
+   For movement/shake shaders, include `"usesNativeMotionBlur": true`, a "Motion Blur" BOOL switch, a "Motion Trail Length" slider, and 20-tap stratified blue-noise dithered sub-frame integration in the GLSL code.
+
+### 3. GLSL SHADER SPECIFICATION (OpenGL ES 2.0 / 3.0):
+- Coordinate convention: `vTex` is normalized `vec2(0.0, 0.0)` (bottom-left) to `vec2(1.0, 1.0)` (top-right).
+- Built-in uniforms automatically supplied by Keyflaw:
+    uniform sampler2D uTexture;
+    varying vec2 vTex;
+    uniform float uTime;
+    uniform vec2 uTexelSize; // (1.0 / width, 1.0 / height)
+- Parameter uniforms: Keyflaw maps each slider in `effect.json` to `u` + Capitalized key name:
+    key: "amplitude"  -> uniform float uAmplitude;
+    key: "glowColor"  -> uniform vec3  uGlowColor;   (for type: "COLOR")
+    key: "tileEdges"  -> uniform float uTileEdges;   (for type: "BOOL")
+
+### 4. VALID KEYFLAW CATEGORIES:
+"Gerak", "Warna", "Distorsi", "Stilisasi", "Blur", "Simulasi", "Generator", "Transisi", "Keying", "Perspective", "Custom".
+
+---
+
+### MY PLUGIN REQUIREMENTS:
+
+- Suite Name: [ENTER SUITE NAME, e.g. "Sapphire Motion Suite"]
+- Suite ID: [ENTER UNIQUE ID, e.g. "sapphire_motion"]
+- Category: [e.g. "Gerak" or "Warna"]
+- Author Name: [e.g. "ryn"]
+- Version: [e.g. "1.0.0"]
+- Description: [BRIEF SUMMARY OF WHAT THIS PACK DOES]
+
+Effects to Include:
+1. Effect Name: [e.g. "Directional Shake Pro"]
+   - Effect ID: [e.g. "directional_shake"]
+   - What it does: [e.g. "Violent cinematic camera shake with directional motion trails and mirror edges"]
+   - Single-Pass or Multi-Pass: [e.g. Single-pass / Multi-pass]
+   - Needs Expand Bounds? [e.g. No / Yes, expandBounds: 0.2]
+   - Needs Motion Blur Trails? [e.g. Yes, 20-tap stratified motion blur]
+   - Desired Sliders / Controls:
+     - Amplitude (default 0.05, min 0.0, max 0.25)
+     - Frequency (default 8.0, min 1.0, max 25.0)
+     - Roll Angle (default 2.0, min 0.0, max 15.0)
+     - Mirror Edges (BOOL, default ON)
+     - Motion Blur (BOOL, default ON)
+     - Trail Length (default 0.65, min 0.0, max 2.5)
+
+[Add more effects if your pack has multiple effects]
+
+---
+
+### WHAT YOU MUST DELIVER:
+1. Full, valid `suite.json`.
+2. Full, valid `effect.json` for each effect.
+3. Complete GLSL shader code (`shader.glsl` or `pass*.glsl`) with NO placeholders, NO comments like `// implement logic here`, and NO truncated code.
+4. A complete Python script that writes all these files and packages them into the final `.kfpack` file automatically.
+
+--------------------------- [COPY UNTIL HERE] ---------------------------

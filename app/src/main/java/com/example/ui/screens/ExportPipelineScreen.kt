@@ -125,7 +125,7 @@ fun ExportPipelineScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${project.name} • ${project.layers.size} Layers",
+                            text = project.name,
                             style = MaterialTheme.typography.labelSmall,
                             color = TextSecondary
                         )
@@ -153,8 +153,8 @@ fun ExportPipelineScreen(
             ) {
                 AmExportFormatCard(
                     icon = Icons.Default.MovieCreation,
-                    title = "Video (MP4)",
-                    subtitle = "${widthStr}×${heightStr} • ${fpsStr}fps • $codec",
+                    title = "MP4 (H.264)",
+                    subtitle = "${widthStr}×${heightStr} • ${fpsStr}fps",
                     selected = selectedExportMode == 0,
                     onClick = {
                         selectedExportMode = 0
@@ -164,8 +164,8 @@ fun ExportPipelineScreen(
                 )
                 AmExportFormatCard(
                     icon = Icons.Default.HighQuality,
-                    title = "Cinema Master (HEVC / H.265)",
-                    subtitle = "10-bit High Efficiency Hardware Pipeline",
+                    title = "HEVC (H.265)",
+                    subtitle = "${widthStr}×${heightStr} • ${fpsStr}fps",
                     selected = selectedExportMode == 1,
                     onClick = {
                         selectedExportMode = 1
@@ -175,7 +175,6 @@ fun ExportPipelineScreen(
                 )
             }
 
-            // Alight Motion Expandable Export Settings Panel
             Card(
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                 shape = RoundedCornerShape(14.dp),
@@ -189,7 +188,7 @@ fun ExportPipelineScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Export Settings",
+                        text = "Settings",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -215,7 +214,6 @@ fun ExportPipelineScreen(
                         }
                     }
 
-                    // Custom Width × Height
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = widthStr,
@@ -224,7 +222,7 @@ fun ExportPipelineScreen(
                                 presetLabel = "Custom"
                                 pushConfig(p = "Custom", w = widthStr)
                             },
-                            label = { Text("Width (px)") },
+                            label = { Text("Width") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             shape = RoundedCornerShape(10.dp),
@@ -237,7 +235,7 @@ fun ExportPipelineScreen(
                                 presetLabel = "Custom"
                                 pushConfig(p = "Custom", h = heightStr)
                             },
-                            label = { Text("Height (px)") },
+                            label = { Text("Height") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             shape = RoundedCornerShape(10.dp),
@@ -245,8 +243,7 @@ fun ExportPipelineScreen(
                         )
                     }
 
-                    // Frame Rate Pills
-                    Text("Frame Rate", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                    Text("FPS", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -269,17 +266,16 @@ fun ExportPipelineScreen(
                             fpsStr = it.filter(Char::isDigit)
                             pushConfig(f = fpsStr)
                         },
-                        label = { Text("Custom Frame Rate (FPS)") },
+                        label = { Text("FPS") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // Encoder Codec Pills
                     Text("Codec", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("H.264" to "H.264 (AVC)", "H.265" to "H.265 (HEVC)").forEach { (id, label) ->
+                        listOf("H.264" to "H.264", "H.265" to "H.265").forEach { (id, label) ->
                             AmSegmentChip(
                                 label = label,
                                 selected = codec == id,
@@ -306,11 +302,13 @@ fun ExportPipelineScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = exportState.statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
+                    if (exportState.statusText.isNotBlank()) {
+                        Text(
+                            text = exportState.statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
 
                     if (exportState.isExporting) {
                         LinearProgressIndicator(
@@ -342,14 +340,13 @@ fun ExportPipelineScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Saved MP4 (${out.width}×${out.height} @ ${out.fps}fps) to Movies/FramePollution",
+                                text = "Saved (${out.width}×${out.height} • ${out.fps}fps)",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = AmTealBright
                             )
                         }
                     }
 
-                    // Signature Full-Width Alight Motion Teal "EXPORT" Button
                     Button(
                         onClick = { onStartExport(context) },
                         enabled = !exportState.isExporting,
@@ -371,14 +368,14 @@ fun ExportPipelineScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "EXPORTING ${(exportState.progress * 100).toInt()}%...",
+                                text = "${(exportState.progress * 100).toInt()}%",
                                 fontWeight = FontWeight.Bold
                             )
                         } else {
                             Icon(Icons.Default.IosShare, contentDescription = null, modifier = Modifier.size(19.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "EXPORT (${widthStr}×${heightStr} • ${fpsStr}FPS)",
+                                text = "Export",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold
                             )

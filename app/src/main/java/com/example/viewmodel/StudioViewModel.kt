@@ -28,6 +28,7 @@ import com.example.data.repository.ProjectRepository
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioReactorEngine
 import com.example.engine.AudioSpectrumSnapshot
+import com.example.engine.CustomFontRegistry
 import com.example.engine.EffectCategory
 import com.example.engine.EffectDefinition
 import com.example.engine.EffectsCatalog
@@ -35,8 +36,12 @@ import com.example.engine.EffectThumbnailPreviewer
 import com.example.engine.ExportOutcome
 import com.example.engine.ExportPipelineEngine
 import com.example.engine.HardwareVideoPreviewEngine
+import com.example.engine.InstalledPluginSuite
 import com.example.engine.MediaEngine
 import com.example.engine.PlaybackCacheEngine
+import com.example.engine.PluginPackManager
+import com.example.engine.PluginParamDef
+import com.example.engine.PluginParamType
 import com.example.engine.PreRenderUiState
 import com.example.engine.TimelineAudioController
 import kotlinx.coroutines.Job
@@ -67,6 +72,7 @@ sealed interface UiState<out T> {
 enum class StudioDestination {
     HOME,
     SETTINGS,
+    PLUGIN_MANAGER,
     EDITOR,
     EFFECTS_BROWSER,
     GRAPH_EDITOR,
@@ -106,7 +112,7 @@ enum class AmInspectorTab {
 data class ExportUiState(
     val isExporting: Boolean = false,
     val progress: Float = 0f,
-    val statusText: String = "Ready to encode hardware-accelerated MP4",
+    val statusText: String = "",
     val lastOutcome: ExportOutcome? = null,
     val errorText: String? = null
 )
@@ -127,6 +133,7 @@ data class StudioWorkspaceState(
     val selectedProperty: PropertyTarget = PropertyTarget.POS_X,
     val selectedEffectId: String? = null,
     val selectedEffectSlot: EffectParamSlot = EffectParamSlot.PRIMARY,
+    val selectedPluginParamKey: String? = null,
     val graphTargetsEffect: Boolean = false,
     val inspectorTab: AmInspectorTab = AmInspectorTab.TIMELINE,
     val playheadMs: Long = 0L,
@@ -151,6 +158,8 @@ data class StudioWorkspaceState(
     val cameraDistance: Float = 4.2f,
     val effectSearchQuery: String = "",
     val selectedEffectCategory: EffectCategory? = null,
+    val selectedPluginCategoryFilter: String? = null,
+    val pluginReturnDestination: StudioDestination = StudioDestination.HOME,
     val audioSensitivity: Float = 0.72f,
     val statusBanner: String? = null,
     val isSavingCloud: Boolean = false,
@@ -323,6 +332,8 @@ class StudioViewModel(
     val codecCapabilities: HardwareCodecCapabilities
         get() = preferencesRepository.codecCapabilities
     val preRenderState: StateFlow<PreRenderUiState> = PlaybackCacheEngine.preRenderState
+    val installedPluginSuites: StateFlow<List<InstalledPluginSuite>> = PluginPackManager.installedSuites
+    val pluginShaderDiagnostics: StateFlow<Map<String, String>> = PluginPackManager.shaderDiagnostics
 
     val audioEngine = AudioReactorEngine()
     private val timelineAudioController = appCtx?.let { TimelineAudioController(it) }
@@ -376,6 +387,7 @@ class StudioViewModel(
     private var bannerClearJob: Job? = null
 
     init {
+        PluginPackManager.ensureInitialized(appCtx)
         applyPreferencesToEngines(preferences.value)
     }
 
@@ -496,15 +508,34 @@ class StudioViewModel(
     }
 
     fun navigateTo(destination: StudioDestination) {
-        if (destination == StudioDestination.HOME || destination == StudioDestination.SETTINGS) {
+        if (destination == StudioDestination.HOME ||
+            destination == StudioDestination.SETTINGS ||
+            destination == StudioDestination.PLUGIN_MANAGER
+        ) {
             pausePlayback()
         }
-        _state.update { it.copy(destination = destination, statusBanner = null) }
+        _state.update { cur ->
+            val returnDest = if (destination == StudioDestination.PLUGIN_MANAGER &&
+                cur.destination != StudioDestination.PLUGIN_MANAGER
+            ) {
+                cur.destination
+            } else {
+                cur.pluginReturnDestination
+            }
+            cur.copy(
+                destination = destination,
+                pluginReturnDestination = returnDest,
+                statusBanner = null
+            )
+        }
     }
 
     fun navigateBackToParent() {
         val current = _state.value
         when {
+            current.destination == StudioDestination.PLUGIN_MANAGER -> {
+                _state.update { it.copy(destination = current.pluginReturnDestination) }
+            }
             current.destination == StudioDestination.SETTINGS -> {
                 _state.update { it.copy(destination = StudioDestination.HOME) }
             }
@@ -571,7 +602,49 @@ class StudioViewModel(
     }
 
     fun setTimelineZoom(newZoom: Float) {
-        _state.update { it.copy(timelineZoom = newZoom.coerceIn(0.6f, 4.0f)) }
+        _state.update { it.copy(timelineZoom = newZoom.coerceIn(0.5f, 5.0f)) }
+    }
+
+    /**
+     * Moves a layer's `[startTimeMs..endTimeMs]` along the timeline when held & dragged,
+     * preserving clip duration, shifting keyframes in lockstep, and snapping to playhead/bookmarks!
+     */
+    fun moveLayerTimeRange(layerId: String, rawNewStartMs: Long, recordUndo: Boolean = false) {
+        val s = _state.value
+        val proj = s.activeProject
+        val layer = proj.layers.firstOrNull { it.id == layerId } ?: return
+        if (layer.locked) return
+
+        val clipDur = (layer.endTimeMs - layer.startTimeMs).coerceAtLeast(100L)
+        val snapCandidates = buildList {
+            add(0L)
+            add(s.playheadMs)
+            proj.beatMarkers.forEach { add(it.timeMs) }
+        }
+        val snappedStart = snapCandidates.minByOrNull { abs(it - rawNewStartMs) }
+            ?.takeIf { abs(it - rawNewStartMs) <= 45L }
+            ?: rawNewStartMs
+
+        val maxStart = if (clipDur <= proj.durationMs) {
+            (proj.durationMs - clipDur).coerceAtLeast(0L)
+        } else {
+            (proj.durationMs - 100L).coerceAtLeast(0L)
+        }
+        val clampedStart = AnimationEvaluator.snapToFrameMs(
+            snappedStart.coerceIn(0L, maxStart),
+            proj.fps
+        )
+        val deltaMs = clampedStart - layer.startTimeMs
+        if (deltaMs == 0L) return
+
+        val newProjDur = max(proj.durationMs, clampedStart + clipDur)
+        val updatedLayers = proj.layers.map { l ->
+            if (l.id == layerId) l.shiftTimeRangeAndKeyframes(deltaMs) else l
+        }
+        updateActiveProject(
+            proj.copy(durationMs = newProjDur, layers = updatedLayers),
+            recordUndo = recordUndo
+        )
     }
 
     fun undo() {
@@ -1686,14 +1759,14 @@ class StudioViewModel(
         val projW = proj.width.coerceAtLeast(1).toFloat()
         val projH = proj.height.coerceAtLeast(1).toFloat()
 
-        // Base rendered quad for VIDEO/IMAGE fits 0.85 of composition; compute exact scale % for 100% Fit or Fill!
+        // Base rendered quad for VIDEO/IMAGE fits 100% (1.0f) of composition without black borders!
         val targetScalePct = when (layer.type) {
             LayerType.VIDEO, LayerType.IMAGE -> {
                 val mw = layer.mediaWidth.takeIf { it > 0 }?.toFloat() ?: projW
                 val mh = layer.mediaHeight.takeIf { it > 0 }?.toFloat() ?: projH
-                val baseFit = min((projW * 0.85f) / mw, (projH * 0.85f) / mh)
-                val baseQuadW = mw * baseFit
-                val baseQuadH = mh * baseFit
+                val baseFit = min(projW / mw, projH / mh)
+                val baseQuadW = (mw * baseFit).coerceAtLeast(1f)
+                val baseQuadH = (mh * baseFit).coerceAtLeast(1f)
                 val factor = if (fill) {
                     max(projW / baseQuadW, projH / baseQuadH)
                 } else {
@@ -1701,7 +1774,7 @@ class StudioViewModel(
                 }
                 (factor * 100f).coerceIn(10f, 500f)
             }
-            else -> if (fill) 238f else 118f
+            else -> if (fill) 200f else 100f
         }
 
         mutateLayer(layer.id, recordUndo = true) { cur ->
@@ -1834,8 +1907,97 @@ class StudioViewModel(
         mutateLayer(layerId, recordUndo = false) { it.copy(textContent = text, fontFamilyName = fontFamily) }
     }
 
+    fun importCustomFont(context: Context, uri: Uri) {
+        val appContext = context.applicationContext
+        viewModelScope.launch {
+            val result = CustomFontRegistry.importFontFromUri(appContext, uri)
+            result.fold(
+                onSuccess = { fontName ->
+                    val selId = _state.value.selectedLayerId
+                    val selLayer = _state.value.activeProject.layers.firstOrNull { it.id == selId }
+                    if (selLayer != null && selLayer.type == LayerType.TEXT) {
+                        mutateLayer(selLayer.id, recordUndo = true) {
+                            it.copy(fontFamilyName = fontName)
+                        }
+                    }
+                    postTransientBanner("Imported font: $fontName")
+                },
+                onFailure = { err ->
+                    postTransientBanner(err.localizedMessage ?: "Could not import font file")
+                }
+            )
+        }
+    }
+
     fun updateLayerColor(layerId: String, hex: String) {
         mutateLayer(layerId, recordUndo = true) { it.copy(colorHex = hex) }
+    }
+
+    fun updateLayerGradientFill(
+        layerId: String,
+        fillMode: String,
+        startHex: String,
+        endHex: String,
+        angleDeg: Float
+    ) {
+        val normalizedMode = when (fillMode) {
+            "LINEAR_GRADIENT", "RADIAL_GRADIENT" -> fillMode
+            else -> "SOLID"
+        }
+        mutateLayer(layerId, recordUndo = false) {
+            it.copy(
+                fillMode = normalizedMode,
+                colorHex = startHex,
+                gradientEndColorHex = endHex,
+                gradientAngleDeg = angleDeg.coerceIn(0f, 360f)
+            )
+        }
+    }
+
+    fun updateLayerAudioEffects(
+        layerId: String,
+        preset: String,
+        reverbMix: Float,
+        roomSize: Float,
+        bassBoost: Float,
+        echoMix: Float,
+        echoDelayMs: Float,
+        filterCutoff: Float,
+        pitchSemitones: Float,
+        optionalSpeed: Float? = null
+    ) {
+        mutateLayer(layerId, recordUndo = false) { cur ->
+            cur.copy(
+                audioPreset = preset,
+                audioReverbMix = reverbMix.coerceIn(0f, 1f),
+                audioRoomSize = roomSize.coerceIn(0.05f, 1f),
+                audioBassBoost = bassBoost.coerceIn(0f, 1f),
+                audioEchoMix = echoMix.coerceIn(0f, 1f),
+                audioEchoDelayMs = echoDelayMs.coerceIn(60f, 650f),
+                audioFilterCutoff = filterCutoff.coerceIn(0.05f, 1f),
+                audioPitchSemitones = pitchSemitones.coerceIn(-12f, 12f),
+                speedMultiplier = optionalSpeed?.coerceIn(0.1f, 4.0f) ?: cur.speedMultiplier
+            )
+        }
+        val latest = _state.value
+        if (latest.isPlaying) {
+            timelineAudioController?.syncPlayback(
+                project = latest.activeProject,
+                playheadMs = latest.playheadMs,
+                isPlaying = true,
+                forceExactSeek = false
+            )
+            appCtx?.let { ctx ->
+                HardwareVideoPreviewEngine.syncProjectVideos(
+                    context = ctx,
+                    project = latest.activeProject,
+                    playheadMs = latest.playheadMs,
+                    isPlaying = true,
+                    rapidScrubbing = false,
+                    forceExactSeek = false
+                )
+            }
+        }
     }
 
     fun updateLayerShapeKind(layerId: String, shapeKind: String) {
@@ -1995,7 +2157,7 @@ class StudioViewModel(
         val layer = s.activeProject.layers.firstOrNull { it.id == s.selectedLayerId } ?: return
         val prop = if (isEffect) {
             val fx = layer.effects.firstOrNull { it.id == s.selectedEffectId } ?: layer.effects.firstOrNull() ?: return
-            fx.propertyFor(s.selectedEffectSlot)
+            resolveActiveEffectAnimatableProp(fx, s.selectedEffectSlot, s.selectedPluginParamKey)
         } else {
             layer.propertyFor(s.selectedProperty)
         }
@@ -2036,14 +2198,15 @@ class StudioViewModel(
             if (isEffect) {
                 val fxId = s.selectedEffectId ?: return@mutateLayer layer
                 val slot = s.selectedEffectSlot
+                val pKey = s.selectedPluginParamKey
                 val updatedFx = layer.effects.map { fx ->
                     if (fx.id != fxId) fx
                     else {
-                        val p = fx.propertyFor(slot)
+                        val p = resolveActiveEffectAnimatableProp(fx, slot, pKey)
                         val kfs = p.keyframes.map { kf ->
                             if (kf.id == kfId) kf.copy(timeMs = snappedTime, value = newValue) else kf
                         }.sortedBy { it.timeMs }
-                        fx.updateProperty(slot, p.copy(baseValue = newValue, keyframes = kfs))
+                        applyUpdatedEffectAnimatableProp(fx, slot, pKey, p.copy(baseValue = newValue, keyframes = kfs))
                     }
                 }
                 layer.copy(effects = updatedFx)
@@ -2111,15 +2274,161 @@ class StudioViewModel(
     }
 
     fun setSelectedEffectCategory(category: EffectCategory?) {
-        _state.update { it.copy(selectedEffectCategory = category) }
+        _state.update {
+            it.copy(
+                selectedEffectCategory = category,
+                selectedPluginCategoryFilter = if (category == EffectCategory.PLUGINS) it.selectedPluginCategoryFilter else null
+            )
+        }
+    }
+
+    fun setSelectedPluginCategoryFilter(category: String?) {
+        _state.update { it.copy(selectedPluginCategoryFilter = category) }
+    }
+
+    fun importPluginPackFromUri(context: Context, uri: Uri, navigateToManager: Boolean = false) {
+        val appContext = context.applicationContext
+        viewModelScope.launch {
+            val res = PluginPackManager.importPackFromUri(appContext, uri)
+            res.fold(
+                onSuccess = { suite ->
+                    invalidateCurrentProjectCache()
+                    _state.update { cur ->
+                        cur.copy(
+                            destination = if (navigateToManager) StudioDestination.PLUGIN_MANAGER else cur.destination,
+                            selectedEffectCategory = if (cur.destination == StudioDestination.EFFECTS_BROWSER) {
+                                EffectCategory.PLUGINS
+                            } else cur.selectedEffectCategory
+                        )
+                    }
+                    postTransientBanner("Installed ${suite.name} (${suite.effects.size} FX)")
+                },
+                onFailure = { err ->
+                    postTransientBanner(err.localizedMessage ?: "Invalid .kfpack / .fppack file")
+                }
+            )
+        }
+    }
+
+    fun exportPluginSuiteToUri(context: Context, suiteId: String, targetUri: Uri) {
+        val appContext = context.applicationContext
+        viewModelScope.launch {
+            PluginPackManager.exportSuiteToUri(appContext, suiteId, targetUri).fold(
+                onSuccess = { fileName -> postTransientBanner("Exported $fileName") },
+                onFailure = { err -> postTransientBanner(err.localizedMessage ?: "Export failed") }
+            )
+        }
+    }
+
+    fun togglePluginSuiteEnabled(suiteId: String, enabled: Boolean) {
+        PluginPackManager.toggleSuiteEnabled(appCtx, suiteId, enabled)
+        invalidateCurrentProjectCache()
+    }
+
+    fun removePluginSuite(suiteId: String) {
+        PluginPackManager.removeSuite(appCtx, suiteId)
+        invalidateCurrentProjectCache()
+        postTransientBanner("Removed plugin suite")
+    }
+
+    fun restoreStarterPluginSuite() {
+        val starter = PluginPackManager.restoreStarterPack(appCtx)
+        invalidateCurrentProjectCache()
+        postTransientBanner("Restored ${starter.name}")
+    }
+
+    fun createCustomPluginSuite(
+        effectName: String,
+        suiteName: String,
+        author: String,
+        category: String,
+        expandBounds: Float,
+        usesNativeMotionBlur: Boolean,
+        glslSource: String,
+        parameters: List<PluginParamDef>,
+        extension: String = PluginPackManager.EXT_KFPACK
+    ) {
+        PluginPackManager.createAndInstallCustomPlugin(
+            context = appCtx,
+            effectName = effectName,
+            suiteName = suiteName,
+            author = author,
+            category = category,
+            expandBounds = expandBounds,
+            usesNativeMotionBlur = usesNativeMotionBlur,
+            glslSource = glslSource,
+            parameters = parameters,
+            extension = extension
+        ).fold(
+            onSuccess = { suite ->
+                invalidateCurrentProjectCache()
+                postTransientBanner("Created ${suite.name}")
+            },
+            onFailure = { err ->
+                postTransientBanner(err.localizedMessage ?: "Failed to create plugin")
+            }
+        )
+    }
+
+    private fun invalidateCurrentProjectCache() {
+        _state.update { s ->
+            val nextRev = s.projectRevision + 1L
+            PlaybackCacheEngine.notifyProjectEdited(
+                newRevision = nextRev,
+                quality = s.previewQuality,
+                durationMs = s.activeProject.durationMs,
+                fps = s.activeProject.fps
+            )
+            s.copy(projectRevision = nextRev)
+        }
+    }
+
+    private fun defaultPluginParamKeyFor(effectId: String): String? {
+        return PluginPackManager.findPluginEffect(effectId)
+            ?.parameters
+            ?.firstOrNull { it.type != PluginParamType.COLOR }
+            ?.key
+    }
+
+    private fun resolveActiveEffectAnimatableProp(
+        fx: EffectNode,
+        slot: EffectParamSlot,
+        pluginParamKey: String?
+    ): AnimatableProperty {
+        val plugin = PluginPackManager.findPluginEffect(fx.effectId)
+        if (plugin != null && pluginParamKey != null) {
+            if (pluginParamKey == "__MIX__") return fx.mixProp
+            val paramDef = plugin.parameters.firstOrNull { it.key == pluginParamKey }
+            if (paramDef != null && paramDef.type != PluginParamType.COLOR) {
+                return fx.customParamFor(paramDef.key, paramDef.defaultFloat)
+            }
+        }
+        return fx.propertyFor(slot)
+    }
+
+    private fun applyUpdatedEffectAnimatableProp(
+        fx: EffectNode,
+        slot: EffectParamSlot,
+        pluginParamKey: String?,
+        updatedProp: AnimatableProperty
+    ): EffectNode {
+        val plugin = PluginPackManager.findPluginEffect(fx.effectId)
+        if (plugin != null && pluginParamKey != null) {
+            if (pluginParamKey == "__MIX__") return fx.updateProperty(EffectParamSlot.MIX, updatedProp)
+            val paramDef = plugin.parameters.firstOrNull { it.key == pluginParamKey }
+            if (paramDef != null && paramDef.type != PluginParamType.COLOR) {
+                return fx.updateCustomParam(paramDef.key, updatedProp)
+            }
+        }
+        return fx.updateProperty(slot, updatedProp)
     }
 
     fun addEffectToSelectedLayer(definition: EffectDefinition) {
         val s = _state.value
         val proj = s.activeProject
         val newFx = definition.toNode()
+        val initialPluginKey = defaultPluginParamKeyFor(definition.id)
 
-        // If user opens Effects Browser on a brand-new empty project and taps "+ STANDARD", create a clean base layer automatically so it never dead-ends!
         val existingTargetId = s.selectedLayerId ?: proj.layers.lastOrNull()?.id
         if (existingTargetId == null) {
             val autoLayer = Layer(
@@ -2142,6 +2451,7 @@ class StudioViewModel(
                     selectedLayerId = autoLayer.id,
                     selectedEffectId = newFx.id,
                     selectedEffectSlot = EffectParamSlot.PRIMARY,
+                    selectedPluginParamKey = initialPluginKey,
                     graphTargetsEffect = true,
                     inspectorTab = AmInspectorTab.EFFECT_DETAIL,
                     destination = StudioDestination.EDITOR
@@ -2158,22 +2468,28 @@ class StudioViewModel(
                 selectedLayerId = existingTargetId,
                 selectedEffectId = newFx.id,
                 selectedEffectSlot = EffectParamSlot.PRIMARY,
+                selectedPluginParamKey = initialPluginKey,
                 graphTargetsEffect = true,
                 inspectorTab = AmInspectorTab.EFFECT_DETAIL,
                 destination = StudioDestination.EDITOR
             )
         }
-        postTransientBanner("Added ${definition.name} — tap parameters or ◆ to keyframe")
+        postTransientBanner("Added ${definition.name}")
     }
 
     /**
-     * Opens the full Alight Motion Effect Detail Inspector when an added Effect is clicked!
+     * Opens the full Alight Motion / KeyFlow Effect Detail Inspector when an added Effect is clicked!
      */
     fun selectEffectForInspection(effectNodeId: String) {
-        _state.update {
-            it.copy(
+        _state.update { cur ->
+            val fx = cur.activeProject.layers
+                .firstOrNull { it.id == cur.selectedLayerId }
+                ?.effects
+                ?.firstOrNull { it.id == effectNodeId }
+            cur.copy(
                 selectedEffectId = effectNodeId,
                 selectedEffectSlot = EffectParamSlot.PRIMARY,
+                selectedPluginParamKey = fx?.let { defaultPluginParamKeyFor(it.effectId) },
                 graphTargetsEffect = true,
                 inspectorTab = AmInspectorTab.EFFECT_DETAIL,
                 destination = StudioDestination.EDITOR
@@ -2185,13 +2501,72 @@ class StudioViewModel(
         _state.update {
             it.copy(
                 selectedEffectSlot = slot,
+                selectedPluginParamKey = if (slot == EffectParamSlot.MIX && it.selectedPluginParamKey != null) "__MIX__" else null,
                 graphTargetsEffect = true
+            )
+        }
+    }
+
+    fun selectPluginParamKey(paramKey: String) {
+        _state.update {
+            it.copy(
+                selectedPluginParamKey = paramKey,
+                selectedEffectSlot = if (paramKey == "__MIX__") EffectParamSlot.MIX else it.selectedEffectSlot,
+                graphTargetsEffect = true
+            )
+        }
+    }
+
+    fun updateCustomPluginParamValue(paramKey: String, newValue: Float) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val fxId = s.selectedEffectId ?: return
+        val timeMs = s.playheadMs
+
+        mutateLayer(layerId, recordUndo = false) { layer ->
+            if (layer.locked) return@mutateLayer layer
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx
+                    else if (paramKey == "__MIX__") {
+                        val clamped = newValue.coerceIn(0f, 100f)
+                        fx.updateProperty(EffectParamSlot.MIX, applyPropertyEditAtTime(fx.mixProp, clamped, timeMs))
+                    } else {
+                        val plugin = PluginPackManager.findPluginEffect(fx.effectId) ?: return@map fx
+                        val paramDef = plugin.parameters.firstOrNull { it.key == paramKey } ?: return@map fx
+                        val clamped = if (paramDef.type == PluginParamType.BOOL) {
+                            if (newValue >= 0.5f) 1f else 0f
+                        } else {
+                            newValue.coerceIn(paramDef.min, paramDef.max)
+                        }
+                        val curProp = fx.customParamFor(paramKey, paramDef.defaultFloat)
+                        val updatedProp = applyPropertyEditAtTime(curProp, clamped, timeMs)
+                        fx.updateCustomParam(paramKey, updatedProp)
+                    }
+                }
+            )
+        }
+    }
+
+    fun updateCustomPluginColor(paramKey: String, hex: String) {
+        val s = _state.value
+        val layerId = s.selectedLayerId ?: return
+        val fxId = s.selectedEffectId ?: return
+        mutateLayer(layerId, recordUndo = true) { layer ->
+            layer.copy(
+                effects = layer.effects.map { fx ->
+                    if (fx.id != fxId) fx else fx.updateCustomColor(paramKey, hex)
+                }
             )
         }
     }
 
     fun updateSelectedEffectParamValue(newValue: Float) {
         val s = _state.value
+        if (s.selectedPluginParamKey != null) {
+            updateCustomPluginParamValue(s.selectedPluginParamKey, newValue)
+            return
+        }
         val layerId = s.selectedLayerId ?: return
         val fxId = s.selectedEffectId ?: return
         val slot = s.selectedEffectSlot
@@ -2218,6 +2593,7 @@ class StudioViewModel(
         val layerId = s.selectedLayerId ?: return
         val fxId = s.selectedEffectId ?: return
         val slot = s.selectedEffectSlot
+        val pKey = s.selectedPluginParamKey
         val timeMs = s.playheadMs
         val audio = liveSpectrum.value
 
@@ -2226,7 +2602,7 @@ class StudioViewModel(
                 effects = layer.effects.map { fx ->
                     if (fx.id != fxId) fx
                     else {
-                        val prop = fx.propertyFor(slot)
+                        val prop = resolveActiveEffectAnimatableProp(fx, slot, pKey)
                         val existingIdx = prop.keyframes.indexOfFirst { abs(it.timeMs - timeMs) <= 25L }
                         val updatedKfs = if (existingIdx >= 0) {
                             prop.keyframes.filterIndexed { index, _ -> index != existingIdx }
@@ -2234,7 +2610,7 @@ class StudioViewModel(
                             val currentEval = AnimationEvaluator.evaluateProperty(prop, timeMs, audio)
                             (prop.keyframes + Keyframe(timeMs = timeMs, value = currentEval)).sortedBy { it.timeMs }
                         }
-                        fx.updateProperty(slot, prop.copy(keyframes = updatedKfs))
+                        applyUpdatedEffectAnimatableProp(fx, slot, pKey, prop.copy(keyframes = updatedKfs))
                     }
                 }
             )
@@ -2245,7 +2621,8 @@ class StudioViewModel(
         val s = _state.value
         val layer = s.activeProject.layers.firstOrNull { it.id == s.selectedLayerId } ?: return
         val fx = layer.effects.firstOrNull { it.id == s.selectedEffectId } ?: return
-        val kfs = fx.propertyFor(s.selectedEffectSlot).keyframes.sortedBy { it.timeMs }
+        val prop = resolveActiveEffectAnimatableProp(fx, s.selectedEffectSlot, s.selectedPluginParamKey)
+        val kfs = prop.keyframes.sortedBy { it.timeMs }
         if (kfs.isEmpty()) return
         val target = if (forward) {
             kfs.firstOrNull { it.timeMs > s.playheadMs + 10L } ?: kfs.first()
@@ -2267,6 +2644,7 @@ class StudioViewModel(
         val layerId = s.selectedLayerId ?: return
         val fxId = s.selectedEffectId ?: return
         val slot = s.selectedEffectSlot
+        val pKey = s.selectedPluginParamKey
         val timeMs = s.playheadMs
 
         mutateLayer(layerId, recordUndo = false) { layer ->
@@ -2274,10 +2652,25 @@ class StudioViewModel(
                 effects = layer.effects.map { fx ->
                     if (fx.id != fxId) fx
                     else {
-                        val spec = EffectsCatalog.findById(fx.effectId).specFor(slot)
-                        val prop = fx.propertyFor(slot)
-                        val fallbackEnd = (prop.baseValue + (spec.maxVal - spec.minVal) * 0.35f)
-                            .coerceIn(spec.minVal, spec.maxVal)
+                        val plugin = PluginPackManager.findPluginEffect(fx.effectId)
+                        val paramDef = if (plugin != null && pKey != null && pKey != "__MIX__") {
+                            plugin.parameters.firstOrNull { it.key == pKey }
+                        } else null
+                        val minV: Float
+                        val maxV: Float
+                        if (paramDef != null) {
+                            minV = paramDef.min
+                            maxV = paramDef.max
+                        } else if (pKey == "__MIX__") {
+                            minV = 0f
+                            maxV = 100f
+                        } else {
+                            val spec = EffectsCatalog.findById(fx.effectId).specFor(slot)
+                            minV = spec.minVal
+                            maxV = spec.maxVal
+                        }
+                        val prop = resolveActiveEffectAnimatableProp(fx, slot, pKey)
+                        val fallbackEnd = (prop.baseValue + (maxV - minV) * 0.35f).coerceIn(minV, maxV)
                         val updatedProp = applyBezierHandlesToProp(
                             prop = prop,
                             timeMs = timeMs,
@@ -2290,7 +2683,7 @@ class StudioViewModel(
                             inY = inY,
                             holdStep = holdStep
                         )
-                        fx.updateProperty(slot, updatedProp)
+                        applyUpdatedEffectAnimatableProp(fx, slot, pKey, updatedProp)
                     }
                 }
             )
@@ -2302,13 +2695,14 @@ class StudioViewModel(
         val layerId = s.selectedLayerId ?: return
         val fxId = s.selectedEffectId ?: return
         val slot = s.selectedEffectSlot
+        val pKey = s.selectedPluginParamKey
         mutateLayer(layerId, recordUndo = false) { layer ->
             layer.copy(
                 effects = layer.effects.map { fx ->
                     if (fx.id != fxId) fx
                     else {
-                        val prop = fx.propertyFor(slot)
-                        fx.updateProperty(slot, prop.copy(expression = expression))
+                        val prop = resolveActiveEffectAnimatableProp(fx, slot, pKey)
+                        applyUpdatedEffectAnimatableProp(fx, slot, pKey, prop.copy(expression = expression))
                     }
                 }
             )
@@ -2437,19 +2831,82 @@ class StudioViewModel(
         postTransientBanner("Applied preset \"${preset.name}\"")
     }
 
-    // Audio Reactor controls
+    // Audio Reactor & Notable Bass Onset Beat Detection controls
     fun updateProjectBpmAndRegenerateBeats(bpm: Int, sensitivity: Float) {
         val safeBpm = bpm.coerceIn(40, 240)
         val safeSens = sensitivity.coerceIn(0.1f, 1.0f)
         val proj = _state.value.activeProject
-        val beats = audioEngine.generateAutoBeatMarkers(proj.durationMs, safeBpm, safeSens)
+        val hasAudioMedia = proj.layers.any {
+            it.visible && !it.audioMuted &&
+                (it.type == LayerType.AUDIO || it.type == LayerType.VIDEO) &&
+                it.mediaUri.isNotBlank()
+        }
+        if (!hasAudioMedia || appCtx == null) {
+            val beats = audioEngine.generateAutoBeatMarkers(proj.durationMs, safeBpm, safeSens)
+            _state.update {
+                it.copy(
+                    audioSensitivity = safeSens,
+                    activeProject = proj.copy(bpm = safeBpm, beatMarkers = beats)
+                )
+            }
+            postTransientBanner("Detected ${beats.size} notable bass beats @ $safeBpm BPM")
+            return
+        }
+
         _state.update {
             it.copy(
                 audioSensitivity = safeSens,
-                activeProject = proj.copy(bpm = safeBpm, beatMarkers = beats)
+                activeProject = proj.copy(bpm = safeBpm)
             )
         }
-        postTransientBanner("Generated ${beats.size} beat flags @ $safeBpm BPM")
+        autoDetectNotableBassBeats(appCtx, safeSens)
+    }
+
+    fun autoDetectNotableBassBeats(
+        context: Context? = appCtx,
+        sensitivity: Float = _state.value.audioSensitivity
+    ) {
+        val safeSens = sensitivity.coerceIn(0.1f, 1.0f)
+        val resolvedCtx = context?.applicationContext ?: appCtx
+        val snapshotProj = _state.value.activeProject
+        val hasAudioMedia = snapshotProj.layers.any {
+            it.visible && !it.audioMuted &&
+                (it.type == LayerType.AUDIO || it.type == LayerType.VIDEO) &&
+                it.mediaUri.isNotBlank()
+        }
+        if (!hasAudioMedia || resolvedCtx == null) {
+            val beats = audioEngine.generateAutoBeatMarkers(snapshotProj.durationMs, snapshotProj.bpm, safeSens)
+            _state.update { cur ->
+                cur.copy(
+                    audioSensitivity = safeSens,
+                    activeProject = cur.activeProject.copy(beatMarkers = beats)
+                )
+            }
+            postTransientBanner("Placed ${beats.size} notable bass markers")
+            return
+        }
+
+        postTransientBanner("Analyzing bass frequencies (20–135 Hz)...")
+        viewModelScope.launch {
+            val beats = audioEngine.detectNotableBassBeats(resolvedCtx, snapshotProj, safeSens)
+            _state.update { cur ->
+                cur.copy(
+                    audioSensitivity = safeSens,
+                    activeProject = cur.activeProject.copy(beatMarkers = beats)
+                )
+            }
+            postTransientBanner("Detected ${beats.size} notable bass hits")
+        }
+    }
+
+    fun clearAllBeatMarkers() {
+        val proj = _state.value.activeProject
+        if (proj.beatMarkers.isEmpty()) return
+        updateActiveProject(
+            proj.copy(beatMarkers = emptyList()),
+            recordUndo = true,
+            banner = "Cleared beat flags"
+        )
     }
 
     fun toggleLiveMicrophone(enable: Boolean) {

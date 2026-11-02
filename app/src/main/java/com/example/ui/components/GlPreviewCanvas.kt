@@ -52,6 +52,7 @@ import com.example.engine.FramePollutionGlRenderer
 import com.example.engine.HardwareVideoPreviewEngine
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
+import com.example.ui.theme.KeyflowBlue
 import com.example.ui.theme.KeyframeAmber
 import com.example.ui.theme.OutlineSubtle
 import com.example.ui.theme.PlayheadRed
@@ -427,7 +428,8 @@ fun GlPreviewCanvas(
                     val (baseProjW, baseProjH) = computeLayerProjBounds(selectedLayer, projW, projH)
                     val hw = (baseProjW * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(16f)
                     val hh = (baseProjH * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(14f)
-                    val gizmoColor = if (selectedLayer.type == LayerType.CAMERA) KeyframeAmber else AmTealBright
+                    val gizmoColor = if (selectedLayer.type == LayerType.CAMERA) KeyframeAmber else KeyflowBlue
+                    val boxDash = PathEffect.dashPathEffect(floatArrayOf(13f, 10f), 0f)
                     val pivotCanvasOffset = Offset(
                         x = tr.pivotX * scaleToCanvas * tr.scale,
                         y = tr.pivotY * scaleToCanvas * tr.scale
@@ -437,46 +439,46 @@ fun GlPreviewCanvas(
                         translate(left = cx, top = cy)
                         rotate(degrees = tr.rotZ, pivot = pivotCanvasOffset)
                     }) {
-                        // Bounding Box Outline
+                        // KeyFlow Dashed Royal-Blue Bounding Box Outline
                         drawRect(
                             color = gizmoColor,
                             topLeft = Offset(-hw, -hh),
                             size = Size(hw * 2f, hh * 2f),
-                            style = Stroke(width = 2.2f)
+                            style = Stroke(width = 2.4f, pathEffect = boxDash)
                         )
 
-                        // Top Rotation Stem + Circular Knob
+                        // Top Rotation Stalk + Circular Knob with Rotation Arc
+                        val rotKnobCenter = Offset(0f, -hh - 26f)
                         drawLine(
                             color = gizmoColor,
                             start = Offset(0f, -hh),
-                            end = Offset(0f, -hh - 20f),
+                            end = rotKnobCenter,
                             strokeWidth = 2.2f
                         )
-                        drawCircle(Color.White, radius = 5.5f, center = Offset(0f, -hh - 22f))
-                        drawCircle(AmTeal, radius = 5.5f, center = Offset(0f, -hh - 22f), style = Stroke(width = 2.2f))
-
-                        // Anchor / Pivot Crosshair ⊕ at (pivotX, pivotY)
-                        drawCircle(gizmoColor, radius = 5.5f, center = pivotCanvasOffset, style = Stroke(width = 1.9f))
-                        drawLine(
-                            gizmoColor,
-                            Offset(pivotCanvasOffset.x - 10f, pivotCanvasOffset.y),
-                            Offset(pivotCanvasOffset.x + 10f, pivotCanvasOffset.y),
-                            strokeWidth = 1.6f
-                        )
-                        drawLine(
-                            gizmoColor,
-                            Offset(pivotCanvasOffset.x, pivotCanvasOffset.y - 10f),
-                            Offset(pivotCanvasOffset.x, pivotCanvasOffset.y + 10f),
-                            strokeWidth = 1.6f
+                        drawCircle(Color.White, radius = 7.5f, center = rotKnobCenter)
+                        drawCircle(gizmoColor, radius = 7.5f, center = rotKnobCenter, style = Stroke(width = 2.2f))
+                        drawArc(
+                            color = gizmoColor,
+                            startAngle = 200f,
+                            sweepAngle = 140f,
+                            useCenter = false,
+                            topLeft = Offset(rotKnobCenter.x - 4.2f, rotKnobCenter.y - 4.2f),
+                            size = Size(8.4f, 8.4f),
+                            style = Stroke(width = 1.6f)
                         )
 
-                        // 8 White/Teal Square Resize Handles (4 Corners + 4 Midpoints)
+                        // Center Bullseye Pivot Reticle (Blue Halo + Ring + White Center Dot)
+                        drawCircle(gizmoColor.copy(alpha = 0.24f), radius = 10f, center = pivotCanvasOffset)
+                        drawCircle(gizmoColor, radius = 7.5f, center = pivotCanvasOffset, style = Stroke(width = 2.2f))
+                        drawCircle(Color.White, radius = 2.8f, center = pivotCanvasOffset)
+
+                        // 8 Crisp White Square Resize Handles (4 Corners + 4 Midpoints)
                         val handlePts = listOf(
                             Offset(-hw, -hh), Offset(0f, -hh), Offset(hw, -hh),
                             Offset(-hw, 0f),                    Offset(hw, 0f),
                             Offset(-hw, hh),  Offset(0f, hh),  Offset(hw, hh)
                         )
-                        val hs = 8.5f
+                        val hs = 9.5f
                         handlePts.forEach { pt ->
                             drawRect(
                                 color = Color.White,
@@ -484,10 +486,10 @@ fun GlPreviewCanvas(
                                 size = Size(hs, hs)
                             )
                             drawRect(
-                                color = if (selectedLayer.type == LayerType.CAMERA) KeyframeAmber else AmTeal,
+                                color = gizmoColor.copy(alpha = 0.85f),
                                 topLeft = Offset(pt.x - hs / 2f, pt.y - hs / 2f),
                                 size = Size(hs, hs),
-                                style = Stroke(width = 2f)
+                                style = Stroke(width = 1.2f)
                             )
                         }
                     }

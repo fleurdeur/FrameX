@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Link
@@ -126,7 +127,8 @@ fun HomeScreen(
     onDeleteProject: (String) -> Unit,
     onSignOut: () -> Unit,
     defaultPreferences: StudioPreferences = StudioPreferences(),
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {}
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var activeTab by remember { mutableStateOf(AmHomeTab.HOME) }
@@ -166,24 +168,17 @@ fun HomeScreen(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(5.dp))
-                                .background(AmTeal.copy(alpha = 0.18f))
-                                .border(1.dp, AmTeal.copy(alpha = 0.6f), RoundedCornerShape(5.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "PRO",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = AmTealBright
-                            )
-                        }
                     }
                 },
                 actions = {
+                    AmSquareIconButton(
+                        icon = Icons.Default.Extension,
+                        contentDescription = stringResource(id = R.string.plugin_suites_title),
+                        tint = AmTealBright,
+                        onClick = onOpenPlugins,
+                        testTag = "home_plugins_button",
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
                     AmSquareIconButton(
                         icon = Icons.Default.Settings,
                         contentDescription = stringResource(id = R.string.settings_button_desc),
@@ -237,21 +232,21 @@ fun HomeScreen(
             if (activeTab == AmHomeTab.TEMPLATES) {
                 item {
                     Text(
-                        text = "Motion Project Templates",
+                        text = "Templates",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 val templates = listOf(
-                    Triple(StudioTemplates.neonSynthTemplate(), R.drawable.img_template_cyber, "Sapphire S_Glow • Master Null Rig • 60fps"),
-                    Triple(StudioTemplates.reelsPhonkTemplate(), R.drawable.img_studio_hero, "Beat Sync Shake • RGB Split • 9:16 Reels"),
-                    Triple(StudioTemplates.particleCinemaTemplate(), R.drawable.img_template_particles, "21:9 Anamorphic • 3D Crystal Mesh • 24fps")
+                    StudioTemplates.neonSynthTemplate() to R.drawable.img_template_cyber,
+                    StudioTemplates.reelsPhonkTemplate() to R.drawable.img_studio_hero,
+                    StudioTemplates.particleCinemaTemplate() to R.drawable.img_template_particles
                 )
-                items(templates) { (proj, imgRes, desc) ->
+                items(templates) { (proj, imgRes) ->
                     AmFullWidthTemplateCard(
                         project = proj,
                         imageRes = imgRes,
-                        subtitle = desc,
+                        subtitle = "${proj.width}×${proj.height} • ${proj.fps}fps",
                         onOpen = { onOpenProject(proj) }
                     )
                 }
@@ -417,23 +412,14 @@ private fun AmStudioHeroBanner(onQuickCreate: () -> Unit) {
                 .padding(18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
-                Text(
-                    text = "GET STARTED • MOTION & VFX",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = AmTealBright
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Keyframe Graph • 130+ Shaders\nAudio Reactor & 3D Camera",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-            }
+            Text(
+                text = stringResource(id = R.string.app_name),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
             AmPrimaryCtaButton(
-                text = "NEW PROJECT",
+                text = "New Project",
                 icon = Icons.Default.Add,
                 onClick = onQuickCreate,
                 testTag = "hero_create_project_button"
@@ -446,14 +432,14 @@ private fun AmStudioHeroBanner(onQuickCreate: () -> Unit) {
 private fun TemplateGalleryRow(onLaunchTemplate: (Project) -> Unit) {
     val templates = remember {
         listOf(
-            Triple(StudioTemplates.neonSynthTemplate(), R.drawable.img_template_cyber, "Sapphire Glow + Rig"),
-            Triple(StudioTemplates.reelsPhonkTemplate(), R.drawable.img_studio_hero, "9:16 Beat Shake"),
-            Triple(StudioTemplates.particleCinemaTemplate(), R.drawable.img_template_particles, "21:9 3D Stardust")
+            StudioTemplates.neonSynthTemplate() to R.drawable.img_template_cyber,
+            StudioTemplates.reelsPhonkTemplate() to R.drawable.img_studio_hero,
+            StudioTemplates.particleCinemaTemplate() to R.drawable.img_template_particles
         )
     }
 
     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(templates) { (proj, imgRes, tag) ->
+        items(templates) { (proj, imgRes) ->
             Card(
                 modifier = Modifier
                     .width(228.dp)
@@ -485,7 +471,7 @@ private fun TemplateGalleryRow(onLaunchTemplate: (Project) -> Unit) {
                                 .padding(horizontal = 7.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = "${proj.aspectRatioPreset} • ${proj.fps}fps",
+                                text = proj.aspectRatioPreset,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AmTealBright
                             )
@@ -501,7 +487,7 @@ private fun TemplateGalleryRow(onLaunchTemplate: (Project) -> Unit) {
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "$tag • ${proj.width}×${proj.height}",
+                            text = "${proj.width}×${proj.height} • ${proj.fps}fps",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextSecondary
                         )
@@ -548,7 +534,7 @@ private fun AmFullWidthTemplateCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = "${project.aspectRatioPreset} (${project.width}×${project.height}) • ${project.fps} FPS • ${project.layers.size} Tracks",
+                        text = project.aspectRatioPreset,
                         style = MaterialTheme.typography.labelSmall,
                         color = AmTealBright
                     )
@@ -566,7 +552,7 @@ private fun AmFullWidthTemplateCard(
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 }
                 Spacer(modifier = Modifier.width(10.dp))
-                AmSegmentChip(label = "OPEN", selected = true, onClick = onOpen)
+                AmSegmentChip(label = "Open", selected = true, onClick = onOpen)
             }
         }
     }
@@ -589,14 +575,9 @@ private fun AmReusableElementsShowcase(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "Reusable Elements & Node Modules",
+                text = "Elements",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Drop pre-rigged Null Cameras, 3D Meshes, Audio Reactors, or 130+ GPU Effect stacks into any composition.",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -666,7 +647,7 @@ private fun EmptyProjectsCard(onCreateClick: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(14.dp))
             AmPrimaryCtaButton(
-                text = "CREATE PROJECT",
+                text = "New Project",
                 icon = Icons.Default.Add,
                 onClick = onCreateClick
             )
@@ -744,7 +725,7 @@ private fun AmProjectListRow(
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = "${project.aspectRatioPreset} • ${project.width}×${project.height} • ${project.fps}fps • ${project.layers.size} layers",
+                        text = "${project.width}×${project.height} • ${project.fps}fps",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary
                     )
@@ -837,7 +818,7 @@ private fun AmNewProjectScreenDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Project Name") },
+                    label = { Text("Name") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
@@ -845,8 +826,7 @@ private fun AmNewProjectScreenDialog(
                         .testTag("project_name_input")
                 )
 
-                // Aspect Ratio Wireframe Boxes (Alight Motion Exact Row)
-                Text("Aspect Ratio", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                Text("Ratio", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -872,13 +852,12 @@ private fun AmNewProjectScreenDialog(
                     }
                 }
 
-                // Resolution Tier Pills
                 Text("Resolution", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    listOf(720 to "720p HD", 1080 to "1080p FHD", 2160 to "4K UHD").forEach { (tier, label) ->
+                    listOf(720 to "720p", 1080 to "1080p", 2160 to "4K").forEach { (tier, label) ->
                         AmSegmentChip(
                             label = label,
                             selected = resolutionScale == tier && selectedPreset != AspectRatioPreset.CUSTOM,
@@ -897,7 +876,6 @@ private fun AmNewProjectScreenDialog(
                     }
                 }
 
-                // Custom Width × Height with Chain Link Icon
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -908,7 +886,7 @@ private fun AmNewProjectScreenDialog(
                             widthText = it.filter(Char::isDigit)
                             selectedPreset = AspectRatioPreset.CUSTOM
                         },
-                        label = { Text("Width (px)") },
+                        label = { Text("Width") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
@@ -928,7 +906,7 @@ private fun AmNewProjectScreenDialog(
                             heightText = it.filter(Char::isDigit)
                             selectedPreset = AspectRatioPreset.CUSTOM
                         },
-                        label = { Text("Height (px)") },
+                        label = { Text("Height") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
@@ -938,8 +916,7 @@ private fun AmNewProjectScreenDialog(
                     )
                 }
 
-                // Frame Rate Segmented Strip
-                Text("Frame Rate", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
+                Text("FPS", style = MaterialTheme.typography.labelLarge, color = TextSecondary)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -958,7 +935,7 @@ private fun AmNewProjectScreenDialog(
                     OutlinedTextField(
                         value = fpsText,
                         onValueChange = { fpsText = it.filter(Char::isDigit) },
-                        label = { Text("Custom FPS") },
+                        label = { Text("FPS") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
@@ -969,7 +946,7 @@ private fun AmNewProjectScreenDialog(
                     OutlinedTextField(
                         value = durationSecText,
                         onValueChange = { durationSecText = it.filter(Char::isDigit) },
-                        label = { Text("Length (s)") },
+                        label = { Text("Duration") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),

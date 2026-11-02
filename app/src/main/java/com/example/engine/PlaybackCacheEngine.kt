@@ -6,10 +6,13 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.RadialGradient
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.util.LruCache
 import com.example.data.model.EffectNode
@@ -517,11 +520,14 @@ object PlaybackCacheEngine {
         paintFill.colorFilter = null
         paintFill.xfermode = null
         paintFill.alpha = 255
-        when (project.backgroundColor) {
-            "White" -> canvas.drawColor(Color.WHITE)
-            "Dark Gray" -> canvas.drawColor(Color.rgb(28, 32, 40))
-            "Light Gray" -> canvas.drawColor(Color.rgb(209, 214, 222))
-            "Transparent" -> {
+        when {
+            project.backgroundColor == "White" -> canvas.drawColor(Color.WHITE)
+            project.backgroundColor == "Dark Gray" -> canvas.drawColor(Color.rgb(28, 32, 40))
+            project.backgroundColor == "Light Gray" -> canvas.drawColor(Color.rgb(209, 214, 222))
+            project.backgroundColor.startsWith("#") -> {
+                canvas.drawColor(runCatching { Color.parseColor(project.backgroundColor) }.getOrDefault(Color.BLACK))
+            }
+            project.backgroundColor == "Transparent" -> {
                 canvas.drawColor(Color.rgb(28, 31, 38))
                 paintFill.color = Color.rgb(46, 51, 61)
                 val cell = 18f
@@ -579,6 +585,8 @@ object PlaybackCacheEngine {
 
             val baseCol = runCatching { Color.parseColor(layer.colorHex) }.getOrDefault(Color.rgb(0, 210, 168))
             val col = Color.argb(alpha, Color.red(baseCol), Color.green(baseCol), Color.blue(baseCol))
+            val rawEndCol = runCatching { Color.parseColor(layer.gradientEndColorHex) }.getOrDefault(Color.rgb(0, 148, 255))
+            val endCol = Color.argb(alpha, Color.red(rawEndCol), Color.green(rawEndCol), Color.blue(rawEndCol))
 
             when (layer.type) {
                 LayerType.VIDEO, LayerType.IMAGE -> {
@@ -592,30 +600,48 @@ object PlaybackCacheEngine {
                     if (mediaBmp != null && !mediaBmp.isRecycled) {
                         val bmpAspect = mediaBmp.width.toFloat().coerceAtLeast(1f) / mediaBmp.height.toFloat().coerceAtLeast(1f)
                         val compAspect = w.toFloat() / h.toFloat().coerceAtLeast(1f)
-                        val hw = if (bmpAspect >= compAspect) w * 0.42f else (h * 0.42f * bmpAspect)
-                        val hh = if (bmpAspect >= compAspect) (w * 0.42f / bmpAspect) else h * 0.42f
+                        val hw = if (bmpAspect >= compAspect) w * 0.50f else (h * 0.50f * bmpAspect)
+                        val hh = if (bmpAspect >= compAspect) (w * 0.50f / bmpAspect) else h * 0.50f
+                        paintFill.shader = null
                         paintFill.alpha = alpha
                         canvas.drawBitmap(mediaBmp, null, RectF(-hw, -hh, hw, hh), paintFill)
                         paintFill.alpha = 255
-                    } else {
+                    } else if (layer.mediaUri.isBlank()) {
+                        paintFill.shader = null
                         paintFill.color = col
                         canvas.drawRoundRect(RectF(-w * 0.34f, -h * 0.24f, w * 0.34f, h * 0.24f), 14f, 14f, paintFill)
                     }
                 }
 
                 LayerType.TEXT -> {
+                    val txt = layer.textContent.ifBlank { "Text" }
                     paintText.color = col
                     paintText.textSize = (min(w, h) * 0.10f).coerceAtLeast(14f)
-                    paintText.typeface = when (layer.fontFamilyName) {
-                        "Serif" -> Typeface.SERIF
-                        "Monospace", "JetBrains Mono" -> Typeface.MONOSPACE
-                        else -> Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                    paintText.typeface = CustomFontRegistry.resolveTypeface(context, layer.fontFamilyName)
+                    val gradSpan = (paintText.measureText(txt) * 0.5f).coerceAtLeast(24f)
+                    paintText.shader = when (layer.fillMode) {
+                        "LINEAR_GRADIENT" -> {
+                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
+                            LinearGradient(
+                                -(cos(rad) * gradSpan).toFloat(),
+                                -(sin(rad) * gradSpan).toFloat(),
+                                (cos(rad) * gradSpan).toFloat(),
+                                (sin(rad) * gradSpan).toFloat(),
+                                col,
+                                endCol,
+                                Shader.TileMode.CLAMP
+                            )
+                        }
+                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, gradSpan, col, endCol, Shader.TileMode.CLAMP)
+                        else -> null
                     }
-                    canvas.drawText(layer.textContent.ifBlank { "Text" }, 0f, paintText.textSize * 0.35f, paintText)
+                    canvas.drawText(txt, 0f, paintText.textSize * 0.35f, paintText)
+                    paintText.shader = null
                 }
 
                 LayerType.MODEL_3D -> {
                     val half = min(w, h) * 0.19f
+                    paintFill.shader = null
                     paintFill.color = col
                     canvas.drawRoundRect(RectF(-half, -half, half, half), half * 0.28f, half * 0.28f, paintFill)
                     paintStroke.color = Color.argb(alpha, 0, 240, 200)
@@ -626,6 +652,22 @@ object PlaybackCacheEngine {
                 else -> {
                     val half = min(w, h) * 0.22f
                     paintFill.color = col
+                    paintFill.shader = when (layer.fillMode) {
+                        "LINEAR_GRADIENT" -> {
+                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
+                            LinearGradient(
+                                -(cos(rad) * half).toFloat(),
+                                -(sin(rad) * half).toFloat(),
+                                (cos(rad) * half).toFloat(),
+                                (sin(rad) * half).toFloat(),
+                                col,
+                                endCol,
+                                Shader.TileMode.CLAMP
+                            )
+                        }
+                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, half.coerceAtLeast(8f), col, endCol, Shader.TileMode.CLAMP)
+                        else -> null
+                    }
                     when (layer.shapeKind) {
                         "Circle" -> canvas.drawCircle(0f, 0f, half, paintFill)
                         "Rectangle" -> canvas.drawRect(RectF(-half, -half * 0.75f, half, half * 0.75f), paintFill)
@@ -634,6 +676,7 @@ object PlaybackCacheEngine {
                         "Hexagon" -> canvas.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(6, half, null), paintFill)
                         else -> canvas.drawRoundRect(RectF(-half, -half * 0.75f, half, half * 0.75f), 20f, 20f, paintFill)
                     }
+                    paintFill.shader = null
                     if (layer.strokeEnabled) {
                         val sCol = runCatching { Color.parseColor(layer.strokeColorHex) }.getOrDefault(Color.WHITE)
                         paintStroke.color = Color.argb(alpha, Color.red(sCol), Color.green(sCol), Color.blue(sCol))
@@ -642,6 +685,7 @@ object PlaybackCacheEngine {
                     }
                 }
             }
+            paintFill.shader = null
             paintFill.xfermode = null
             canvas.restore()
         }
@@ -676,7 +720,8 @@ object PlaybackCacheEngine {
         val h = bmp.height.toFloat()
         val sec = timeMs / 1000f
         for (fx in effects) {
-            val eval = AnimationEvaluator.evaluateEffectNode(fx, timeMs, audio)
+            val rawEval = AnimationEvaluator.evaluateEffectNode(fx, timeMs, audio)
+            val eval = EffectsCatalog.normalizeForShader(fx.effectId, rawEval)
             if (eval.mixFraction <= 0.01f) continue
             val def = EffectsCatalog.findById(fx.effectId)
             val tint = runCatching { Color.parseColor(fx.tintColorHex) }.getOrDefault(Color.WHITE)

@@ -58,36 +58,11 @@ object OffscreenGlPreRenderEngine {
             }
 
             Thread({
-                // Warm nonlinear clips in a single forward hardware pass if present
-                for (nlLayer in nonlinearVideoLayers) {
-                    if (cancelFlag.get() || !isStillValid()) break
-                    val neededBuckets = frameTimestampsMs
-                        .filter { it in nlLayer.startTimeMs..nlLayer.endTimeMs }
-                        .map { t ->
-                            val aud = audioEngine.sampleTimelineSpectrum(t, project.bpm, project.beatMarkers)
-                            val srcMs = AnimationEvaluator.evaluateSourceMediaTimeMs(nlLayer, t, aud)
-                            MediaEngine.quantizeVideoBucketMs(srcMs)
-                        }
-                        .distinct()
-                        .sorted()
-                    val uncached = neededBuckets.filter { !MediaEngine.hasCachedVideoBucket(nlLayer.mediaUri, it) }
-                    if (uncached.isNotEmpty()) {
-                        SequentialVideoDecoder.decodeSortedTimestampsHardware(
-                            context = appCtx,
-                            uriStr = nlLayer.mediaUri,
-                            sortedTimestampsMs = uncached,
-                            maxEdge = maxOf(targetW, targetH).coerceIn(192, 640),
-                            cancelled = cancelFlag
-                        ) { bucketMs, bmp ->
-                            MediaEngine.putPreDecodedVideoFrame(nlLayer.mediaUri, bucketMs, bmp)
-                        }
-                    }
-                }
-
                 var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
                 var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
                 var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
                 var renderer: FramePollutionGlRenderer? = null
+                var scratchArgb: Bitmap? = null
                 val videoSessions = HashMap<String, GlSequentialVideoSession>()
                 var gpuSucceeded = false
 
@@ -155,8 +130,14 @@ object OffscreenGlPreRenderEngine {
 
                                         val rgbaBuf = ByteBuffer.allocateDirect(targetW * targetH * 4)
                                             .order(ByteOrder.nativeOrder())
-                                        val useCompact565 = project.backgroundColor != "Transparent" &&
-                                            frameTimestampsMs.size > 150
+                                        val useCompact565 = project.backgroundColor != "Transparent"
+                                        val reusableArgb = Bitmap.createBitmap(
+                                            targetW,
+                                            targetH,
+                                            Bitmap.Config.ARGB_8888
+                                        )
+                                        scratchArgb = reusableArgb
+                                        val warmEdge = maxOf(targetW, targetH).coerceIn(192, 540)
 
                                         var renderedAny = false
                                         for (idx in frameTimestampsMs.indices) {
@@ -175,6 +156,49 @@ object OffscreenGlPreRenderEngine {
                                                 project.bpm,
                                                 project.beatMarkers
                                             )
+
+                                            // Warm upcoming nonlinear/reversed video frames in bounded 100-frame windows
+                                            // so earlier frames are never evicted before they are composited!
+                                            if (nonlinearVideoLayers.isNotEmpty()) {
+                                                for (nlLayer in nonlinearVideoLayers) {
+                                                    if (bucketMs !in nlLayer.startTimeMs..nlLayer.endTimeMs) continue
+                                                    val curSrc = AnimationEvaluator.evaluateSourceMediaTimeMs(nlLayer, bucketMs, audio)
+                                                    val clampedSrc = if (nlLayer.sourceDurationMs > 50L) {
+                                                        curSrc.coerceIn(0L, nlLayer.sourceDurationMs - 36L)
+                                                    } else curSrc.coerceAtLeast(0L)
+                                                    val curVidBucket = MediaEngine.quantizeVideoBucketMs(clampedSrc)
+                                                    if (!MediaEngine.hasCachedVideoBucket(nlLayer.mediaUri, curVidBucket)) {
+                                                        val endIdx = minOf(frameTimestampsMs.size, idx + 100)
+                                                        val windowNeeded = frameTimestampsMs.subList(idx, endIdx)
+                                                            .filter { it in nlLayer.startTimeMs..nlLayer.endTimeMs }
+                                                            .map { tMs ->
+                                                                val a = audioEngine.sampleTimelineSpectrum(tMs, project.bpm, project.beatMarkers)
+                                                                val rawS = AnimationEvaluator.evaluateSourceMediaTimeMs(nlLayer, tMs, a)
+                                                                val safeS = if (nlLayer.sourceDurationMs > 50L) {
+                                                                    rawS.coerceIn(0L, nlLayer.sourceDurationMs - 36L)
+                                                                } else rawS.coerceAtLeast(0L)
+                                                                MediaEngine.quantizeVideoBucketMs(safeS)
+                                                            }
+                                                            .distinct()
+                                                            .filter { !MediaEngine.hasCachedVideoBucket(nlLayer.mediaUri, it) }
+                                                            .sorted()
+                                                        if (windowNeeded.isNotEmpty()) {
+                                                            SequentialVideoDecoder.decodeSortedTimestampsHardware(
+                                                                context = appCtx,
+                                                                uriStr = nlLayer.mediaUri,
+                                                                sortedTimestampsMs = windowNeeded,
+                                                                maxEdge = warmEdge,
+                                                                cancelled = cancelFlag,
+                                                                preferRgb565 = true
+                                                            ) { vBucket, bmp ->
+                                                                MediaEngine.putPreDecodedVideoFrame(nlLayer.mediaUri, vBucket, bmp)
+                                                            }
+                                                            // Restore our PBuffer context on this thread after helper thread finishes
+                                                            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+                                                        }
+                                                    }
+                                                }
+                                            }
 
                                             // Advance active sequential hardware video decoders
                                             videoSessions.forEach { (layerId, seq) ->
@@ -210,26 +234,19 @@ object OffscreenGlPreRenderEngine {
                                                 break
                                             }
 
-                                            val argbBmp = Bitmap.createBitmap(
-                                                targetW,
-                                                targetH,
-                                                Bitmap.Config.ARGB_8888
-                                            )
-                                            argbBmp.copyPixelsFromBuffer(rgbaBuf)
+                                            rgbaBuf.position(0)
+                                            reusableArgb.copyPixelsFromBuffer(rgbaBuf)
                                             val finalBmp = if (useCompact565) {
-                                                val compact = argbBmp.copy(Bitmap.Config.RGB_565, false)
-                                                if (compact != null) {
-                                                    argbBmp.recycle()
-                                                    compact
-                                                } else {
-                                                    argbBmp
-                                                }
+                                                reusableArgb.copy(Bitmap.Config.RGB_565, false)
+                                                    ?: reusableArgb.copy(Bitmap.Config.ARGB_8888, false)
                                             } else {
-                                                argbBmp
+                                                reusableArgb.copy(Bitmap.Config.ARGB_8888, false)
                                             }
 
-                                            onFrameRendered(idx, bucketMs, finalBmp)
-                                            renderedAny = true
+                                            if (finalBmp != null) {
+                                                onFrameRendered(idx, bucketMs, finalBmp)
+                                                renderedAny = true
+                                            }
                                         }
                                         if (renderedAny) gpuSucceeded = true
                                     }
@@ -240,6 +257,7 @@ object OffscreenGlPreRenderEngine {
                 } catch (_: Throwable) {
                     gpuSucceeded = false
                 } finally {
+                    runCatching { scratchArgb?.recycle() }
                     videoSessions.values.forEach { runCatching { it.release() } }
                     videoSessions.clear()
                     runCatching { renderer?.releaseGlResources() }

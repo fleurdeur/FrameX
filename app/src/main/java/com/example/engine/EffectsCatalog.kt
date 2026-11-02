@@ -6,6 +6,7 @@ import com.example.data.model.EffectParamSlot
 import kotlin.math.abs
 
 enum class EffectCategory(val title: String) {
+    PLUGINS("Plugins"),
     DESKTOP_HOMAGE("Desktop Suite Homages"),
     ALIGHT_STAPLES("Alight Motion Staples"),
     TRANSITIONS("Transitions & Wipes"),
@@ -55,29 +56,69 @@ data class EffectDefinition(
     val colorLabel: String = "Tint Color",
     val summary: String
 ) {
-    fun toNode(customIntensity: Float = defaultIntensity): EffectNode = EffectNode(
-        effectId = id,
-        displayName = name,
-        category = category.title,
-        intensity = customIntensity,
-        secondaryParam = defaultSecondary,
-        frequencyParam = defaultFrequency,
-        angleParam = defaultAngle,
-        mixParam = defaultMix,
-        tintColorHex = defaultTintHex,
-        primaryProp = AnimatableProperty(customIntensity),
-        secondaryProp = AnimatableProperty(defaultSecondary),
-        frequencyProp = AnimatableProperty(defaultFrequency),
-        angleProp = AnimatableProperty(defaultAngle),
-        mixProp = AnimatableProperty(defaultMix)
-    )
+    fun toNode(customIntensity: Float = defaultIntensity): EffectNode {
+        val plugin = PluginPackManager.findPluginEffect(id)
+        val cParams = if (plugin != null) {
+            plugin.parameters
+                .filter { it.type != PluginParamType.COLOR }
+                .associate { p -> p.key to AnimatableProperty(p.defaultFloat) }
+        } else emptyMap()
+        val cColors = if (plugin != null) {
+            plugin.parameters
+                .filter { it.type == PluginParamType.COLOR }
+                .associate { p -> p.key to p.defaultColorHex }
+        } else emptyMap()
+
+        return EffectNode(
+            effectId = id,
+            displayName = name,
+            category = plugin?.category ?: category.title,
+            intensity = customIntensity,
+            secondaryParam = defaultSecondary,
+            frequencyParam = defaultFrequency,
+            angleParam = defaultAngle,
+            mixParam = defaultMix,
+            tintColorHex = defaultTintHex,
+            primaryProp = AnimatableProperty(customIntensity),
+            secondaryProp = AnimatableProperty(defaultSecondary),
+            frequencyProp = AnimatableProperty(defaultFrequency),
+            angleProp = AnimatableProperty(defaultAngle),
+            mixProp = AnimatableProperty(defaultMix),
+            customParams = cParams,
+            customColors = cColors
+        )
+    }
 
     /**
-     * Authentic Per-Effect Alight Motion / Sapphire / BCC Parameter Definitions!
+     * Authentic Per-Effect Alight Motion / Sapphire / BCC / KeyFlow Parameter Definitions!
      * Every effect exposes its real domain-specific property names, units, and min/max ranges,
      * all 100% keyframeable with controllable Bezier curves!
      */
     fun paramSpecs(): List<EffectParamSpec> {
+        PluginPackManager.findPluginEffect(id)?.let { plugin ->
+            val numeric = plugin.parameters.filter { it.type != PluginParamType.COLOR }
+            val slots = listOf(
+                EffectParamSlot.PRIMARY,
+                EffectParamSlot.SECONDARY,
+                EffectParamSlot.FREQUENCY,
+                EffectParamSlot.ANGLE
+            )
+            return buildList {
+                numeric.take(4).forEachIndexed { idx, p ->
+                    add(
+                        EffectParamSpec(
+                            slot = slots[idx],
+                            label = p.label,
+                            minVal = p.min,
+                            maxVal = p.max,
+                            unit = "",
+                            fineStep = p.step
+                        )
+                    )
+                }
+                add(EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f))
+            }
+        }
         EffectsCatalog.customSpecsForEffect(id)?.let { return it }
         return when (shaderMode) {
             1 -> listOf(
@@ -173,7 +214,24 @@ data class EffectDefinition(
 
 object EffectsCatalog {
 
-    val allEffects: List<EffectDefinition> = buildList {
+    @Volatile
+    private var pluginDefsCache: List<EffectDefinition>? = null
+
+    fun invalidatePluginCache() {
+        pluginDefsCache = null
+    }
+
+    private fun currentPluginDefs(): List<EffectDefinition> {
+        pluginDefsCache?.let { return it }
+        val built = PluginPackManager.activePluginEffects().map { PluginPackManager.toEffectDefinition(it) }
+        pluginDefsCache = built
+        return built
+    }
+
+    val allEffects: List<EffectDefinition>
+        get() = currentPluginDefs() + builtInEffects
+
+    val builtInEffects: List<EffectDefinition> = buildList {
         // 1. Desktop Suite Homages (Sapphire S_*, Boris Continuum BCC_*, Trapcode/Stardust/Optical/RSMB) - 22 Effects
         val desktop = listOf(
             EffectDefinition("S_Glow", "S_Glow (Optical Bloom)", EffectCategory.DESKTOP_HOMAGE, 1, 0.80f, 0.55f, 0f, 0f, 100f, "#FFFFFF", "Glow Color", "Multi-threshold inverse-square optical glow"),

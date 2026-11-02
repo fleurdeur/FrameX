@@ -94,22 +94,15 @@ fun Workspace3DScreen(
                     }
                 },
                 title = {
-                    Column {
-                        Text(
-                            text = "3D Camera & Object Rig",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Yaw ${state.cameraYawDeg.toInt()}° • Pitch ${state.cameraPitchDeg.toInt()}° • ${String.format("%.1f", state.cameraDistance)}m",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AmTealBright
-                        )
-                    }
+                    Text(
+                        text = "3D",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
                 },
                 actions = {
                     AmPrimaryCtaButton(
-                        text = "3D MESH",
+                        text = "Add",
                         icon = Icons.Default.Add,
                         onClick = onAdd3DLayer,
                         testTag = "add_3d_object_button",
@@ -204,7 +197,7 @@ fun Workspace3DScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "3D Object Geometry & Mesh Import",
+                        text = "Mesh",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
@@ -224,7 +217,7 @@ fun Workspace3DScreen(
 
                         AmActionTileButton(
                             icon = Icons.Default.FileOpen,
-                            label = "Import .OBJ / .GLB / .GLTF Mesh File",
+                            label = "Import Mesh",
                             accentColor = AmTeal,
                             selected = active3DLayer.primitive3D == Primitive3DType.IMPORTED_MESH,
                             onClick = { modelPicker.launch("*/*") },
@@ -232,7 +225,7 @@ fun Workspace3DScreen(
                         )
                     } else {
                         Text(
-                            text = "No 3D layer in project yet. Tap '+ 3D MESH' above to add a hardware-accelerated 3D object.",
+                            text = "No 3D layer",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
@@ -243,7 +236,7 @@ fun Workspace3DScreen(
                         minValue = 2.0f,
                         maxValue = 12.0f,
                         unit = "m",
-                        label = "Camera Z Dolly Distance",
+                        label = "Distance",
                         onValueChange = { target ->
                             val ratio = if (target > 0f) state.cameraDistance / target else 1f
                             onOrbitCamera(0f, 0f, ratio)

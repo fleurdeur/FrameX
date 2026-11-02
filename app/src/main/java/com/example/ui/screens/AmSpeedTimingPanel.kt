@@ -41,6 +41,7 @@ import com.example.data.model.LayerType
 import com.example.data.model.PropertyTarget
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
+import com.example.engine.StudioDspAudioProcessor
 import com.example.ui.components.AmKeyframeCluster
 import com.example.ui.components.AmPrimaryCtaButton
 import com.example.ui.components.AmSegmentChip
@@ -81,6 +82,17 @@ fun AmSpeedAndTimingPanel(
     onNavigateTool: (StudioDestination) -> Unit,
     onExtractAudio: () -> Unit,
     onUpdateAudioVolume: (volume: Float, muted: Boolean) -> Unit,
+    onUpdateAudioEffects: (
+        preset: String,
+        reverbMix: Float,
+        roomSize: Float,
+        bassBoost: Float,
+        echoMix: Float,
+        echoDelayMs: Float,
+        filterCutoff: Float,
+        pitchSemitones: Float,
+        optSpeed: Float?
+    ) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val isVideo = selectedLayer.type == LayerType.VIDEO
@@ -113,7 +125,7 @@ fun AmSpeedAndTimingPanel(
                 minValue = 0.10f,
                 maxValue = 4.00f,
                 unit = "x",
-                label = "Playback Speed",
+                label = "Speed",
                 onValueChange = onUpdateSpeed,
                 testTag = "speed_wheel_scrubber"
             )
@@ -143,13 +155,13 @@ fun AmSpeedAndTimingPanel(
             ) {
                 Icon(
                     imageVector = Icons.Default.History,
-                    contentDescription = "Reverse clip",
+                    contentDescription = "Reverse",
                     tint = if (selectedLayer.reversed) NeonPink else TextPrimary,
                     modifier = Modifier.size(17.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (selectedLayer.reversed) "Reverse: ON" else "Reverse Clip",
+                    text = "Reverse",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (selectedLayer.reversed) NeonPink else TextPrimary,
                     fontWeight = FontWeight.Bold
@@ -177,13 +189,13 @@ fun AmSpeedAndTimingPanel(
                 ) {
                     Icon(
                         imageVector = Icons.Default.AcUnit,
-                        contentDescription = "Freeze frame",
+                        contentDescription = "Freeze",
                         tint = if (isFrozen) KeyframeAmber else TextPrimary,
                         modifier = Modifier.size(17.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (isFrozen) "Frozen" else "Freeze Frame",
+                        text = "Freeze",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (isFrozen) KeyframeAmber else TextPrimary,
                         fontWeight = FontWeight.Bold
@@ -208,19 +220,13 @@ fun AmSpeedAndTimingPanel(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Time Remapping (Velocity)",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (selectedLayer.timeRemapEnabled) AmTealBright else TextPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Keyframe exact video frame time & Bezier speed ramps",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                    }
+                    Text(
+                        text = "Time Remap",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (selectedLayer.timeRemapEnabled) AmTealBright else TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
                     Switch(
                         checked = selectedLayer.timeRemapEnabled,
                         onCheckedChange = { enabled ->
@@ -264,7 +270,7 @@ fun AmSpeedAndTimingPanel(
                             minValue = 0f,
                             maxValue = maxSec,
                             unit = "s",
-                            label = "Remap Source Time",
+                            label = "Time",
                             onValueChange = { v ->
                                 onSelectProperty(PropertyTarget.TIME_REMAP)
                                 onUpdateTimeRemapSec(v)
@@ -295,14 +301,16 @@ fun AmSpeedAndTimingPanel(
                         ) {
                             Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Velocity Graph", style = MaterialTheme.typography.labelSmall, color = AmTealBright, fontWeight = FontWeight.Bold)
+                            Text("Graph", style = MaterialTheme.typography.labelSmall, color = AmTealBright, fontWeight = FontWeight.Bold)
                         }
 
-                        listOf("Smooth Slow-Mo", "Velocity Whip", "Bullet Ramp", "Reverse Bounce").forEach { preset ->
+                        listOf("Slow-Mo", "Whip", "Bullet", "Bounce").zip(
+                            listOf("Smooth Slow-Mo", "Velocity Whip", "Bullet Ramp", "Reverse Bounce")
+                        ).forEach { (shortLabel, presetKey) ->
                             AmSegmentChip(
-                                label = preset,
+                                label = shortLabel,
                                 selected = false,
-                                onClick = { onApplyVelocityPreset(preset) },
+                                onClick = { onApplyVelocityPreset(presetKey) },
                                 compact = true
                             )
                         }
@@ -310,9 +318,8 @@ fun AmSpeedAndTimingPanel(
                 }
             }
 
-            // 4. Lossless Video Audio Extraction CTA
             AmPrimaryCtaButton(
-                text = "EXTRACT AUDIO TO TRACK",
+                text = "Extract Audio",
                 icon = Icons.Default.GraphicEq,
                 onClick = onExtractAudio,
                 modifier = Modifier.fillMaxWidth(),
@@ -361,6 +368,299 @@ fun AmSpeedAndTimingPanel(
                     modifier = Modifier.weight(1f)
                 )
             }
+
+            // 6. Real-Time Studio Audio Effects (Reverb, Sub-Bass, Slapback Echo, Low-Pass Filter, Pitch Shift)
+            val hasCustomDsp = selectedLayer.audioPreset != "Clean" ||
+                selectedLayer.audioReverbMix > 0.01f ||
+                selectedLayer.audioBassBoost > 0.01f ||
+                selectedLayer.audioEchoMix > 0.01f ||
+                selectedLayer.audioFilterCutoff < 0.98f ||
+                abs(selectedLayer.audioPitchSemitones) > 0.05f
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(PanelDark)
+                    .border(
+                        1.dp,
+                        if (hasCustomDsp) AudioCyan.copy(alpha = 0.75f) else OutlineSubtle,
+                        RoundedCornerShape(10.dp)
+                    )
+                    .padding(10.dp)
+                    .testTag("audio_dsp_effects_card"),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = null,
+                            tint = AudioCyan,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Text(
+                            text = "Audio Effects",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (hasCustomDsp) {
+                        Text(
+                            text = "Reset",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = AudioCyan,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(AudioCyan.copy(alpha = 0.14f))
+                                .clickable {
+                                    onUpdateAudioEffects("Clean", 0f, 0.5f, 0f, 0f, 240f, 1.0f, 0f, null)
+                                }
+                                .testTag("audio_dsp_reset_button")
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                // 1-Tap Audio DSP Presets Strip
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    StudioDspAudioProcessor.PRESETS.forEach { preset ->
+                        AmSegmentChip(
+                            label = preset.name,
+                            selected = selectedLayer.audioPreset == preset.name,
+                            compact = true,
+                            onClick = {
+                                onUpdateAudioEffects(
+                                    preset.name,
+                                    preset.reverbMix,
+                                    preset.roomSize,
+                                    preset.bassBoost,
+                                    preset.echoMix,
+                                    preset.echoDelayMs,
+                                    preset.filterCutoff,
+                                    preset.pitchSemitones,
+                                    preset.recommendedSpeed
+                                )
+                            }
+                        )
+                    }
+                }
+
+                // Reverb Mix & Room Size
+                AudioDspCompactSliderRow(
+                    label = "Reverb",
+                    valueText = "${(selectedLayer.audioReverbMix * 100).toInt()}%",
+                    value = selectedLayer.audioReverbMix,
+                    range = 0f..1f,
+                    testTag = "audio_reverb_slider",
+                    onValueChange = { v ->
+                        onUpdateAudioEffects(
+                            "Custom",
+                            v,
+                            selectedLayer.audioRoomSize,
+                            selectedLayer.audioBassBoost,
+                            selectedLayer.audioEchoMix,
+                            selectedLayer.audioEchoDelayMs,
+                            selectedLayer.audioFilterCutoff,
+                            selectedLayer.audioPitchSemitones,
+                            null
+                        )
+                    }
+                )
+
+                if (selectedLayer.audioReverbMix > 0.01f) {
+                    AudioDspCompactSliderRow(
+                        label = "Room",
+                        valueText = "${(selectedLayer.audioRoomSize * 100).toInt()}%",
+                        value = selectedLayer.audioRoomSize,
+                        range = 0.1f..1f,
+                        testTag = "audio_room_size_slider",
+                        onValueChange = { v ->
+                            onUpdateAudioEffects(
+                                "Custom",
+                                selectedLayer.audioReverbMix,
+                                v,
+                                selectedLayer.audioBassBoost,
+                                selectedLayer.audioEchoMix,
+                                selectedLayer.audioEchoDelayMs,
+                                selectedLayer.audioFilterCutoff,
+                                selectedLayer.audioPitchSemitones,
+                                null
+                            )
+                        }
+                    )
+                }
+
+                // Sub-Bass Boost
+                AudioDspCompactSliderRow(
+                    label = "Bass",
+                    valueText = "+${(selectedLayer.audioBassBoost * 12f).toInt()} dB",
+                    value = selectedLayer.audioBassBoost,
+                    range = 0f..1f,
+                    testTag = "audio_bass_boost_slider",
+                    onValueChange = { v ->
+                        onUpdateAudioEffects(
+                            "Custom",
+                            selectedLayer.audioReverbMix,
+                            selectedLayer.audioRoomSize,
+                            v,
+                            selectedLayer.audioEchoMix,
+                            selectedLayer.audioEchoDelayMs,
+                            selectedLayer.audioFilterCutoff,
+                            selectedLayer.audioPitchSemitones,
+                            null
+                        )
+                    }
+                )
+
+                // Echo / Delay
+                AudioDspCompactSliderRow(
+                    label = "Echo",
+                    valueText = "${(selectedLayer.audioEchoMix * 100).toInt()}%",
+                    value = selectedLayer.audioEchoMix,
+                    range = 0f..1f,
+                    testTag = "audio_echo_mix_slider",
+                    onValueChange = { v ->
+                        onUpdateAudioEffects(
+                            "Custom",
+                            selectedLayer.audioReverbMix,
+                            selectedLayer.audioRoomSize,
+                            selectedLayer.audioBassBoost,
+                            v,
+                            selectedLayer.audioEchoDelayMs,
+                            selectedLayer.audioFilterCutoff,
+                            selectedLayer.audioPitchSemitones,
+                            null
+                        )
+                    }
+                )
+
+                if (selectedLayer.audioEchoMix > 0.01f) {
+                    AudioDspCompactSliderRow(
+                        label = "Delay",
+                        valueText = "${selectedLayer.audioEchoDelayMs.toInt()} ms",
+                        value = selectedLayer.audioEchoDelayMs,
+                        range = 60f..650f,
+                        testTag = "audio_echo_delay_slider",
+                        onValueChange = { v ->
+                            onUpdateAudioEffects(
+                                "Custom",
+                                selectedLayer.audioReverbMix,
+                                selectedLayer.audioRoomSize,
+                                selectedLayer.audioBassBoost,
+                                selectedLayer.audioEchoMix,
+                                v,
+                                selectedLayer.audioFilterCutoff,
+                                selectedLayer.audioPitchSemitones,
+                                null
+                            )
+                        }
+                    )
+                }
+
+                // Low-Pass Filter (Underwater / Lo-Fi)
+                AudioDspCompactSliderRow(
+                    label = "Filter",
+                    valueText = if (selectedLayer.audioFilterCutoff >= 0.98f) "Open" else "${(selectedLayer.audioFilterCutoff * 100).toInt()}%",
+                    value = selectedLayer.audioFilterCutoff,
+                    range = 0.12f..1f,
+                    testTag = "audio_filter_cutoff_slider",
+                    onValueChange = { v ->
+                        onUpdateAudioEffects(
+                            "Custom",
+                            selectedLayer.audioReverbMix,
+                            selectedLayer.audioRoomSize,
+                            selectedLayer.audioBassBoost,
+                            selectedLayer.audioEchoMix,
+                            selectedLayer.audioEchoDelayMs,
+                            v,
+                            selectedLayer.audioPitchSemitones,
+                            null
+                        )
+                    }
+                )
+
+                // Pitch Shift (Semitones)
+                AudioDspCompactSliderRow(
+                    label = "Pitch",
+                    valueText = String.format("%+.1f st", selectedLayer.audioPitchSemitones),
+                    value = selectedLayer.audioPitchSemitones,
+                    range = -12f..12f,
+                    testTag = "audio_pitch_slider",
+                    onValueChange = { v ->
+                        onUpdateAudioEffects(
+                            "Custom",
+                            selectedLayer.audioReverbMix,
+                            selectedLayer.audioRoomSize,
+                            selectedLayer.audioBassBoost,
+                            selectedLayer.audioEchoMix,
+                            selectedLayer.audioEchoDelayMs,
+                            selectedLayer.audioFilterCutoff,
+                            v,
+                            null
+                        )
+                    }
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun AudioDspCompactSliderRow(
+    label: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    testTag: String,
+    onValueChange: (Float) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(28.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary,
+            modifier = Modifier.width(64.dp)
+        )
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = AudioCyan,
+                activeTrackColor = AudioCyan
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .testTag(testTag)
+        )
+        Text(
+            text = valueText,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimary,
+            modifier = Modifier.width(52.dp)
+        )
     }
 }

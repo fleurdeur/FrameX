@@ -2,25 +2,34 @@
 
 package com.example.ui.screens
 
+import android.graphics.Bitmap
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,64 +44,81 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.BorderStyle
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FirstPage
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.HighQuality
-import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.LastPage
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Loop
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.TextFields
-import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,16 +131,22 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.example.data.model.AudioBand
 import com.example.data.model.EffectNode
 import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
@@ -125,33 +157,47 @@ import com.example.data.preferences.PreviewQuality
 import com.example.data.preferences.StudioPreferences
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
-import com.example.engine.PlaybackCacheEngine
 import com.example.engine.PreRenderUiState
+import com.example.ui.components.AmInteractiveEyedropperOverlay
+import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
+import com.example.ui.components.EyedropperColorSlot
 import com.example.ui.components.GlPreviewCanvas
-import com.example.ui.theme.AmBgDark
+import com.example.ui.components.PreviewFrameSampler
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.AmTealContainer
 import com.example.ui.theme.AudioCyan
 import com.example.ui.theme.DeepBlack
-import com.example.ui.theme.ElectricBlue
+import com.example.ui.theme.KeyflowBlue
+import com.example.ui.theme.KeyflowBlueBright
+import com.example.ui.theme.KeyflowCardBorder
+import com.example.ui.theme.KeyflowCardSurface
+import com.example.ui.theme.KeyflowDangerRed
+import com.example.ui.theme.KeyflowDrawerBg
+import com.example.ui.theme.KeyflowRailDivider
 import com.example.ui.theme.KeyframeAmber
 import com.example.ui.theme.NeonPink
 import com.example.ui.theme.OutlineSubtle
 import com.example.ui.theme.PanelDark
-import com.example.ui.theme.PanelElevated
-import com.example.ui.theme.PlayheadRed
-import com.example.ui.theme.PlayheadWhite
-import com.example.ui.theme.RigGreen
 import com.example.ui.theme.SurfaceDark
-import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.viewmodel.AmInspectorTab
 import com.example.viewmodel.StudioDestination
 import com.example.viewmodel.StudioWorkspaceState
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.roundToLong
+
+private val TimelinePitchBlack = Color(0xFF000000)
+private val TimelineRulerBg = Color(0xFF060709)
+private val TimelineTransportBg = Color(0xFF08090C)
+private val TimelineHairline = Color(0xFF20242C)
+private val PlayheadEmerald = Color(0xFF1DB954)
+private val BookmarkSkyBlue = Color(0xFF5CC2F2)
+private val ClipMediaBlue = Color(0xFF0D8BFF)
+private val ClipRigRed = Color(0xFFF0484E)
 
 @Composable
 fun EditorWorkspaceScreen(
@@ -189,7 +235,10 @@ fun EditorWorkspaceScreen(
     onUpdateBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit,
     onSelectEffectForInspection: (String) -> Unit = {},
     onSelectEffectSlot: (EffectParamSlot) -> Unit = {},
+    onSelectPluginParamKey: (String) -> Unit = {},
     onUpdateEffectSlotValue: (Float) -> Unit = {},
+    onUpdateCustomPluginParamValue: (String, Float) -> Unit = { _, _ -> },
+    onUpdateCustomPluginColor: (String, String) -> Unit = { _, _ -> },
     onToggleEffectKeyframe: () -> Unit = {},
     onJumpEffectKeyframe: (Boolean) -> Unit = {},
     onUpdateEffectBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
@@ -236,6 +285,13 @@ fun EditorWorkspaceScreen(
     onSetLayerParent: (String, String?) -> Unit,
     onUpdateTextLayer: (String, String, String) -> Unit,
     onUpdateLayerColor: (String, String) -> Unit,
+    onUpdateLayerGradientFill: (String, String, String, String, Float) -> Unit = { _, _, _, _, _ -> },
+    onUpdateAudioEffects: (String, String, Float, Float, Float, Float, Float, Float, Float, Float?) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+    onImportCustomFont: (Uri) -> Unit = {},
+    onMoveLayerTimeRange: (String, Long, Boolean) -> Unit = { _, _, _ -> },
+    onAutoDetectBassBeats: (Float) -> Unit = {},
+    onClearAllBeatMarkers: () -> Unit = {},
+    onBindAudioToProperty: (AudioBand, Float) -> Unit = { _, _ -> },
     onUpdateShapeKind: (String, String) -> Unit,
     onUpdateBlendMode: (String, String) -> Unit,
     onUpdateBorderShadow: (String, Boolean, Float, String, Boolean, Float, String) -> Unit,
@@ -247,16 +303,49 @@ fun EditorWorkspaceScreen(
     onViewportGesture: (Float, Float, Float) -> Unit,
     onResetViewport: () -> Unit
 ) {
+    val context = LocalContext.current
     val project = state.activeProject
     val selectedLayer = project.layers.firstOrNull { it.id == state.selectedLayerId }
     val isLayerSheetOpen = state.inspectorTab != AmInspectorTab.TIMELINE && selectedLayer != null
     val density = LocalDensity.current
+
+    val previewFrameSampler = remember { PreviewFrameSampler() }
+    var activeEyedropperSlot by remember { mutableStateOf<EyedropperColorSlot?>(null) }
+    var pendingPluginEyedropperColorKey by remember { mutableStateOf<String?>(null) }
+    var eyedropperBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     var showAddDrawer by remember { mutableStateOf(false) }
     var showProjectSettings by remember { mutableStateOf(false) }
     var showClipboardMenu by remember { mutableStateOf(false) }
     var showQualityMenu by remember { mutableStateOf(false) }
     var showPlayHoldMenu by remember { mutableStateOf(false) }
+    var showFloatingBeatReactor by remember { mutableStateOf(false) }
+    var showCanvasGrid by remember { mutableStateOf(false) }
+
+    val launchScreenEyedropper: (EyedropperColorSlot) -> Unit = { slot ->
+        pendingPluginEyedropperColorKey = null
+        previewFrameSampler.captureScreenBitmap(
+            context = context,
+            project = project,
+            playheadMs = state.playheadMs,
+            audio = audioSpectrum
+        ) { bmp ->
+            eyedropperBitmap = bmp
+            activeEyedropperSlot = slot
+        }
+    }
+    val launchPluginColorEyedropper: (String) -> Unit = { colorKey ->
+        pendingPluginEyedropperColorKey = colorKey
+        previewFrameSampler.captureScreenBitmap(
+            context = context,
+            project = project,
+            playheadMs = state.playheadMs,
+            audio = audioSpectrum
+        ) { bmp ->
+            eyedropperBitmap = bmp
+            activeEyedropperSlot = EyedropperColorSlot.EFFECT_TINT
+        }
+    }
 
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -274,97 +363,896 @@ fun EditorWorkspaceScreen(
         if (uri != null) onImportMediaUri(uri, LayerType.AUDIO)
     }
 
+    var showTopRenameDialog by remember { mutableStateOf(false) }
+    var topRenameDraft by remember(selectedLayer?.id, selectedLayer?.name) {
+        mutableStateOf(selectedLayer?.name.orEmpty())
+    }
+    var showTopLayerOverflow by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = selectedLayer != null || showAddDrawer) {
+        when {
+            showAddDrawer -> showAddDrawer = false
+            selectedLayer != null && state.inspectorTab != AmInspectorTab.LAYER_OVERVIEW && state.inspectorTab != AmInspectorTab.TIMELINE -> {
+                onSetInspectorTab(AmInspectorTab.LAYER_OVERVIEW)
+            }
+            selectedLayer != null -> onCollapseToTimeline()
+        }
+    }
+
+    if (showTopRenameDialog && selectedLayer != null) {
+        AlertDialog(
+            onDismissRequest = { showTopRenameDialog = false },
+            containerColor = SurfaceDark,
+            title = { Text("Rename Layer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = topRenameDraft,
+                    onValueChange = { topRenameDraft = it },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRenameLayer(selectedLayer.id, topRenameDraft)
+                        showTopRenameDialog = false
+                    }
+                ) {
+                    Text("Save", color = KeyflowBlueBright, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTopRenameDialog = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
+
     if (showProjectSettings) {
         AmProjectSettingsDialog(
             project = project,
             onSaveSettings = onUpdateProjectSettings,
+            onRequestEyedropperForBg = { launchScreenEyedropper(EyedropperColorSlot.PROJECT_BG) },
             onDismiss = { showProjectSettings = false }
         )
     }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        containerColor = AmBgDark,
+        containerColor = TimelinePitchBlack,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = SurfaceDark),
-                navigationIcon = {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("editor_back_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back to Home",
-                            tint = TextPrimary
+            if (selectedLayer != null) {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = TimelineTransportBg),
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onCollapseToTimeline,
+                            modifier = Modifier.testTag("top_collapse_layer_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                contentDescription = "Deselect Layer",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    },
+                    title = {
+                        Text(
+                            text = selectedLayer.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    topRenameDraft = selectedLayer.name
+                                    showTopRenameDialog = true
+                                }
+                                .testTag("rename_layer_button")
+                                .padding(horizontal = 4.dp, vertical = 4.dp)
                         )
+                    },
+                    actions = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            IconButton(
+                                onClick = { onNavigateTool(StudioDestination.WORKSPACE_3D) },
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ViewInAr,
+                                    contentDescription = "3D View",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                            }
+
+                            // KeyFlow Dual-Circle Clipping Mask Toggle
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 40.dp, height = 38.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onToggleClippingMask(selectedLayer.id) }
+                                    .testTag("topbar_mask_toggle_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Canvas(modifier = Modifier.size(width = 30.dp, height = 18.dp)) {
+                                    val r = size.height * 0.48f
+                                    val cy = size.height * 0.5f
+                                    drawCircle(
+                                        color = if (selectedLayer.isClippingMask) KeyflowBlue else Color(0xFF454954),
+                                        radius = r,
+                                        center = Offset(r + 1.dp.toPx(), cy)
+                                    )
+                                    drawCircle(
+                                        color = Color.White,
+                                        radius = r,
+                                        center = Offset(size.width - r - 1.dp.toPx(), cy)
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = onDuplicateLayer,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("duplicate_layer_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = "Duplicate Layer",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Box {
+                                IconButton(
+                                    onClick = { showTopLayerOverflow = true },
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .testTag("selected_layer_overflow_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "More Options",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(21.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showTopLayerOverflow,
+                                    onDismissRequest = { showTopLayerOverflow = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Export Video", color = KeyflowBlueBright, fontWeight = FontWeight.SemiBold) },
+                                        leadingIcon = { Icon(Icons.Default.IosShare, contentDescription = null, tint = KeyflowBlueBright) },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            onNavigateTool(StudioDestination.EXPORT_PIPELINE)
+                                        },
+                                        modifier = Modifier.testTag("editor_export_button")
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Save to Cloud") },
+                                        leadingIcon = { Icon(Icons.Default.CloudUpload, contentDescription = null) },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            onSaveCloud()
+                                        },
+                                        modifier = Modifier.testTag("editor_cloud_save_button")
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Plugin Packs (.kfpack)") },
+                                        leadingIcon = { Icon(Icons.Default.Extension, contentDescription = null, tint = KeyflowBlueBright) },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            onNavigateTool(StudioDestination.PLUGIN_MANAGER)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Project Settings") },
+                                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            showProjectSettings = true
+                                        }
+                                    )
+                                    if (selectedLayer.type == LayerType.VIDEO) {
+                                        DropdownMenuItem(
+                                            text = { Text("Extract Audio") },
+                                            leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null) },
+                                            onClick = {
+                                                showTopLayerOverflow = false
+                                                onExtractAudioFromVideo()
+                                            }
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(if (selectedLayer.locked) "Unlock Layer" else "Lock Layer") },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            onToggleLayerLock(selectedLayer.id)
+                                        }
+                                    )
+                                    HorizontalDivider(color = OutlineSubtle)
+                                    DropdownMenuItem(
+                                        text = { Text("Delete Layer", color = KeyflowDangerRed) },
+                                        leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = KeyflowDangerRed) },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            onDeleteSelectedLayer()
+                                        },
+                                        modifier = Modifier.testTag("topbar_delete_layer_button")
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Exit to Projects") },
+                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
+                                        onClick = {
+                                            showTopLayerOverflow = false
+                                            onBack()
+                                        },
+                                        modifier = Modifier.testTag("editor_back_button")
+                                    )
+                                }
+                            }
+                        }
                     }
-                },
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { showProjectSettings = true }
-                            .testTag("project_settings_gear_button")
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f, fill = false)) {
+                )
+            } else {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = TimelineTransportBg),
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("editor_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = TextPrimary
+                            )
+                        }
+                    },
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { showProjectSettings = true }
+                                .testTag("project_settings_gear_button")
+                                .padding(horizontal = 4.dp, vertical = 4.dp)
+                        ) {
                             Text(
                                 text = project.name,
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.SemiBold,
                                 color = TextPrimary,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
-                            Text(
-                                text = "${project.width}×${project.height} • ${project.fps}fps",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary,
-                                maxLines = 1
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Settings",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(15.dp)
                             )
                         }
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Project settings",
-                            tint = TextSecondary,
-                            modifier = Modifier.size(15.dp)
+                    },
+                    actions = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            AmSquareIconButton(
+                                icon = Icons.Default.CloudUpload,
+                                contentDescription = "Save",
+                                active = state.isSavingCloud,
+                                onClick = onSaveCloud,
+                                sizeDp = 36.dp,
+                                testTag = "editor_cloud_save_button"
+                            )
+
+                            AmSquareIconButton(
+                                icon = Icons.Default.IosShare,
+                                contentDescription = "Export",
+                                active = true,
+                                onClick = { onNavigateTool(StudioDestination.EXPORT_PIPELINE) },
+                                sizeDp = 36.dp,
+                                testTag = "editor_export_button"
+                            )
+                        }
+                    }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(TimelinePitchBlack)
+                .padding(innerPadding)
+        ) {
+            // 1. TOP HALF: UNOBSTRUCTED PREVIEW STAGE
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.45f)
+                    .background(TimelinePitchBlack)
+            ) {
+                GlPreviewCanvas(
+                    project = project,
+                    playheadMs = state.playheadMs,
+                    isPlaying = state.isPlaying,
+                    previewQuality = state.previewQuality,
+                    previewFpsCap = preferences.previewFpsCap,
+                    isLooping = state.isLoopPlayback,
+                    projectRevision = state.projectRevision,
+                    usePlaybackCache = preferences.autoCachePlaybackFrames || preRenderState.cachedFramesCount > 0,
+                    onRenderStatsUpdate = if (preferences.showPerformanceHud) onRenderTelemetryUpdate else null,
+                    audioSnapshot = audioSpectrum,
+                    canvasZoom = state.canvasZoom,
+                    canvasPanX = state.canvasPanX,
+                    canvasPanY = state.canvasPanY,
+                    cameraYawDeg = state.cameraYawDeg,
+                    cameraPitchDeg = state.cameraPitchDeg,
+                    cameraDistance = state.cameraDistance,
+                    selectedLayerId = state.selectedLayerId,
+                    show3DGridOverlay = showCanvasGrid,
+                    onViewportGesture = onViewportGesture,
+                    onDragSelectedLayer = onDragLayerOnCanvas,
+                    onScaleAndRotateSelectedLayer = onScaleAndRotateLayerOnCanvas,
+                    onSelectLayerOnCanvas = onSelectLayer,
+                    previewFrameSampler = previewFrameSampler,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                val isCustomViewport = state.canvasZoom != 1f || state.canvasPanX != 0f || state.canvasPanY != 0f || showCanvasGrid
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    if (isCustomViewport) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xCC06080B))
+                                .clickable {
+                                    onResetViewport()
+                                    showCanvasGrid = false
+                                }
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = "Custom View",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = PlayheadEmerald
+                            )
+                        }
+                    }
+
+                    if (preRenderState.isPreRendering) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xDD080B10))
+                                .border(0.8.dp, PlayheadEmerald.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
+                                .clickable(onClick = onTriggerOrCancelPreRender)
+                                .testTag("prerender_progress_pill")
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bolt,
+                                contentDescription = "Pre-render",
+                                tint = PlayheadEmerald,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = "${(preRenderState.progress * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = PlayheadEmerald
+                            )
+                        }
+                    }
+
+                    if (preferences.showPerformanceHud) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xCC06080B))
+                                .testTag("preview_performance_hud")
+                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "${state.livePreviewFps} fps",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = PlayheadEmerald
+                            )
+                        }
+                    }
+                }
+
+                if (!state.statusBanner.isNullOrBlank() && !showFloatingBeatReactor && activeEyedropperSlot == null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(Color(0xDD0A0C10))
+                            .border(0.7.dp, TimelineHairline, RoundedCornerShape(7.dp))
+                            .padding(horizontal = 9.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = state.statusBanner,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                },
-                actions = {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(end = 6.dp)
-                    ) {
-                        AmSquareIconButton(
-                            icon = Icons.Default.CloudUpload,
-                            contentDescription = "Sync project to cloud",
-                            active = state.isSavingCloud,
-                            onClick = onSaveCloud,
-                            sizeDp = 36.dp,
-                            testTag = "editor_cloud_save_button"
-                        )
+                }
 
-                        // Alight Motion ⊞+ Layer Actions & Composition Menu
-                        Box {
-                            AmSquareIconButton(
-                                icon = Icons.Default.ContentCopy,
-                                contentDescription = "Layer actions menu",
-                                active = state.hasCopiedLayer || state.hasCopiedEffects,
-                                onClick = { showClipboardMenu = true },
-                                sizeDp = 36.dp,
-                                testTag = if (isLayerSheetOpen) "topbar_clipboard_button" else "duplicate_layer_button"
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showFloatingBeatReactor && activeEyedropperSlot == null,
+                    enter = fadeIn() + slideInVertically { it / 2 },
+                    exit = fadeOut() + slideOutVertically { it / 2 },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    AmFloatingBeatReactorPopover(
+                        beatCount = project.beatMarkers.size,
+                        bassLevel = audioSpectrum.bass,
+                        sensitivity = state.audioSensitivity,
+                        selectedLayer = selectedLayer,
+                        selectedProperty = state.selectedProperty,
+                        onAutoDetectBass = { sens -> onAutoDetectBassBeats(sens) },
+                        onToggleBeatAtPlayhead = onToggleBeatBookmark,
+                        onClearBeats = onClearAllBeatMarkers,
+                        onBindAudioToProperty = onBindAudioToProperty,
+                        onOpenFullAudioStudio = {
+                            showFloatingBeatReactor = false
+                            onNavigateTool(StudioDestination.AUDIO_REACTOR)
+                        },
+                        onDismiss = { showFloatingBeatReactor = false }
+                    )
+                }
+
+                val curEyedropperSlot = activeEyedropperSlot
+                val curEyedropperBmp = eyedropperBitmap
+                if (curEyedropperSlot != null && curEyedropperBmp != null) {
+                    AmInteractiveEyedropperOverlay(
+                        capturedBitmap = curEyedropperBmp,
+                        targetLabel = curEyedropperSlot.label,
+                        onColorPicked = { pickedHex ->
+                            when (curEyedropperSlot) {
+                                EyedropperColorSlot.LAYER_PRIMARY -> {
+                                    if (selectedLayer != null) {
+                                        if (selectedLayer.fillMode == "LINEAR_GRADIENT" || selectedLayer.fillMode == "RADIAL_GRADIENT") {
+                                            onUpdateLayerGradientFill(
+                                                selectedLayer.id,
+                                                selectedLayer.fillMode,
+                                                pickedHex,
+                                                selectedLayer.gradientEndColorHex,
+                                                selectedLayer.gradientAngleDeg
+                                            )
+                                        } else {
+                                            onUpdateLayerColor(selectedLayer.id, pickedHex)
+                                        }
+                                    }
+                                }
+                                EyedropperColorSlot.LAYER_GRADIENT_END -> {
+                                    if (selectedLayer != null) {
+                                        onUpdateLayerGradientFill(
+                                            selectedLayer.id,
+                                            selectedLayer.fillMode,
+                                            selectedLayer.colorHex,
+                                            pickedHex,
+                                            selectedLayer.gradientAngleDeg
+                                        )
+                                    }
+                                }
+                                EyedropperColorSlot.LAYER_STROKE -> {
+                                    if (selectedLayer != null) {
+                                        onUpdateBorderShadow(
+                                            selectedLayer.id,
+                                            true,
+                                            selectedLayer.strokeWidth,
+                                            pickedHex,
+                                            selectedLayer.shadowEnabled,
+                                            selectedLayer.shadowBlur,
+                                            selectedLayer.shadowColorHex
+                                        )
+                                    }
+                                }
+                                EyedropperColorSlot.LAYER_SHADOW -> {
+                                    if (selectedLayer != null) {
+                                        onUpdateBorderShadow(
+                                            selectedLayer.id,
+                                            selectedLayer.strokeEnabled,
+                                            selectedLayer.strokeWidth,
+                                            selectedLayer.strokeColorHex,
+                                            true,
+                                            selectedLayer.shadowBlur,
+                                            pickedHex
+                                        )
+                                    }
+                                }
+                                EyedropperColorSlot.EFFECT_TINT -> {
+                                    val customColorKey = pendingPluginEyedropperColorKey
+                                    if (customColorKey != null) {
+                                        onUpdateCustomPluginColor(customColorKey, pickedHex)
+                                        pendingPluginEyedropperColorKey = null
+                                    } else if (selectedLayer != null) {
+                                        val fx = selectedLayer.effects.firstOrNull { it.id == state.selectedEffectId }
+                                            ?: selectedLayer.effects.lastOrNull()
+                                        if (fx != null) {
+                                            onUpdateEffectNode(fx.copy(tintColorHex = pickedHex))
+                                        }
+                                    }
+                                }
+                                EyedropperColorSlot.PROJECT_BG -> {
+                                    onUpdateProjectSettings(
+                                        project.name,
+                                        project.width,
+                                        project.height,
+                                        project.fps,
+                                        (project.durationMs / 1000L).coerceAtLeast(1L).toInt(),
+                                        pickedHex
+                                    )
+                                }
+                            }
+                            activeEyedropperSlot = null
+                        },
+                        onCancel = { activeEyedropperSlot = null }
+                    )
+                }
+            }
+
+            // 2. REFERENCE-DESIGN PITCH-BLACK TRANSPORT STRIP:
+            // [Grid] [Full] [Bookmark]     |<   Play/Pause   >|     [Layers] [Undo] [Redo]
+            val hasBookmarkHere = project.beatMarkers.any { abs(it.timeMs - state.playheadMs) <= 45L }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                HorizontalDivider(thickness = 0.7.dp, color = TimelineHairline)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp)
+                        .background(TimelineTransportBg)
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Left Cluster: Grid | [Full] Quality Pill | Bookmark
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .combinedClickable(
+                                    onClick = { showCanvasGrid = !showCanvasGrid },
+                                    onLongClick = onResetViewport
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GridOn,
+                                contentDescription = "Grid",
+                                tint = if (showCanvasGrid) PlayheadEmerald else Color.White,
+                                modifier = Modifier.size(19.dp)
                             )
+                        }
+
+                        Box {
+                            Box(
+                                modifier = Modifier
+                                    .height(26.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(Color(0xFF0E1015))
+                                    .border(
+                                        1.dp,
+                                        if (preRenderState.cachedFramesCount > 0) PlayheadEmerald.copy(alpha = 0.75f)
+                                        else Color(0xFF3E434E),
+                                        RoundedCornerShape(5.dp)
+                                    )
+                                    .clickable { showQualityMenu = true }
+                                    .testTag("preview_quality_button")
+                                    .padding(horizontal = 9.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = state.previewQuality.badge,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFFD6DBE4)
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = showQualityMenu,
+                                onDismissRequest = { showQualityMenu = false }
+                            ) {
+                                PreviewQuality.entries.forEach { q ->
+                                    val isCurrent = state.previewQuality == q
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Text(
+                                                    text = q.badge,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (isCurrent) PlayheadEmerald else TextPrimary
+                                                )
+                                                if (isCurrent) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = PlayheadEmerald,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            onSetPreviewQuality(q)
+                                            showQualityMenu = false
+                                        },
+                                        modifier = Modifier.testTag("preview_quality_option_${q.name}")
+                                    )
+                                }
+                                HorizontalDivider(color = OutlineSubtle)
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (preRenderState.isPreRendering) "Stop" else "Pre-render",
+                                            color = PlayheadEmerald,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    },
+                                    onClick = {
+                                        onTriggerOrCancelPreRender()
+                                        showQualityMenu = false
+                                    },
+                                    modifier = Modifier.testTag("preview_menu_prerender")
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "Loop",
+                                            color = if (state.isLoopPlayback) PlayheadEmerald else TextSecondary
+                                        )
+                                    },
+                                    onClick = {
+                                        onToggleLoop()
+                                        showQualityMenu = false
+                                    },
+                                    modifier = Modifier.testTag("preview_menu_loop")
+                                )
+                                if (preRenderState.cachedFramesCount > 0) {
+                                    DropdownMenuItem(
+                                        text = { Text("Clear Cache", color = NeonPink) },
+                                        onClick = {
+                                            onClearPlaybackCache()
+                                            showQualityMenu = false
+                                        },
+                                        modifier = Modifier.testTag("preview_menu_clear_cache")
+                                    )
+                                }
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .combinedClickable(
+                                    onClick = onToggleBeatBookmark,
+                                    onLongClick = { showFloatingBeatReactor = !showFloatingBeatReactor }
+                                )
+                                .testTag("timecode_bookmark_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (hasBookmarkHere) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                contentDescription = "Bookmark",
+                                tint = if (hasBookmarkHere) BookmarkSkyBlue else Color.White,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                    }
+
+                    // Center Cluster: |<   Play/Pause   >|
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .combinedClickable(
+                                    onClick = { onJumpBookmark(false) },
+                                    onLongClick = { onStepFrame(-1) }
+                                )
+                                .testTag("transport_prev_bookmark_or_start_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "Previous",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        Box(contentAlignment = Alignment.Center) {
+                            if (showPlayHoldMenu) {
+                                Popup(
+                                    alignment = Alignment.TopCenter,
+                                    offset = IntOffset(0, -with(density) { 44.dp.roundToPx() }),
+                                    onDismissRequest = { showPlayHoldMenu = false },
+                                    properties = PopupProperties(focusable = true)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .shadow(8.dp, RoundedCornerShape(10.dp))
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(Color(0xFF101218))
+                                            .border(1.dp, TimelineHairline, RoundedCornerShape(10.dp))
+                                            .testTag("play_hold_upper_menu")
+                                            .padding(horizontal = 6.dp, vertical = 5.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(7.dp))
+                                                .background(if (state.isLoopPlayback) AmTealContainer else PanelDark)
+                                                .clickable {
+                                                    onToggleLoop()
+                                                    showPlayHoldMenu = false
+                                                }
+                                                .testTag("play_hold_loop_button")
+                                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Loop,
+                                                contentDescription = "Loop",
+                                                tint = if (state.isLoopPlayback) PlayheadEmerald else TextSecondary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = "Loop",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (state.isLoopPlayback) PlayheadEmerald else TextPrimary
+                                            )
+                                        }
+
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(7.dp))
+                                                .background(PanelDark)
+                                                .clickable {
+                                                    onTriggerOrCancelPreRender()
+                                                    showPlayHoldMenu = false
+                                                }
+                                                .testTag("play_hold_prerender_button")
+                                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Bolt,
+                                                contentDescription = "Pre-render",
+                                                tint = PlayheadEmerald,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = if (preRenderState.isPreRendering) "Stop" else "Pre-render",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = PlayheadEmerald
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .combinedClickable(
+                                        onClick = onTogglePlay,
+                                        onLongClick = { showPlayHoldMenu = true }
+                                    )
+                                    .testTag("timeline_play_pause_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (state.isPlaying) "Pause" else "Play",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(25.dp)
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .combinedClickable(
+                                    onClick = { onJumpBookmark(true) },
+                                    onLongClick = { onStepFrame(1) }
+                                )
+                                .testTag("transport_next_bookmark_or_end_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "Next",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    // Right Cluster: Layers Menu | Undo | Redo
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { showClipboardMenu = true }
+                                    .testTag(if (isLayerSheetOpen) "topbar_clipboard_button" else "duplicate_layer_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Layers,
+                                    contentDescription = "Layer menu",
+                                    tint = if (state.hasCopiedLayer || state.hasCopiedEffects) PlayheadEmerald else Color.White,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+
                             DropdownMenu(
                                 expanded = showClipboardMenu,
                                 onDismissRequest = { showClipboardMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Copy Layer") },
+                                    text = { Text("Copy") },
                                     enabled = selectedLayer != null,
                                     onClick = {
                                         onCopyLayer()
@@ -372,7 +1260,7 @@ fun EditorWorkspaceScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Paste Layer") },
+                                    text = { Text("Paste") },
                                     enabled = state.hasCopiedLayer,
                                     onClick = {
                                         onPasteLayer()
@@ -380,7 +1268,7 @@ fun EditorWorkspaceScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Duplicate Layer") },
+                                    text = { Text("Duplicate") },
                                     enabled = selectedLayer != null,
                                     onClick = {
                                         onDuplicateLayer()
@@ -390,33 +1278,28 @@ fun EditorWorkspaceScreen(
                                 if (selectedLayer != null) {
                                     HorizontalDivider(color = OutlineSubtle)
                                     DropdownMenuItem(
-                                        text = { Text("Bring Layer Forward") },
+                                        text = { Text("Bring Forward") },
                                         onClick = {
                                             onMoveLayerZOrder(selectedLayer.id, false)
                                             showClipboardMenu = false
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Send Layer Backward") },
+                                        text = { Text("Send Backward") },
                                         onClick = {
                                             onMoveLayerZOrder(selectedLayer.id, true)
                                             showClipboardMenu = false
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                if (state.soloLayerId == selectedLayer.id) "Disable Solo Layer"
-                                                else "Solo Layer"
-                                            )
-                                        },
+                                        text = { Text(if (state.soloLayerId == selectedLayer.id) "Un-solo" else "Solo") },
                                         onClick = {
                                             onToggleSoloLayer(selectedLayer.id)
                                             showClipboardMenu = false
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Expand Clip to Composition") },
+                                        text = { Text("Expand to End") },
                                         onClick = {
                                             onExpandLayerToComp()
                                             showClipboardMenu = false
@@ -425,7 +1308,7 @@ fun EditorWorkspaceScreen(
                                 }
                                 if (project.layers.size >= 2) {
                                     DropdownMenuItem(
-                                        text = { Text("Group into Null Rig") },
+                                        text = { Text("Group Rig") },
                                         onClick = {
                                             onGroupIntoNullRig()
                                             showClipboardMenu = false
@@ -444,7 +1327,7 @@ fun EditorWorkspaceScreen(
                                 }
                                 HorizontalDivider(color = OutlineSubtle)
                                 DropdownMenuItem(
-                                    text = { Text("Fit to Composition Area") },
+                                    text = { Text("Fit") },
                                     enabled = selectedLayer != null && selectedLayer.type != LayerType.AUDIO,
                                     onClick = {
                                         onFitOrFillComposition(false)
@@ -452,7 +1335,7 @@ fun EditorWorkspaceScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Fill Composition Area") },
+                                    text = { Text("Fill") },
                                     enabled = selectedLayer != null && selectedLayer.type != LayerType.AUDIO,
                                     onClick = {
                                         onFitOrFillComposition(true)
@@ -460,12 +1343,7 @@ fun EditorWorkspaceScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            if (selectedLayer?.isClippingMask == true) "Disable Clipping Mask"
-                                            else "Enable Clipping Mask"
-                                        )
-                                    },
+                                    text = { Text(if (selectedLayer?.isClippingMask == true) "Unmask" else "Mask") },
                                     enabled = selectedLayer != null && selectedLayer.type != LayerType.AUDIO,
                                     onClick = {
                                         if (selectedLayer != null) onToggleClippingMask(selectedLayer.id)
@@ -491,7 +1369,7 @@ fun EditorWorkspaceScreen(
                                 )
                                 HorizontalDivider(color = OutlineSubtle)
                                 DropdownMenuItem(
-                                    text = { Text("Flip Horizontally") },
+                                    text = { Text("Flip H") },
                                     enabled = selectedLayer != null,
                                     onClick = {
                                         onFlipLayer(true)
@@ -499,7 +1377,7 @@ fun EditorWorkspaceScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Flip Vertically") },
+                                    text = { Text("Flip V") },
                                     enabled = selectedLayer != null,
                                     onClick = {
                                         onFlipLayer(false)
@@ -507,7 +1385,7 @@ fun EditorWorkspaceScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Reset Transform") },
+                                    text = { Text("Reset") },
                                     enabled = selectedLayer != null,
                                     onClick = {
                                         onResetTransform()
@@ -517,662 +1395,243 @@ fun EditorWorkspaceScreen(
                             }
                         }
 
-                        if (selectedLayer != null) {
-                            AmSquareIconButton(
-                                icon = Icons.Default.DeleteOutline,
-                                contentDescription = "Delete selected layer",
-                                tint = NeonPink,
-                                onClick = onDeleteSelectedLayer,
-                                sizeDp = 36.dp,
-                                testTag = if (isLayerSheetOpen) "topbar_delete_layer_button" else "delete_layer_button"
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(2.dp))
-
-                        AmSquareIconButton(
-                            icon = Icons.Default.IosShare,
-                            contentDescription = "Export video",
-                            active = true,
-                            onClick = { onNavigateTool(StudioDestination.EXPORT_PIPELINE) },
-                            sizeDp = 36.dp,
-                            testTag = "editor_export_button"
-                        )
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // 2. TOP HALF: UNOBSTRUCTED ALIGHT MOTION PREVIEW STAGE + QUALITY SWITCHER & CACHE HUD
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.45f)
-            ) {
-                GlPreviewCanvas(
-                    project = project,
-                    playheadMs = state.playheadMs,
-                    isPlaying = state.isPlaying,
-                    previewQuality = state.previewQuality,
-                    previewFpsCap = preferences.previewFpsCap,
-                    isLooping = state.isLoopPlayback,
-                    projectRevision = state.projectRevision,
-                    usePlaybackCache = preferences.autoCachePlaybackFrames || preRenderState.cachedFramesCount > 0,
-                    onRenderStatsUpdate = if (preferences.showPerformanceHud) onRenderTelemetryUpdate else null,
-                    audioSnapshot = audioSpectrum,
-                    canvasZoom = state.canvasZoom,
-                    canvasPanX = state.canvasPanX,
-                    canvasPanY = state.canvasPanY,
-                    cameraYawDeg = state.cameraYawDeg,
-                    cameraPitchDeg = state.cameraPitchDeg,
-                    cameraDistance = state.cameraDistance,
-                    selectedLayerId = state.selectedLayerId,
-                    onViewportGesture = onViewportGesture,
-                    onDragSelectedLayer = onDragLayerOnCanvas,
-                    onScaleAndRotateSelectedLayer = onScaleAndRotateLayerOnCanvas,
-                    onSelectLayerOnCanvas = onSelectLayer,
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Top-Left: Preview Quality Switcher (Full / Half / Quarter / Low) + Pre-render Status + Performance HUD
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(SurfaceDark.copy(alpha = 0.90f))
-                                    .border(0.8.dp, OutlineSubtle, RoundedCornerShape(8.dp))
-                                    .clickable { showQualityMenu = true }
-                                    .testTag("preview_quality_button")
-                                    .padding(horizontal = 9.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.HighQuality,
-                                    contentDescription = "Preview quality",
-                                    tint = AmTealBright,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = "${state.previewQuality.badge} ${state.previewQuality.title}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary
-                                )
-                                if (preRenderState.cachedFramesCount > 0) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(RigGreen)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = showQualityMenu,
-                                onDismissRequest = { showQualityMenu = false }
-                            ) {
-                                PreviewQuality.entries.forEach { q ->
-                                    val isCurrent = state.previewQuality == q
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Text(
-                                                    text = "${q.title} (${q.badge})",
-                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (isCurrent) AmTealBright else TextPrimary
-                                                )
-                                                if (isCurrent) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Check,
-                                                        contentDescription = null,
-                                                        tint = AmTealBright,
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                }
-                                            }
-                                        },
-                                        onClick = {
-                                            onSetPreviewQuality(q)
-                                            showQualityMenu = false
-                                        },
-                                        modifier = Modifier.testTag("preview_quality_option_${q.name}")
-                                    )
-                                }
-                                HorizontalDivider(color = OutlineSubtle)
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = if (preRenderState.isPreRendering) "Stop Pre-render" else "Pre-render Playback Cache",
-                                            color = AudioCyan,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    },
-                                    onClick = {
-                                        onTriggerOrCancelPreRender()
-                                        showQualityMenu = false
-                                    },
-                                    modifier = Modifier.testTag("preview_menu_prerender")
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = if (state.isLoopPlayback) "Loop Playback: ON" else "Loop Playback: OFF",
-                                            color = if (state.isLoopPlayback) AmTealBright else TextSecondary
-                                        )
-                                    },
-                                    onClick = {
-                                        onToggleLoop()
-                                        showQualityMenu = false
-                                    },
-                                    modifier = Modifier.testTag("preview_menu_loop")
-                                )
-                                if (preRenderState.cachedFramesCount > 0) {
-                                    DropdownMenuItem(
-                                        text = { Text("Clear Playback Cache", color = NeonPink) },
-                                        onClick = {
-                                            onClearPlaybackCache()
-                                            showQualityMenu = false
-                                        },
-                                        modifier = Modifier.testTag("preview_menu_clear_cache")
-                                    )
-                                }
-                            }
-                        }
-
-                        if (preRenderState.isPreRendering) {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(SurfaceDark.copy(alpha = 0.92f))
-                                    .border(0.8.dp, AudioCyan.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                                    .clickable(onClick = onTriggerOrCancelPreRender)
-                                    .testTag("prerender_progress_pill")
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Bolt,
-                                    contentDescription = "Pre-rendering",
-                                    tint = AudioCyan,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                val fpsSuffix = if (preRenderState.throughputFps > 0) " • ${preRenderState.throughputFps} fps" else ""
-                                Text(
-                                    text = "Pre-render ${(preRenderState.progress * 100).toInt()}%$fpsSuffix",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AudioCyan
-                                )
-                            }
-                        }
-                    }
-
-                    if (preferences.showPerformanceHud) {
-                        Row(
+                        Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(DeepBlack.copy(alpha = 0.84f))
-                                .border(0.6.dp, OutlineSubtle, RoundedCornerShape(7.dp))
-                                .testTag("preview_performance_hud")
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(enabled = state.canUndo, onClick = onUndo)
+                                .testTag("editor_undo_button"),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "${state.livePreviewFps} FPS • ${String.format("%.1f", state.liveFrameTimeMs)}ms • Cache ${PlaybackCacheEngine.getCacheHitRatePercent()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = RigGreen
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Undo,
+                                contentDescription = "Undo",
+                                tint = if (state.canUndo) Color.White else Color(0xFF505664),
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(enabled = state.canRedo, onClick = onRedo)
+                                .testTag("editor_redo_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Redo,
+                                contentDescription = "Redo",
+                                tint = if (state.canRedo) Color.White else Color(0xFF505664),
+                                modifier = Modifier.size(19.dp)
                             )
                         }
                     }
                 }
-
-                if (state.canvasZoom != 1f || state.canvasPanX != 0f || state.canvasPanY != 0f) {
-                    Text(
-                        text = "Fit View",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AmTealBright,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(SurfaceDark.copy(alpha = 0.90f))
-                            .border(0.8.dp, OutlineSubtle, RoundedCornerShape(8.dp))
-                            .clickable(onClick = onResetViewport)
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                    )
-                }
-
-                if (!state.statusBanner.isNullOrBlank()) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(8.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(SurfaceDark.copy(alpha = 0.90f))
-                            .border(0.8.dp, AmTeal.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = state.statusBanner,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = AmTealBright
-                        )
-                    }
-                }
+                HorizontalDivider(thickness = 0.7.dp, color = TimelineHairline)
             }
 
-            // 3. EXPRESSIVE ALIGHT MOTION TRANSPORT STRIP (Clean spacing + Pure Icon Bookmarks!)
-            val hasBookmarkHere = project.beatMarkers.any { abs(it.timeMs - state.playheadMs) <= 45L }
-            Surface(
-                color = SurfaceDark,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(0.6.dp, OutlineSubtle)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(46.dp)
-                        .padding(horizontal = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    // Left: Clean Undo / Redo Ghost Icons
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        AmSquareIconButton(
-                            icon = Icons.AutoMirrored.Filled.Undo,
-                            contentDescription = "Undo",
-                            enabled = state.canUndo,
-                            onClick = onUndo,
-                            sizeDp = 36.dp,
-                            testTag = "editor_undo_button"
-                        )
-                        AmSquareIconButton(
-                            icon = Icons.AutoMirrored.Filled.Redo,
-                            contentDescription = "Redo",
-                            enabled = state.canRedo,
-                            onClick = onRedo,
-                            sizeDp = 36.dp,
-                            testTag = "editor_redo_button"
-                        )
-                    }
-
-                    // Center: 1:1 Alight Motion Smart Bookmark/Boundary Jump (|< & >|) + Frame Step (‹ & ›) + Play/Pause!
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Previous button beside Play: jumps to earlier bookmark if present, or 00:00:00 if none!
-                        AmSquareIconButton(
-                            icon = Icons.Default.SkipPrevious,
-                            contentDescription = "Previous bookmark or start (0)",
-                            tint = TextPrimary,
-                            onClick = { onJumpBookmark(false) },
-                            sizeDp = 34.dp,
-                            testTag = "transport_prev_bookmark_or_start_button"
-                        )
-
-                        AmSquareIconButton(
-                            icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                            contentDescription = "Step back 1 frame",
-                            tint = TextSecondary,
-                            onClick = { onStepFrame(-1) },
-                            sizeDp = 30.dp,
-                            testTag = "step_prev_frame_button"
-                        )
-
-                        // Play / Pause with Click-and-Hold Upper Buttons (Loop + Pre-render)!
-                        Box(contentAlignment = Alignment.Center) {
-                            if (showPlayHoldMenu) {
-                                Popup(
-                                    alignment = Alignment.TopCenter,
-                                    offset = IntOffset(0, -with(density) { 46.dp.roundToPx() }),
-                                    onDismissRequest = { showPlayHoldMenu = false },
-                                    properties = PopupProperties(focusable = true)
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .shadow(8.dp, RoundedCornerShape(12.dp))
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(SurfaceDark)
-                                            .border(1.dp, AmTeal.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
-                                            .testTag("play_hold_upper_menu")
-                                            .padding(horizontal = 6.dp, vertical = 5.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        // 1. LOOP UPPER BUTTON
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(if (state.isLoopPlayback) AmTealContainer else PanelDark)
-                                                .border(
-                                                    0.9.dp,
-                                                    if (state.isLoopPlayback) AmTealBright else OutlineSubtle,
-                                                    RoundedCornerShape(8.dp)
-                                                )
-                                                .clickable {
-                                                    onToggleLoop()
-                                                    showPlayHoldMenu = false
-                                                }
-                                                .testTag("play_hold_loop_button")
-                                                .padding(horizontal = 9.dp, vertical = 5.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Loop,
-                                                contentDescription = "Loop playback",
-                                                tint = if (state.isLoopPlayback) AmTealBright else TextSecondary,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = if (state.isLoopPlayback) "Loop ON" else "Loop OFF",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (state.isLoopPlayback) AmTealBright else TextPrimary
-                                            )
-                                        }
-
-                                        // 2. PRE-RENDER UPPER BUTTON
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(
-                                                    if (preRenderState.isPreRendering || preRenderState.cachedFramesCount > 0) {
-                                                        AudioCyan.copy(alpha = 0.16f)
-                                                    } else PanelDark
-                                                )
-                                                .border(
-                                                    0.9.dp,
-                                                    if (preRenderState.isPreRendering) AudioCyan else OutlineSubtle,
-                                                    RoundedCornerShape(8.dp)
-                                                )
-                                                .clickable {
-                                                    onTriggerOrCancelPreRender()
-                                                    showPlayHoldMenu = false
-                                                }
-                                                .testTag("play_hold_prerender_button")
-                                                .padding(horizontal = 9.dp, vertical = 5.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Bolt,
-                                                contentDescription = "Pre-render playback",
-                                                tint = AudioCyan,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = if (preRenderState.isPreRendering) {
-                                                    "Stop ${(preRenderState.progress * 100).toInt()}%"
-                                                } else {
-                                                    "Pre-render"
-                                                },
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = AudioCyan
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (state.isPlaying) {
-                                            Brush.linearGradient(listOf(AmTealBright, AmTeal))
-                                        } else {
-                                            Brush.linearGradient(listOf(PanelElevated, PanelDark))
-                                        }
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (state.isPlaying) AmTealBright else OutlineSubtle,
-                                        CircleShape
-                                    )
-                                    .combinedClickable(
-                                        onClick = onTogglePlay,
-                                        onLongClick = { showPlayHoldMenu = true }
-                                    )
-                                    .testTag("timeline_play_pause_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (state.isPlaying) "Pause (hold for Loop & Pre-render)" else "Play (hold for Loop & Pre-render)",
-                                    tint = if (state.isPlaying) DeepBlack else TextPrimary,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                            }
-
-                            if (state.isLoopPlayback) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(AmTealBright)
-                                        .border(1.dp, SurfaceDark, CircleShape)
-                                )
-                            }
-                        }
-
-                        AmSquareIconButton(
-                            icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Step forward 1 frame",
-                            tint = TextSecondary,
-                            onClick = { onStepFrame(1) },
-                            sizeDp = 30.dp,
-                            testTag = "step_next_frame_button"
-                        )
-
-                        // Next/Forward button beside Play: jumps to forward bookmark if present, or timeline end if none!
-                        AmSquareIconButton(
-                            icon = Icons.Default.SkipNext,
-                            contentDescription = "Next bookmark or timeline end",
-                            tint = TextPrimary,
-                            onClick = { onJumpBookmark(true) },
-                            sizeDp = 34.dp,
-                            testTag = "transport_next_bookmark_or_end_button"
-                        )
-                    }
-
-                    // Right: Pure Icon Bookmark Navigation Cluster (‹ 🔖 › — always active: jumps to bookmark or 0/end!)
-                    Row(
-                        modifier = Modifier
-                            .height(34.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (hasBookmarkHere) NeonPink.copy(alpha = 0.16f) else PanelDark)
-                            .border(
-                                1.dp,
-                                if (hasBookmarkHere) NeonPink.copy(alpha = 0.85f) else OutlineSubtle,
-                                RoundedCornerShape(10.dp)
-                            ),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp, 34.dp)
-                                .clickable { onJumpBookmark(false) }
-                                .testTag("bookmark_cluster_prev_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                contentDescription = "Previous bookmark or start",
-                                tint = if (project.beatMarkers.isNotEmpty()) NeonPink else TextSecondary,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp, 34.dp)
-                                .clickable(onClick = onToggleBeatBookmark)
-                                .testTag("timecode_bookmark_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (hasBookmarkHere) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
-                                contentDescription = "Toggle bookmark at playhead",
-                                tint = if (hasBookmarkHere) NeonPink else AmTealBright,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp, 34.dp)
-                                .clickable { onJumpBookmark(true) }
-                                .testTag("bookmark_cluster_next_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "Next bookmark or end",
-                                tint = if (project.beatMarkers.isNotEmpty()) NeonPink else TextSecondary,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 4. BOTTOM HALF: MULTITRACK TIMELINE + SCALED-DOWN 1:1 ALIGHT MOTION '+' FAB OR CLICKED-LAYER SHEET
+            // 3. BOTTOM HALF: KEYFLOW TIMELINE + SELECTED-LAYER DOCK OR SPLIT SUB-INSPECTOR DRAWER
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(0.55f)
+                    .background(TimelinePitchBlack)
             ) {
-                if (isLayerSheetOpen && selectedLayer != null && !showAddDrawer) {
+                val isSubInspectorOpen = selectedLayer != null &&
+                    !showAddDrawer &&
+                    state.inspectorTab != AmInspectorTab.TIMELINE &&
+                    state.inspectorTab != AmInspectorTab.LAYER_OVERVIEW
+
+                if (isSubInspectorOpen && selectedLayer != null) {
                     val selIdx = project.layers.indexOfFirst { it.id == selectedLayer.id }
-                    AmClickedLayerSheet(
-                        activeTab = state.inspectorTab,
-                        selectedLayer = selectedLayer,
-                        allLayers = project.layers,
-                        projectDurationMs = project.durationMs,
-                        selectedProperty = state.selectedProperty,
-                        selectedEffectId = state.selectedEffectId,
-                        selectedEffectSlot = state.selectedEffectSlot,
-                        playheadMs = state.playheadMs,
-                        audioSpectrum = audioSpectrum,
-                        hasCopiedEffects = state.hasCopiedEffects,
-                        hasCopiedCurve = state.hasCopiedCurve,
-                        canMoveForward = selIdx in 0 until project.layers.lastIndex,
-                        canMoveBackward = selIdx > 0,
-                        onMoveLayerZOrder = { sendBack -> onMoveLayerZOrder(selectedLayer.id, sendBack) },
-                        onRenameLayer = onRenameLayer,
-                        onSetInspectorTab = onSetInspectorTab,
-                        onCollapseToTimeline = onCollapseToTimeline,
-                        onScrubPlayhead = onScrubPlayhead,
-                        onSelectProperty = onSelectProperty,
-                        onUpdatePropertyValue = onUpdatePropertyValue,
-                        onUpdateExpression = onUpdateExpression,
-                        onDragLayerOnCanvas = onDragLayerOnCanvas,
-                        onResetTransform = onResetTransform,
-                        onToggleKeyframe = onToggleKeyframe,
-                        onJumpKeyframe = onJumpKeyframe,
-                        onUpdateBezierHandles = onUpdateBezierHandles,
-                        onSelectEffectForInspection = onSelectEffectForInspection,
-                        onSelectEffectSlot = onSelectEffectSlot,
-                        onUpdateEffectSlotValue = onUpdateEffectSlotValue,
-                        onToggleEffectKeyframe = onToggleEffectKeyframe,
-                        onJumpEffectKeyframe = onJumpEffectKeyframe,
-                        onUpdateEffectBezierHandles = onUpdateEffectBezierHandles,
-                        onUpdateEffectExpression = onUpdateEffectExpression,
-                        onMoveEffectOrder = onMoveEffectOrder,
-                        onDuplicateEffect = onDuplicateEffect,
-                        onResetEffect = onResetEffect,
-                        onCopyCurve = onCopyCurve,
-                        onPasteCurve = onPasteCurve,
-                        onDragKeyframePoint = onDragKeyframePoint,
-                        onOpenGraphEditor = onOpenGraphEditor,
-                        onPullStart = onPullStart,
-                        onTrimStart = onTrimStart,
-                        onUpdateSpeed = onUpdateSpeed,
-                        onToggleReverse = onToggleReverse,
-                        onToggleFreezeFrame = onToggleFreezeFrame,
-                        onToggleTimeRemap = onToggleTimeRemap,
-                        onApplyVelocityPreset = onApplyVelocityPreset,
-                        onExtractAudio = onExtractAudioFromVideo,
-                        onUpdateAudioVolume = { vol, muted ->
-                            onUpdateAudioVolume(selectedLayer.id, vol, muted)
-                        },
-                        onToggleMotionBlur = { en, shutter ->
-                            onToggleMotionBlur(selectedLayer.id, en, shutter)
-                        },
-                        onToggleClippingMask = {
-                            onToggleClippingMask(selectedLayer.id)
-                        },
-                        onFitOrFillComposition = onFitOrFillComposition,
-                        onSplitLayer = onSplitLayer,
-                        onTrimEnd = onTrimEnd,
-                        onPullEnd = onPullEnd,
-                        onFlipLayer = onFlipLayer,
-                        onDuplicateLayer = onDuplicateLayer,
-                        onDeleteLayer = onDeleteSelectedLayer,
-                        onToggleVisibility = onToggleLayerVisibility,
-                        onToggleLock = onToggleLayerLock,
-                        onSetLayerParent = onSetLayerParent,
-                        onUpdateLayerColor = onUpdateLayerColor,
-                        onUpdateBorderShadow = onUpdateBorderShadow,
-                        onUpdateBlendMode = onUpdateBlendMode,
-                        onUpdateShapeKind = onUpdateShapeKind,
-                        onUpdateTextLayer = onUpdateTextLayer,
-                        onUpdate3DPrimitive = onUpdate3DPrimitive,
-                        onUpdateEffectNode = onUpdateEffectNode,
-                        onRemoveEffectNode = onRemoveEffectNode,
-                        onClearAllEffects = onClearAllEffects,
-                        onCopyEffects = onCopyEffects,
-                        onPasteEffects = onPasteEffects,
-                        onNavigateTool = onNavigateTool
-                    )
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Compact Timeline Strip (Time Ruler + Selected Layer Track) matching KeyFlow Effects / Sub-Panel screenshots
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(74.dp)
+                                .background(TimelinePitchBlack)
+                        ) {
+                            AmMultitrackTimelineArea(
+                                state = state,
+                                cachedSpanFractions = preRenderState.cachedSpanFractions,
+                                isAddDrawerOpen = false,
+                                isBeatPopoverOpen = showFloatingBeatReactor,
+                                showFloatingFabs = false,
+                                compactSelectedOnly = true,
+                                onScrubPlayhead = onScrubPlayhead,
+                                onSetTimelineZoom = onSetTimelineZoom,
+                                onSelectLayer = onSelectLayer,
+                                onMoveLayerTimeRange = onMoveLayerTimeRange,
+                                onToggleLayerVisibility = onToggleLayerVisibility,
+                                onToggleFloatingBeatReactor = { showFloatingBeatReactor = !showFloatingBeatReactor },
+                                onNavigateTool = onNavigateTool,
+                                onAddNullRig = { onAddLayer(LayerType.NULL_OBJECT, "") },
+                                onOpenAddDrawer = { showAddDrawer = true }
+                            )
+                        }
+
+                        // KeyFlow Split Sub-Inspector Drawer (Left 50dp Tool Rail + Right Content)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            AmClickedLayerSheet(
+                                activeTab = state.inspectorTab,
+                                selectedLayer = selectedLayer,
+                                allLayers = project.layers,
+                                projectDurationMs = project.durationMs,
+                                selectedProperty = state.selectedProperty,
+                                selectedEffectId = state.selectedEffectId,
+                                selectedEffectSlot = state.selectedEffectSlot,
+                                selectedPluginParamKey = state.selectedPluginParamKey,
+                                playheadMs = state.playheadMs,
+                                audioSpectrum = audioSpectrum,
+                                hasCopiedEffects = state.hasCopiedEffects,
+                                hasCopiedCurve = state.hasCopiedCurve,
+                                canMoveForward = selIdx in 0 until project.layers.lastIndex,
+                                canMoveBackward = selIdx > 0,
+                                onMoveLayerZOrder = { sendBack -> onMoveLayerZOrder(selectedLayer.id, sendBack) },
+                                onRenameLayer = onRenameLayer,
+                                onSetInspectorTab = onSetInspectorTab,
+                                onCollapseToTimeline = onCollapseToTimeline,
+                                onScrubPlayhead = onScrubPlayhead,
+                                onSelectProperty = onSelectProperty,
+                                onUpdatePropertyValue = onUpdatePropertyValue,
+                                onUpdateExpression = onUpdateExpression,
+                                onDragLayerOnCanvas = onDragLayerOnCanvas,
+                                onResetTransform = onResetTransform,
+                                onToggleKeyframe = onToggleKeyframe,
+                                onJumpKeyframe = onJumpKeyframe,
+                                onUpdateBezierHandles = onUpdateBezierHandles,
+                                onSelectEffectForInspection = onSelectEffectForInspection,
+                                onSelectEffectSlot = onSelectEffectSlot,
+                                onSelectPluginParamKey = onSelectPluginParamKey,
+                                onUpdateEffectSlotValue = onUpdateEffectSlotValue,
+                                onUpdateCustomPluginParamValue = onUpdateCustomPluginParamValue,
+                                onUpdateCustomPluginColor = onUpdateCustomPluginColor,
+                                onToggleEffectKeyframe = onToggleEffectKeyframe,
+                                onJumpEffectKeyframe = onJumpEffectKeyframe,
+                                onUpdateEffectBezierHandles = onUpdateEffectBezierHandles,
+                                onUpdateEffectExpression = onUpdateEffectExpression,
+                                onMoveEffectOrder = onMoveEffectOrder,
+                                onDuplicateEffect = onDuplicateEffect,
+                                onResetEffect = onResetEffect,
+                                onCopyCurve = onCopyCurve,
+                                onPasteCurve = onPasteCurve,
+                                onDragKeyframePoint = onDragKeyframePoint,
+                                onOpenGraphEditor = onOpenGraphEditor,
+                                onPullStart = onPullStart,
+                                onTrimStart = onTrimStart,
+                                onUpdateSpeed = onUpdateSpeed,
+                                onToggleReverse = onToggleReverse,
+                                onToggleFreezeFrame = onToggleFreezeFrame,
+                                onToggleTimeRemap = onToggleTimeRemap,
+                                onApplyVelocityPreset = onApplyVelocityPreset,
+                                onExtractAudio = onExtractAudioFromVideo,
+                                onUpdateAudioVolume = { vol, muted ->
+                                    onUpdateAudioVolume(selectedLayer.id, vol, muted)
+                                },
+                                onToggleMotionBlur = { en, shutter ->
+                                    onToggleMotionBlur(selectedLayer.id, en, shutter)
+                                },
+                                onToggleClippingMask = {
+                                    onToggleClippingMask(selectedLayer.id)
+                                },
+                                onFitOrFillComposition = onFitOrFillComposition,
+                                onSplitLayer = onSplitLayer,
+                                onTrimEnd = onTrimEnd,
+                                onPullEnd = onPullEnd,
+                                onFlipLayer = onFlipLayer,
+                                onDuplicateLayer = onDuplicateLayer,
+                                onDeleteLayer = onDeleteSelectedLayer,
+                                onToggleVisibility = onToggleLayerVisibility,
+                                onToggleLock = onToggleLayerLock,
+                                onSetLayerParent = onSetLayerParent,
+                                onUpdateLayerColor = onUpdateLayerColor,
+                                onUpdateLayerGradientFill = onUpdateLayerGradientFill,
+                                onUpdateAudioEffects = { preset, rev, room, bass, echo, delay, cutoff, pitch, spd ->
+                                    onUpdateAudioEffects(selectedLayer.id, preset, rev, room, bass, echo, delay, cutoff, pitch, spd)
+                                },
+                                onImportCustomFont = onImportCustomFont,
+                                onRequestEyedropper = launchScreenEyedropper,
+                                onRequestPluginColorEyedropper = launchPluginColorEyedropper,
+                                onUpdateBorderShadow = onUpdateBorderShadow,
+                                onUpdateBlendMode = onUpdateBlendMode,
+                                onUpdateShapeKind = onUpdateShapeKind,
+                                onUpdateTextLayer = onUpdateTextLayer,
+                                onUpdate3DPrimitive = onUpdate3DPrimitive,
+                                onUpdateEffectNode = onUpdateEffectNode,
+                                onRemoveEffectNode = onRemoveEffectNode,
+                                onClearAllEffects = onClearAllEffects,
+                                onCopyEffects = onCopyEffects,
+                                onPasteEffects = onPasteEffects,
+                                onNavigateTool = onNavigateTool
+                            )
+                        }
+                    }
+                } else if (isLayerSheetOpen && selectedLayer != null && !showAddDrawer) {
+                    // KeyFlow Layer Clicked Overview: Full Multitrack Timeline + 4-Segment Trim/Split/Delete Pill + Bottom Nav Dock
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            AmMultitrackTimelineArea(
+                                state = state,
+                                cachedSpanFractions = preRenderState.cachedSpanFractions,
+                                isAddDrawerOpen = false,
+                                isBeatPopoverOpen = showFloatingBeatReactor,
+                                showFloatingFabs = false,
+                                compactSelectedOnly = false,
+                                onScrubPlayhead = onScrubPlayhead,
+                                onSetTimelineZoom = onSetTimelineZoom,
+                                onSelectLayer = onSelectLayer,
+                                onMoveLayerTimeRange = onMoveLayerTimeRange,
+                                onToggleLayerVisibility = onToggleLayerVisibility,
+                                onToggleFloatingBeatReactor = { showFloatingBeatReactor = !showFloatingBeatReactor },
+                                onNavigateTool = onNavigateTool,
+                                onAddNullRig = { onAddLayer(LayerType.NULL_OBJECT, "") },
+                                onOpenAddDrawer = { showAddDrawer = true }
+                            )
+                        }
+
+                        KeyflowSelectedLayerBottomDock(
+                            selectedLayer = selectedLayer,
+                            onCollapseToTimeline = onCollapseToTimeline,
+                            onTrimStart = onTrimStart,
+                            onPullStart = onPullStart,
+                            onSplitLayer = onSplitLayer,
+                            onTrimEnd = onTrimEnd,
+                            onPullEnd = onPullEnd,
+                            onDeleteLayer = onDeleteSelectedLayer,
+                            onToggleMask = { onToggleClippingMask(selectedLayer.id) },
+                            onOpenInspectorTab = onSetInspectorTab
+                        )
+                    }
                 } else {
                     AmMultitrackTimelineArea(
                         state = state,
                         cachedSpanFractions = preRenderState.cachedSpanFractions,
                         isAddDrawerOpen = showAddDrawer,
+                        isBeatPopoverOpen = showFloatingBeatReactor,
+                        showFloatingFabs = true,
+                        compactSelectedOnly = false,
                         onScrubPlayhead = onScrubPlayhead,
                         onSetTimelineZoom = onSetTimelineZoom,
                         onSelectLayer = onSelectLayer,
+                        onMoveLayerTimeRange = onMoveLayerTimeRange,
                         onToggleLayerVisibility = onToggleLayerVisibility,
+                        onToggleFloatingBeatReactor = { showFloatingBeatReactor = !showFloatingBeatReactor },
                         onNavigateTool = onNavigateTool,
                         onAddNullRig = { onAddLayer(LayerType.NULL_OBJECT, "") },
                         onOpenAddDrawer = { showAddDrawer = true }
                     )
                 }
 
-                // Scaled-down floating '+' Popover Card — Timeline Ruler & Upper Layers remain visible behind it!
                 androidx.compose.animation.AnimatedVisibility(
                     visible = showAddDrawer,
                     enter = fadeIn() + slideInVertically { it / 2 },
@@ -1202,166 +1661,793 @@ fun EditorWorkspaceScreen(
     }
 }
 
+@Composable
+private fun AmFloatingBeatReactorPopover(
+    beatCount: Int,
+    bassLevel: Float,
+    sensitivity: Float,
+    selectedLayer: Layer?,
+    selectedProperty: PropertyTarget,
+    onAutoDetectBass: (Float) -> Unit,
+    onToggleBeatAtPlayhead: () -> Unit,
+    onClearBeats: () -> Unit,
+    onBindAudioToProperty: (AudioBand, Float) -> Unit,
+    onOpenFullAudioStudio: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var localSens by remember(sensitivity) { mutableFloatStateOf(sensitivity) }
+    val activeProp = selectedLayer?.propertyFor(selectedProperty)
+
+    Surface(
+        color = SurfaceDark.copy(alpha = 0.96f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 420.dp)
+            .shadow(10.dp, RoundedCornerShape(14.dp))
+            .border(1.dp, TimelineHairline, RoundedCornerShape(14.dp))
+            .testTag("floating_beat_reactor_popover")
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.GraphicEq, contentDescription = null, tint = BookmarkSkyBlue, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "Beats ($beatCount)",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(PanelDark)
+                            .border(0.8.dp, OutlineSubtle, RoundedCornerShape(7.dp))
+                            .clickable(onClick = onOpenFullAudioStudio)
+                            .testTag("open_full_audio_reactor_button")
+                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text("Audio", style = MaterialTheme.typography.labelSmall, color = AudioCyan, fontWeight = FontWeight.SemiBold)
+                        Icon(Icons.Default.OpenInNew, contentDescription = "Audio", tint = AudioCyan, modifier = Modifier.size(11.dp))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(PanelDark)
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary, modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Bass", style = MaterialTheme.typography.labelSmall, color = BookmarkSkyBlue, fontWeight = FontWeight.Bold)
+                LinearProgressIndicator(
+                    progress = { bassLevel.coerceIn(0f, 1f) },
+                    color = BookmarkSkyBlue,
+                    trackColor = PanelDark,
+                    modifier = Modifier
+                        .width(52.dp)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                )
+                Text(
+                    text = "${(localSens * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
+                Slider(
+                    value = localSens,
+                    onValueChange = { localSens = it.coerceIn(0.15f, 1f) },
+                    valueRange = 0.15f..1f,
+                    colors = SliderDefaults.colors(thumbColor = AmTealBright, activeTrackColor = AmTeal),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(24.dp)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Brush.linearGradient(listOf(AmTealBright, AmTeal)))
+                        .clickable { onAutoDetectBass(localSens) }
+                        .testTag("floating_auto_detect_bass_button")
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(Icons.Default.Bolt, contentDescription = null, tint = DeepBlack, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Detect",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = DeepBlack
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PanelDark)
+                        .border(0.8.dp, OutlineSubtle, RoundedCornerShape(8.dp))
+                        .clickable(onClick = onToggleBeatAtPlayhead)
+                        .padding(horizontal = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Bookmark, contentDescription = null, tint = BookmarkSkyBlue, modifier = Modifier.size(13.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Add", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                }
+
+                if (beatCount > 0) {
+                    Row(
+                        modifier = Modifier
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(PanelDark)
+                            .border(0.8.dp, NeonPink.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                            .clickable(onClick = onClearBeats)
+                            .testTag("floating_clear_beats_button")
+                            .padding(horizontal = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Clear", style = MaterialTheme.typography.labelSmall, color = NeonPink, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            if (selectedLayer != null && activeProp != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = selectedProperty.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                    AudioBand.entries.forEach { band ->
+                        AmSegmentChip(
+                            label = if (band == AudioBand.NONE) "Off" else band.label,
+                            selected = activeProp.audioReactorBand == band,
+                            compact = true,
+                            onClick = { onBindAudioToProperty(band, activeProp.audioReactorGain) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val TIMELINE_LEFT_GUTTER = 34.dp
+private val TIMELINE_RIGHT_GUTTER = 34.dp
+private val TIMELINE_ROW_HEIGHT = 34.dp
+
 /**
- * 1:1 Alight Motion Multitrack Timeline Area:
- * - Row A: Time Ruler with Playhead Timestamp in left header cell + Zoom toggle + Playhead Scrubbing
- * - Row B: Full-height scrollable Layer Stack with generous 76.dp bottom scroll clearance
- * - Floating Bottom-Left: Scaled-down Icon-Only Quick Studio Pill
- * - Floating Bottom-Right: Scaled-down Circular Alight Motion Teal '+' FAB (44.dp visual / 48.dp touch target)
+ * Full-width Pitch-Black Alight Motion Timeline Area matching the reference UI layout:
+ * - Time Ruler with top emerald cache line, clean integer second labels (0, 1, 2...),
+ *   sky-blue bookmark pins, and a bright green MM:SS:FF capsule connected to a 1.5dp vertical green playhead line.
+ * - Full-width pitch-black layer rows: [Eye Gutter] | [Colored Bordered Clip Pills + Inline Name & Diamonds] | [≡ Handle].
+ * - Supports 2-finger pinch zoom (0.5x..5.0x), synchronized horizontal scroll, and hold-to-drag clip shifting.
  */
+@Composable
+private fun KeyflowSelectedLayerBottomDock(
+    selectedLayer: Layer,
+    onCollapseToTimeline: () -> Unit,
+    onTrimStart: () -> Unit,
+    onPullStart: () -> Unit,
+    onSplitLayer: () -> Unit,
+    onTrimEnd: () -> Unit,
+    onPullEnd: () -> Unit,
+    onDeleteLayer: () -> Unit,
+    onToggleMask: () -> Unit,
+    onOpenInspectorTab: (AmInspectorTab) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(TimelinePitchBlack)
+            .navigationBarsPadding()
+    ) {
+        // 1. KeyFlow 4-Segment Dark Pill Bar: [ |< ] | [ >|< ] | [ >| ] | [ Trash ]
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .height(42.dp)
+                .clip(RoundedCornerShape(21.dp))
+                .background(KeyflowCardSurface)
+                .border(0.8.dp, KeyflowCardBorder, RoundedCornerShape(21.dp)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .combinedClickable(onClick = onTrimStart, onLongClick = onPullStart)
+                    .testTag("trim_start_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FirstPage,
+                    contentDescription = "Trim Start (Hold to Pull Start)",
+                    tint = KeyflowBlueBright,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(0.8.dp)
+                    .height(22.dp)
+                    .background(KeyflowRailDivider)
+            )
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable(onClick = onSplitLayer)
+                    .testTag("split_layer_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                // KeyFlow signature |>|<| split icon
+                Canvas(modifier = Modifier.size(20.dp)) {
+                    val c = KeyflowBlueBright
+                    val cy = size.height * 0.5f
+                    val cx = size.width * 0.5f
+                    val sw = 1.8.dp.toPx()
+                    drawLine(c, Offset(cx, 2.dp.toPx()), Offset(cx, size.height - 2.dp.toPx()), strokeWidth = sw)
+                    // Left arrow ->|
+                    drawLine(c, Offset(2.dp.toPx(), cy), Offset(cx - 2.5.dp.toPx(), cy), strokeWidth = sw)
+                    drawLine(c, Offset(cx - 5.5.dp.toPx(), cy - 3.2.dp.toPx()), Offset(cx - 2.2.dp.toPx(), cy), strokeWidth = sw)
+                    drawLine(c, Offset(cx - 5.5.dp.toPx(), cy + 3.2.dp.toPx()), Offset(cx - 2.2.dp.toPx(), cy), strokeWidth = sw)
+                    // Right arrow |<-
+                    drawLine(c, Offset(size.width - 2.dp.toPx(), cy), Offset(cx + 2.5.dp.toPx(), cy), strokeWidth = sw)
+                    drawLine(c, Offset(cx + 5.5.dp.toPx(), cy - 3.2.dp.toPx()), Offset(cx + 2.2.dp.toPx(), cy), strokeWidth = sw)
+                    drawLine(c, Offset(cx + 5.5.dp.toPx(), cy + 3.2.dp.toPx()), Offset(cx + 2.2.dp.toPx(), cy), strokeWidth = sw)
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(0.8.dp)
+                    .height(22.dp)
+                    .background(KeyflowRailDivider)
+            )
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .combinedClickable(onClick = onTrimEnd, onLongClick = onPullEnd)
+                    .testTag("trim_end_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.LastPage,
+                    contentDescription = "Trim End (Hold to Pull End)",
+                    tint = KeyflowBlueBright,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(0.8.dp)
+                    .height(22.dp)
+                    .background(KeyflowRailDivider)
+            )
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable(onClick = onDeleteLayer)
+                    .testTag("delete_layer_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete Layer",
+                    tint = KeyflowDangerRed,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        HorizontalDivider(thickness = 0.7.dp, color = KeyflowRailDivider)
+
+        // 2. KeyFlow Bottom Navigation Bar: [ < ] | [ Edit | Move | Mask | Effects | Blending | Speed | Color | Border ]
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .background(KeyflowDrawerBg),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(44.dp)
+                    .fillMaxHeight()
+                    .clickable(onClick = onCollapseToTimeline)
+                    .testTag("collapse_layer_sheet_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    contentDescription = "Collapse Layer Bar",
+                    tint = KeyflowBlueBright,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(0.8.dp)
+                    .height(26.dp)
+                    .background(KeyflowRailDivider)
+            )
+
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                KeyflowBottomNavTab(
+                    label = "Edit",
+                    testTag = "tile_edit_layer",
+                    onClick = {
+                        if (selectedLayer.type == LayerType.VIDEO || selectedLayer.type == LayerType.AUDIO) {
+                            onOpenInspectorTab(AmInspectorTab.SPEED_TIMING)
+                        } else {
+                            onOpenInspectorTab(AmInspectorTab.EDIT_LAYER)
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Move",
+                    testTag = "tile_move_transform",
+                    onClick = { onOpenInspectorTab(AmInspectorTab.MOVE_TRANSFORM) }
+                ) {
+                    Icon(Icons.Default.OpenWith, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Mask",
+                    active = selectedLayer.isClippingMask,
+                    testTag = "tile_mask_toggle",
+                    onClick = onToggleMask
+                ) {
+                    val tint = if (selectedLayer.isClippingMask) KeyflowBlueBright else Color.White
+                    Canvas(modifier = Modifier.size(20.dp)) {
+                        drawRoundRect(
+                            color = tint,
+                            topLeft = Offset(1.dp.toPx(), 3.dp.toPx()),
+                            size = Size(size.width - 2.dp.toPx(), size.height - 6.dp.toPx()),
+                            cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                        )
+                        drawOval(
+                            color = KeyflowDrawerBg,
+                            topLeft = Offset(4.dp.toPx(), 5.5.dp.toPx()),
+                            size = Size(size.width - 8.dp.toPx(), size.height - 11.dp.toPx())
+                        )
+                    }
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Effects",
+                    active = selectedLayer.effects.isNotEmpty(),
+                    testTag = "tile_effects",
+                    onClick = { onOpenInspectorTab(AmInspectorTab.EFFECTS) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = if (selectedLayer.effects.isNotEmpty()) KeyflowBlueBright else Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Blending",
+                    testTag = "tile_blending_opacity",
+                    onClick = { onOpenInspectorTab(AmInspectorTab.BLENDING_OPACITY) }
+                ) {
+                    Canvas(modifier = Modifier.size(20.dp)) {
+                        val drop = Path().apply {
+                            moveTo(size.width * 0.5f, 2.dp.toPx())
+                            cubicTo(
+                                size.width * 0.88f, size.height * 0.45f,
+                                size.width * 0.86f, size.height * 0.86f,
+                                size.width * 0.5f, size.height - 2.dp.toPx()
+                            )
+                            cubicTo(
+                                size.width * 0.14f, size.height * 0.86f,
+                                size.width * 0.12f, size.height * 0.45f,
+                                size.width * 0.5f, 2.dp.toPx()
+                            )
+                            close()
+                        }
+                        drawPath(drop, Color.White, style = Stroke(width = 1.7.dp.toPx()))
+                    }
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Speed",
+                    active = selectedLayer.speedMultiplier != 1.0f || selectedLayer.reversed || selectedLayer.timeRemapEnabled,
+                    testTag = "tile_speed_timing",
+                    onClick = { onOpenInspectorTab(AmInspectorTab.SPEED_TIMING) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Speed,
+                        contentDescription = null,
+                        tint = if (selectedLayer.reversed || selectedLayer.speedMultiplier != 1.0f) KeyflowBlueBright else Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                if (selectedLayer.type == LayerType.SHAPE ||
+                    selectedLayer.type == LayerType.TEXT ||
+                    selectedLayer.type == LayerType.MODEL_3D
+                ) {
+                    KeyflowBottomNavTab(
+                        label = "Color",
+                        testTag = "tile_color_fill",
+                        onClick = { onOpenInspectorTab(AmInspectorTab.COLOR_FILL) }
+                    ) {
+                        Icon(Icons.Default.Palette, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Border",
+                    active = selectedLayer.strokeEnabled || selectedLayer.shadowEnabled,
+                    testTag = "tile_border_shadow",
+                    onClick = { onOpenInspectorTab(AmInspectorTab.BORDER_SHADOW) }
+                ) {
+                    Icon(Icons.Default.BorderStyle, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeyflowBottomNavTab(
+    label: String,
+    testTag: String,
+    active: Boolean = false,
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .widthIn(min = 62.dp)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        icon()
+        Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 11.sp,
+            color = if (active) KeyflowBlueBright else Color(0xFFB8C0CE),
+            maxLines = 1
+        )
+    }
+}
+
 @Composable
 private fun AmMultitrackTimelineArea(
     state: StudioWorkspaceState,
     cachedSpanFractions: List<Pair<Float, Float>> = emptyList(),
     isAddDrawerOpen: Boolean,
+    isBeatPopoverOpen: Boolean = false,
+    showFloatingFabs: Boolean = true,
+    compactSelectedOnly: Boolean = false,
     onScrubPlayhead: (Long) -> Unit,
     onSetTimelineZoom: (Float) -> Unit,
     onSelectLayer: (String) -> Unit,
+    onMoveLayerTimeRange: (String, Long, Boolean) -> Unit,
     onToggleLayerVisibility: (String) -> Unit,
+    onToggleFloatingBeatReactor: () -> Unit,
     onNavigateTool: (StudioDestination) -> Unit,
     onAddNullRig: () -> Unit,
     onOpenAddDrawer: () -> Unit
 ) {
     val project = state.activeProject
     val durFloat = project.durationMs.coerceAtLeast(1L).toFloat()
+    val density = LocalDensity.current
+    val timelineHScroll = rememberScrollState()
+    val currentZoomState = rememberUpdatedState(state.timelineZoom)
+    val onZoomUpdated = rememberUpdatedState(onSetTimelineZoom)
+    val isLayerSelectedMode = state.selectedLayerId != null
+    val activePlayheadColor = if (isLayerSelectedMode) KeyflowBlue else PlayheadEmerald
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    val rulerLabelPaint = remember(density) {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(176, 184, 198)
+            textSize = with(density) { 10.sp.toPx() }
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+        }
+    }
+    val playheadPillTextPaint = remember(density, isLayerSelectedMode) {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (isLayerSelectedMode) android.graphics.Color.rgb(6, 10, 22) else android.graphics.Color.rgb(4, 18, 8)
+            textSize = with(density) { 10.sp.toPx() }
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+    }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TimelinePitchBlack)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    do {
+                        val event = awaitPointerEvent()
+                        val pressedCount = event.changes.count { it.pressed }
+                        if (pressedCount >= 2) {
+                            val zoomFactor = event.calculateZoom()
+                            if (zoomFactor.isFinite() && abs(zoomFactor - 1f) > 0.004f) {
+                                val nextZoom = (currentZoomState.value * zoomFactor).coerceIn(0.5f, 5.0f)
+                                onZoomUpdated.value(nextZoom)
+                                event.changes.forEach { ch ->
+                                    if (ch.positionChanged()) ch.consume()
+                                }
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+            .testTag("timeline_multitrack_container")
+    ) {
+        val viewportLaneWidthDp = (maxWidth - TIMELINE_LEFT_GUTTER - TIMELINE_RIGHT_GUTTER).coerceAtLeast(140.dp)
+        val zoom = state.timelineZoom.coerceIn(0.5f, 5.0f)
+        val contentCanvasWidthDp = max(viewportLaneWidthDp.value, viewportLaneWidthDp.value * zoom).dp
+        val compSpanWidthPx = with(density) { (viewportLaneWidthDp * zoom).toPx().coerceAtLeast(48f) }
+        val timecodeShort = remember(state.playheadMs, project.fps) {
+            AnimationEvaluator.formatSmpteTimecode(state.playheadMs, project.fps).drop(3)
+        }
+
         Column(modifier = Modifier.fillMaxSize()) {
-            // A. 1:1 ALIGHT MOTION TIME RULER ROW (Timecode cleanly placed above Layer Headers!)
+            // A. REFERENCE-DESIGN TIME RULER STRIP
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(32.dp)
-                    .background(DeepBlack)
-                    .border(0.6.dp, OutlineSubtle),
+                    .height(28.dp)
+                    .background(TimelineRulerBg),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
+                Box(
                     modifier = Modifier
-                        .width(136.dp)
+                        .width(TIMELINE_LEFT_GUTTER)
                         .fillMaxHeight()
-                        .padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = AnimationEvaluator.formatSmpteTimecode(state.playheadMs, project.fps).drop(3),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = AmTealBright,
-                        maxLines = 1
-                    )
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(PanelDark)
-                            .clickable {
-                                val nextZoom = when {
-                                    state.timelineZoom < 0.9f -> 1.0f
-                                    state.timelineZoom < 1.4f -> 1.5f
-                                    state.timelineZoom < 2.2f -> 2.5f
-                                    else -> 0.5f
-                                }
-                                onSetTimelineZoom(nextZoom)
+                        .clickable {
+                            val nextZoom = when {
+                                state.timelineZoom < 0.85f -> 1.0f
+                                state.timelineZoom < 1.35f -> 1.8f
+                                state.timelineZoom < 2.4f -> 3.0f
+                                else -> 0.6f
                             }
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ZoomIn,
-                            contentDescription = "Cycle timeline zoom",
-                            tint = TextSecondary,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = "${String.format("%.1f", state.timelineZoom)}x",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                    }
+                            onSetTimelineZoom(nextZoom)
+                        }
+                        .testTag("timeline_zoom_badge"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ZoomIn,
+                        contentDescription = "Zoom",
+                        tint = Color(0xFF666E7D),
+                        modifier = Modifier.size(13.dp)
+                    )
                 }
 
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .pointerInput(project.durationMs) {
-                            detectTapGestures { offset ->
-                                val frac = (offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                                onScrubPlayhead((frac * project.durationMs).toLong())
-                            }
-                        }
-                        .pointerInput(project.durationMs) {
-                            detectHorizontalDragGestures { change, _ ->
-                                change.consume()
-                                val frac = (change.position.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                                onScrubPlayhead((frac * project.durationMs).toLong())
-                            }
-                        }
-                        .testTag("timeline_ruler_scrubber")
+                        .horizontalScroll(timelineHScroll, enabled = zoom > 1.02f)
                 ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val w = size.width
-                        val h = size.height
-
-                        // Green RAM Pre-Render Cache Span Indicator Bar along top of ruler!
-                        cachedSpanFractions.forEach { (startF, endF) ->
-                            val sx = (startF.coerceIn(0f, 1f)) * w
-                            val ex = (endF.coerceIn(0f, 1f)) * w
-                            drawRect(
-                                color = RigGreen.copy(alpha = 0.85f),
-                                topLeft = Offset(sx, 0f),
-                                size = Size((ex - sx).coerceAtLeast(3f), 3.2f)
-                            )
-                        }
-
-                        val tickDensity = (28 * state.timelineZoom).toInt().coerceIn(16, 96)
-                        for (i in 0..tickDensity) {
-                            val x = (i.toFloat() / tickDensity) * w
-                            val isMajor = i % 4 == 0
-                            drawLine(
-                                color = if (isMajor) TextSecondary else OutlineSubtle,
-                                start = Offset(x, if (isMajor) h * 0.34f else h * 0.64f),
-                                end = Offset(x, h),
-                                strokeWidth = if (isMajor) 1.5f else 1f
-                            )
-                        }
-
-                        project.beatMarkers.forEach { bm ->
-                            val bx = (bm.timeMs / durFloat).coerceIn(0f, 1f) * w
-                            val flag = Path().apply {
-                                moveTo(bx, 1f)
-                                lineTo(bx + 7f, 5.5f)
-                                lineTo(bx, 10f)
-                                close()
+                    Box(
+                        modifier = Modifier
+                            .width(contentCanvasWidthDp)
+                            .fillMaxHeight()
+                            .pointerInput(project.durationMs, compSpanWidthPx) {
+                                detectTapGestures { offset ->
+                                    val frac = (offset.x / compSpanWidthPx).coerceIn(0f, 1f)
+                                    onScrubPlayhead((frac * project.durationMs).toLong())
+                                }
                             }
-                            drawPath(flag, NeonPink)
-                        }
+                            .pointerInput(project.durationMs, compSpanWidthPx) {
+                                detectHorizontalDragGestures { change, _ ->
+                                    change.consume()
+                                    val frac = (change.position.x / compSpanWidthPx).coerceIn(0f, 1f)
+                                    onScrubPlayhead((frac * project.durationMs).toLong())
+                                }
+                            }
+                            .testTag("timeline_ruler_scrubber")
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val w = compSpanWidthPx.coerceAtMost(size.width)
+                            val h = size.height
+                            val px = (state.playheadMs / durFloat).coerceIn(0f, 1f) * w
 
-                        val px = (state.playheadMs / durFloat).coerceIn(0f, 1f) * w
-                        val crown = Path().apply {
-                            moveTo(px - 6f, 0f)
-                            lineTo(px + 6f, 0f)
-                            lineTo(px + 6f, 7f)
-                            lineTo(px, 12f)
-                            lineTo(px - 6f, 7f)
-                            close()
+                            drawRect(
+                                color = activePlayheadColor.copy(alpha = 0.55f),
+                                topLeft = Offset(0f, 0f),
+                                size = Size(px.coerceAtLeast(2f), 2.5.dp.toPx())
+                            )
+                            cachedSpanFractions.forEach { (startF, endF) ->
+                                val sx = (startF.coerceIn(0f, 1f)) * w
+                                val ex = (endF.coerceIn(0f, 1f)) * w
+                                drawRect(
+                                    color = activePlayheadColor,
+                                    topLeft = Offset(sx, 0f),
+                                    size = Size((ex - sx).coerceAtLeast(3f), 2.5.dp.toPx())
+                                )
+                            }
+
+                            drawLine(
+                                color = Color(0xFF1A1D24),
+                                start = Offset(0f, h - 1f),
+                                end = Offset(size.width, h - 1f),
+                                strokeWidth = 1f
+                            )
+
+                            val totalSec = (project.durationMs / 1000f).coerceAtLeast(1f)
+                            val pxPerSec = w / totalSec
+                            val secStep = when {
+                                pxPerSec >= 38f -> 1
+                                pxPerSec >= 19f -> 2
+                                else -> 5
+                            }
+                            val subTicksPerStep = 10
+                            val maxSecInt = totalSec.toInt()
+
+                            for (s in 0..maxSecInt step secStep) {
+                                val secX = (s / totalSec) * w
+                                if (secX <= w + 1f) {
+                                    drawLine(
+                                        color = Color(0xFF4B5260),
+                                        start = Offset(secX, h * 0.58f),
+                                        end = Offset(secX, h),
+                                        strokeWidth = 1.2f
+                                    )
+                                    drawContext.canvas.nativeCanvas.drawText(
+                                        s.toString(),
+                                        secX + 3.dp.toPx(),
+                                        12.dp.toPx(),
+                                        rulerLabelPaint
+                                    )
+                                }
+                                for (sub in 1 until subTicksPerStep) {
+                                    val subSec = s + (sub.toFloat() / subTicksPerStep) * secStep
+                                    if (subSec <= totalSec) {
+                                        val tx = (subSec / totalSec) * w
+                                        val isHalf = sub == subTicksPerStep / 2
+                                        drawLine(
+                                            color = if (isHalf) Color(0xFF343944) else Color(0xFF22262E),
+                                            start = Offset(tx, if (isHalf) h * 0.70f else h * 0.80f),
+                                            end = Offset(tx, h),
+                                            strokeWidth = 1f
+                                        )
+                                    }
+                                }
+                            }
+
+                            project.beatMarkers.forEach { bm ->
+                                val bx = (bm.timeMs / durFloat).coerceIn(0f, 1f) * w
+                                val pinTop = Path().apply {
+                                    moveTo(bx - 5.dp.toPx(), 1.5.dp.toPx())
+                                    lineTo(bx + 5.dp.toPx(), 1.5.dp.toPx())
+                                    lineTo(bx + 5.dp.toPx(), 7.dp.toPx())
+                                    lineTo(bx, 11.5.dp.toPx())
+                                    lineTo(bx - 5.dp.toPx(), 7.dp.toPx())
+                                    close()
+                                }
+                                drawPath(pinTop, BookmarkSkyBlue)
+                                drawLine(
+                                    color = BookmarkSkyBlue,
+                                    start = Offset(bx, 11.dp.toPx()),
+                                    end = Offset(bx, h),
+                                    strokeWidth = 1.4.dp.toPx()
+                                )
+                            }
+
+                            val pillW = 54.dp.toPx()
+                            val pillH = 16.5.dp.toPx()
+                            val pillLeft = (px - pillW * 0.5f).coerceIn(0f, (size.width - pillW).coerceAtLeast(0f))
+                            val pillTop = 4.dp.toPx()
+
+                            drawLine(
+                                color = activePlayheadColor,
+                                start = Offset(px, pillTop + pillH),
+                                end = Offset(px, h),
+                                strokeWidth = 1.6.dp.toPx()
+                            )
+                            drawRoundRect(
+                                color = activePlayheadColor,
+                                topLeft = Offset(pillLeft, pillTop),
+                                size = Size(pillW, pillH),
+                                cornerRadius = CornerRadius(pillH * 0.5f, pillH * 0.5f)
+                            )
+                            val textBaselineY = pillTop + pillH * 0.5f - (playheadPillTextPaint.descent() + playheadPillTextPaint.ascent()) * 0.5f
+                            drawContext.canvas.nativeCanvas.drawText(
+                                timecodeShort,
+                                pillLeft + pillW * 0.5f,
+                                textBaselineY,
+                                playheadPillTextPaint
+                            )
                         }
-                        drawPath(crown, PlayheadRed)
-                        drawLine(PlayheadRed, Offset(px, 11f), Offset(px, h), strokeWidth = 2.2f)
                     }
                 }
+
+                Spacer(modifier = Modifier.width(TIMELINE_RIGHT_GUTTER))
             }
 
-            // B. MULTITRACK LAYER STACK (Generous bottom padding so layers scroll completely clear of the scaled-down FAB!)
+            // B. FULL-WIDTH PITCH-BLACK LAYER STACK
             if (project.layers.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .background(AmBgDark)
-                        .padding(start = 24.dp, end = 24.dp, bottom = 54.dp),
+                        .background(TimelinePitchBlack)
+                        .padding(bottom = if (showFloatingFabs) 52.dp else 4.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -1371,40 +2457,52 @@ private fun AmMultitrackTimelineArea(
                         Icon(
                             imageVector = Icons.Default.Layers,
                             contentDescription = null,
-                            tint = AmTeal.copy(alpha = 0.75f),
-                            modifier = Modifier.size(30.dp)
+                            tint = Color(0xFF3E4552),
+                            modifier = Modifier.size(26.dp)
                         )
                         Text(
-                            text = "Empty Composition",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Tap the '+' button in the corner to add Video, Image, Audio, Shape, Text, or Camera.",
-                            style = MaterialTheme.typography.bodySmall,
+                            text = "No layers",
+                            style = MaterialTheme.typography.labelMedium,
                             color = TextSecondary
                         )
                     }
                 }
             } else {
+                val visibleLayers = remember(project.layers, state.selectedLayerId, compactSelectedOnly) {
+                    val rev = project.layers.asReversed()
+                    if (compactSelectedOnly && state.selectedLayerId != null) {
+                        rev.filter { it.id == state.selectedLayerId }.ifEmpty { rev.take(1) }
+                    } else {
+                        rev
+                    }
+                }
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 74.dp),
+                        .fillMaxWidth()
+                        .background(TimelinePitchBlack),
+                    contentPadding = PaddingValues(
+                        top = 4.dp,
+                        bottom = if (showFloatingFabs) 68.dp else 6.dp
+                    ),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    val reversedLayers = project.layers.asReversed()
-                    itemsIndexed(reversedLayers, key = { _, l -> l.id }) { _, layer ->
+                    itemsIndexed(visibleLayers, key = { _, l -> l.id }) { _, layer ->
                         val isSelected = layer.id == state.selectedLayerId
                         AmTimelineLayerRow(
                             layer = layer,
                             isSelected = isSelected,
+                            anyLayerSelected = isLayerSelectedMode,
                             playheadMs = state.playheadMs,
                             durationMs = project.durationMs,
-                            beatMarkers = project.beatMarkers.map { it.timeMs },
+                            timelineHScroll = timelineHScroll,
+                            enableHorizontalScroll = zoom > 1.02f,
+                            contentCanvasWidthDp = contentCanvasWidthDp,
+                            compSpanWidthPx = compSpanWidthPx,
                             onClickLayer = { onSelectLayer(layer.id) },
+                            onMoveLayerTimeRange = { newStart, recordUndo ->
+                                onMoveLayerTimeRange(layer.id, newStart, recordUndo)
+                            },
                             onScrubPlayhead = onScrubPlayhead,
                             onToggleVisibility = { onToggleLayerVisibility(layer.id) }
                         )
@@ -1413,55 +2511,55 @@ private fun AmMultitrackTimelineArea(
             }
         }
 
-        // C. SCALED-DOWN FLOATING STUDIO ICON PILL (Bottom-Left) + 1:1 ALIGHT MOTION '+' FAB (Bottom-Right)
-        if (!isAddDrawerOpen) {
+        // C. SCALED-DOWN FLOATING STUDIO ICON PILL (Bottom-Left) + CIRCULAR TEAL '+' FAB (Bottom-Right)
+        if (showFloatingFabs && !isAddDrawerOpen) {
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .navigationBarsPadding()
-                    .padding(start = 10.dp, bottom = 10.dp)
-                    .height(38.dp)
+                    .padding(start = 10.dp, bottom = 8.dp)
+                    .height(36.dp)
                     .shadow(6.dp, CircleShape)
                     .clip(CircleShape)
-                    .background(SurfaceDark.copy(alpha = 0.90f))
-                    .border(1.dp, OutlineSubtle, CircleShape)
-                    .padding(horizontal = 6.dp),
+                    .background(Color(0xE6101217))
+                    .border(1.dp, TimelineHairline, CircleShape)
+                    .padding(horizontal = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 AmMiniStudioIcon(
                     icon = Icons.Default.AutoFixHigh,
-                    contentDescription = "Effects Browser",
+                    contentDescription = "Effects",
                     onClick = { onNavigateTool(StudioDestination.EFFECTS_BROWSER) },
                     testTag = "tool_effects_button"
                 )
                 AmMiniStudioIcon(
                     icon = Icons.AutoMirrored.Filled.ShowChart,
-                    contentDescription = "Graph Editor",
+                    contentDescription = "Graph",
                     onClick = { onNavigateTool(StudioDestination.GRAPH_EDITOR) },
                     testTag = "tool_graph_button"
                 )
                 AmMiniStudioIcon(
                     icon = Icons.Default.GraphicEq,
-                    contentDescription = "Audio Reactor",
-                    onClick = { onNavigateTool(StudioDestination.AUDIO_REACTOR) },
+                    contentDescription = "Audio",
+                    active = isBeatPopoverOpen,
+                    onClick = onToggleFloatingBeatReactor,
                     testTag = "tool_audio_button"
                 )
                 AmMiniStudioIcon(
                     icon = Icons.Default.ViewInAr,
-                    contentDescription = "3D Workspace",
+                    contentDescription = "3D",
                     onClick = { onNavigateTool(StudioDestination.WORKSPACE_3D) },
                     testTag = "tool_3d_button"
                 )
                 AmMiniStudioIcon(
                     icon = Icons.Default.AccountTree,
-                    contentDescription = "Add Null Rig",
+                    contentDescription = "Null",
                     onClick = onAddNullRig,
                     testTag = "tool_rig_button"
                 )
             }
 
-            // Scaled-Down 1:1 Alight Motion Circular Emerald-Teal '+' FAB!
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -1474,7 +2572,7 @@ private fun AmMultitrackTimelineArea(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(42.dp)
                         .shadow(8.dp, CircleShape)
                         .clip(CircleShape)
                         .background(Brush.linearGradient(listOf(AmTealBright, AmTeal))),
@@ -1482,9 +2580,9 @@ private fun AmMultitrackTimelineArea(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
-                        contentDescription = "Add layer or element",
+                        contentDescription = "Add",
                         tint = DeepBlack,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(21.dp)
                     )
                 }
             }
@@ -1497,12 +2595,14 @@ private fun AmMiniStudioIcon(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
-    testTag: String
+    testTag: String,
+    active: Boolean = false
 ) {
     Box(
         modifier = Modifier
-            .size(34.dp)
+            .size(32.dp)
             .clip(CircleShape)
+            .background(if (active) AmTealContainer else Color.Transparent)
             .clickable(onClick = onClick)
             .testTag(testTag),
         contentAlignment = Alignment.Center
@@ -1510,8 +2610,8 @@ private fun AmMiniStudioIcon(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = AmTealBright,
-            modifier = Modifier.size(17.dp)
+            tint = if (active) BookmarkSkyBlue else AmTealBright,
+            modifier = Modifier.size(16.dp)
         )
     }
 }
@@ -1520,208 +2620,300 @@ private fun AmMiniStudioIcon(
 private fun AmTimelineLayerRow(
     layer: Layer,
     isSelected: Boolean,
+    anyLayerSelected: Boolean = false,
     playheadMs: Long,
     durationMs: Long,
-    beatMarkers: List<Long>,
+    timelineHScroll: ScrollState,
+    enableHorizontalScroll: Boolean,
+    contentCanvasWidthDp: androidx.compose.ui.unit.Dp,
+    compSpanWidthPx: Float,
     onClickLayer: () -> Unit,
+    onMoveLayerTimeRange: (rawNewStartMs: Long, recordUndo: Boolean) -> Unit,
     onScrubPlayhead: (Long) -> Unit,
     onToggleVisibility: () -> Unit
 ) {
-    val swatch = remember(layer.colorHex, layer.type) {
+    val density = LocalDensity.current
+    val clipFillColor = remember(layer.colorHex, layer.type) {
         when (layer.type) {
-            LayerType.NULL_OBJECT -> RigGreen
+            LayerType.IMAGE, LayerType.VIDEO -> ClipMediaBlue
+            LayerType.NULL_OBJECT, LayerType.CAMERA -> ClipRigRed
             LayerType.AUDIO -> AudioCyan
-            LayerType.CAMERA -> KeyframeAmber
-            else -> runCatching { Color(android.graphics.Color.parseColor(layer.colorHex)) }.getOrDefault(AmTeal)
+            else -> runCatching { Color(android.graphics.Color.parseColor(layer.colorHex)) }.getOrDefault(ClipMediaBlue)
         }
     }
-    val typeIcon = when (layer.type) {
-        LayerType.SHAPE -> Icons.Default.Category
-        LayerType.TEXT -> Icons.Default.TextFields
-        LayerType.VIDEO -> Icons.Default.Movie
-        LayerType.IMAGE -> Icons.Default.Image
-        LayerType.AUDIO -> Icons.Default.MusicNote
-        LayerType.CAMERA -> Icons.Default.Videocam
-        LayerType.MODEL_3D -> Icons.Default.ViewInAr
-        LayerType.NULL_OBJECT -> Icons.Default.AccountTree
+    val clipLabelPaint = remember(density) {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = with(density) { 11.sp.toPx() }
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            setShadowLayer(3f, 0f, 1f, android.graphics.Color.argb(150, 0, 0, 0))
+        }
     }
-    val kfTimes = remember(layer) {
-        layer.allKeyframeTimes()
-    }
+    val kfTimes = remember(layer) { layer.allKeyframeTimes() }
     val durFloat = durationMs.coerceAtLeast(1L).toFloat()
+
+    var isHoldingClip by remember { mutableStateOf(false) }
+    var dragOriginStartMs by remember { mutableLongStateOf(0L) }
+    var dragAccumPx by remember { mutableFloatStateOf(0f) }
+
+    val latestLayer by rememberUpdatedState(layer)
+    val latestDurationMs by rememberUpdatedState(durationMs)
+    val latestCompSpanPx by rememberUpdatedState(compSpanWidthPx)
+    val latestMoveCallback by rememberUpdatedState(onMoveLayerTimeRange)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(50.dp)
-            .background(if (isSelected) AmTealContainer.copy(alpha = 0.34f) else SurfaceDark)
-            .border(0.5.dp, if (isSelected) AmTeal else OutlineSubtle),
+            .height(TIMELINE_ROW_HEIGHT)
+            .background(
+                when {
+                    isHoldingClip -> Color(0xFF141820)
+                    isSelected -> Color(0xFF06080D)
+                    else -> TimelinePitchBlack
+                }
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Clean, Un-Squeezed Left Track Header (136.dp)
-        Row(
+        Box(
             modifier = Modifier
-                .width(136.dp)
+                .width(TIMELINE_LEFT_GUTTER)
                 .fillMaxHeight()
-                .clickable(onClick = onClickLayer)
-                .testTag("layer_track_${layer.id}")
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .clickable(onClick = onToggleVisibility),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = if (layer.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                contentDescription = "Toggle layer visibility",
-                tint = if (layer.visible) TextSecondary else TextMuted.copy(alpha = 0.45f),
-                modifier = Modifier
-                    .size(16.dp)
-                    .clickable(onClick = onToggleVisibility)
+                contentDescription = "Visibility",
+                tint = if (layer.visible) Color(0xFFD5DCE8) else Color(0xFF3E4452),
+                modifier = Modifier.size(15.dp)
             )
+        }
 
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .background(TimelinePitchBlack)
+                .horizontalScroll(timelineHScroll, enabled = enableHorizontalScroll && !isHoldingClip)
+        ) {
             Box(
                 modifier = Modifier
-                    .size(26.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(swatch.copy(alpha = 0.20f))
-                    .border(1.dp, swatch.copy(alpha = 0.85f), RoundedCornerShape(7.dp)),
-                contentAlignment = Alignment.Center
+                    .width(contentCanvasWidthDp)
+                    .fillMaxHeight()
+                    .pointerInput(layer.id) {
+                        detectTapGestures { offset ->
+                            val curL = latestLayer
+                            val curDur = latestDurationMs.coerceAtLeast(1L)
+                            val w = latestCompSpanPx.coerceAtLeast(1f)
+                            val tappedMs = ((offset.x / w).coerceIn(0f, 1f) * curDur).toLong()
+                            if (tappedMs in curL.startTimeMs..curL.endTimeMs) {
+                                onClickLayer()
+                            } else {
+                                onScrubPlayhead(tappedMs)
+                            }
+                        }
+                    }
+                    .pointerInput(layer.id) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                if (!latestLayer.locked) {
+                                    isHoldingClip = true
+                                    dragOriginStartMs = latestLayer.startTimeMs
+                                    dragAccumPx = 0f
+                                }
+                            },
+                            onDrag = { change, dragAmount ->
+                                if (isHoldingClip && !latestLayer.locked) {
+                                    change.consume()
+                                    dragAccumPx += dragAmount.x
+                                    val deltaMs = ((dragAccumPx / latestCompSpanPx.coerceAtLeast(1f)) * latestDurationMs).roundToLong()
+                                    latestMoveCallback(dragOriginStartMs + deltaMs, false)
+                                }
+                            },
+                            onDragEnd = {
+                                if (isHoldingClip) {
+                                    isHoldingClip = false
+                                    latestMoveCallback(latestLayer.startTimeMs, true)
+                                }
+                            },
+                            onDragCancel = {
+                                isHoldingClip = false
+                            }
+                        )
+                    }
+                    .testTag("layer_clip_lane_${layer.id}")
             ) {
-                Icon(imageVector = typeIcon, contentDescription = null, tint = swatch, modifier = Modifier.size(14.dp))
-            }
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = compSpanWidthPx.coerceAtMost(size.width)
+                    val h = size.height
 
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(
-                        text = layer.name,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (isSelected) AmTealBright else TextPrimary,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (layer.locked) {
-                        Icon(Icons.Default.Lock, contentDescription = null, tint = KeyframeAmber, modifier = Modifier.size(10.dp))
+                    val rawSX = (layer.startTimeMs / durFloat).coerceIn(0f, 1f) * w
+                    val earW = if (isSelected) 11.dp.toPx() else 0f
+                    val sX = if (isSelected && rawSX < earW) earW else rawSX
+                    val eX = ((layer.endTimeMs / durFloat).coerceIn(0f, 1f) * w).coerceAtLeast(sX + 6.dp.toPx())
+                    val rawClipW = eX - sX
+                    val minPillW = 6.dp.toPx()
+                    val clipW = rawClipW.coerceAtLeast(minPillW)
+                    val barTop = 2.5.dp.toPx()
+                    val barH = (h - 5.dp.toPx()).coerceAtLeast(10f)
+                    val cornerPx = 5.5.dp.toPx()
+
+                    if (clipW < 18.dp.toPx()) {
+                        val capsuleColor = if (clipW < 9.dp.toPx()) Color.White else clipFillColor
+                        drawRoundRect(
+                            color = capsuleColor,
+                            topLeft = Offset(sX, barTop),
+                            size = Size(clipW, barH),
+                            cornerRadius = CornerRadius(clipW * 0.5f, clipW * 0.5f)
+                        )
+                        drawRoundRect(
+                            color = Color.White,
+                            topLeft = Offset(sX, barTop),
+                            size = Size(clipW, barH),
+                            cornerRadius = CornerRadius(clipW * 0.5f, clipW * 0.5f),
+                            style = Stroke(width = 1.1.dp.toPx())
+                        )
+                    } else {
+                        // KeyFlow Signature White Left '<' Trim Ear Cap when selected
+                        if (isSelected) {
+                            val earLeft = (sX - earW).coerceAtLeast(0f)
+                            drawRoundRect(
+                                color = Color.White,
+                                topLeft = Offset(earLeft, barTop),
+                                size = Size(earW + cornerPx, barH),
+                                cornerRadius = CornerRadius(cornerPx, cornerPx)
+                            )
+                            val triCx = earLeft + earW * 0.46f
+                            val triCy = h * 0.5f
+                            val triHalf = 2.8.dp.toPx()
+                            val arrowPath = Path().apply {
+                                moveTo(triCx + triHalf * 0.55f, triCy - triHalf)
+                                lineTo(triCx - triHalf * 0.65f, triCy)
+                                lineTo(triCx + triHalf * 0.55f, triCy + triHalf)
+                                close()
+                            }
+                            drawPath(arrowPath, Color(0xFF0A0C10))
+                        }
+
+                        drawRoundRect(
+                            color = when {
+                                isHoldingClip -> KeyframeAmber.copy(alpha = 0.85f)
+                                isSelected -> clipFillColor
+                                else -> clipFillColor.copy(alpha = 0.88f)
+                            },
+                            topLeft = Offset(sX, barTop),
+                            size = Size(clipW, barH),
+                            cornerRadius = CornerRadius(if (isSelected) 2.dp.toPx() else cornerPx, if (isSelected) 2.dp.toPx() else cornerPx)
+                        )
+
+                        // Subtle vertical frame ticks inside selected media clip matching KeyFlow
+                        if (isSelected) {
+                            val tickGap = 5.dp.toPx()
+                            var tx = sX + tickGap
+                            while (tx < sX + clipW - 4.dp.toPx()) {
+                                drawLine(
+                                    color = Color.White.copy(alpha = 0.14f),
+                                    start = Offset(tx, barTop + 1.dp.toPx()),
+                                    end = Offset(tx, barTop + barH - 1.dp.toPx()),
+                                    strokeWidth = 1f
+                                )
+                                tx += tickGap
+                            }
+                        }
+
+                        if (layer.extractedWaveform.isNotEmpty() && (layer.type == LayerType.AUDIO || (layer.type == LayerType.VIDEO && !layer.audioMuted))) {
+                            val bins = layer.extractedWaveform
+                            val stepW = clipW / bins.size.coerceAtLeast(1)
+                            for (i in bins.indices) {
+                                val amp = bins[i].coerceIn(0.08f, 1f)
+                                val bh = amp * (barH - 6f)
+                                val bx = sX + i * stepW + stepW * 0.5f
+                                drawLine(
+                                    color = Color.White.copy(alpha = 0.28f),
+                                    start = Offset(bx, h * 0.5f - bh * 0.5f),
+                                    end = Offset(bx, h * 0.5f + bh * 0.5f),
+                                    strokeWidth = (stepW * 0.58f).coerceIn(1f, 3f)
+                                )
+                            }
+                        }
+
+                        clipRect(
+                            left = sX + 4.dp.toPx(),
+                            top = barTop,
+                            right = sX + clipW - 4.dp.toPx(),
+                            bottom = barTop + barH
+                        ) {
+                            if (clipW >= 34.dp.toPx()) {
+                                val textY = h * 0.5f - (clipLabelPaint.descent() + clipLabelPaint.ascent()) * 0.5f
+                                drawContext.canvas.nativeCanvas.drawText(
+                                    layer.name,
+                                    sX + 7.dp.toPx(),
+                                    textY,
+                                    clipLabelPaint
+                                )
+                            }
+
+                            kfTimes.forEach { kt ->
+                                val kx = (kt / durFloat).coerceIn(0f, 1f) * w
+                                val cy = h * 0.5f
+                                val r = 4.2.dp.toPx()
+                                val diamond = Path().apply {
+                                    moveTo(kx, cy - r)
+                                    lineTo(kx + r, cy)
+                                    lineTo(kx, cy + r)
+                                    lineTo(kx - r, cy)
+                                    close()
+                                }
+                                val isAtPlayhead = abs(kt - playheadMs) <= 35L
+                                if (isAtPlayhead) {
+                                    drawPath(diamond, Color.White)
+                                } else {
+                                    drawPath(diamond, Color.Black.copy(alpha = 0.28f))
+                                    drawPath(diamond, Color.White.copy(alpha = 0.90f), style = Stroke(width = 1.2.dp.toPx()))
+                                }
+                            }
+                        }
+
+                        drawRoundRect(
+                            color = when {
+                                isHoldingClip -> KeyframeAmber
+                                isSelected -> Color.White
+                                else -> Color.White.copy(alpha = 0.82f)
+                            },
+                            topLeft = Offset(sX, barTop),
+                            size = Size(clipW, barH),
+                            cornerRadius = CornerRadius(if (isSelected) 2.dp.toPx() else cornerPx, if (isSelected) 2.dp.toPx() else cornerPx),
+                            style = Stroke(width = if (isSelected || isHoldingClip) 1.6.dp.toPx() else 1.1.dp.toPx())
+                        )
                     }
-                }
-                val metaParts = buildList {
-                    if (layer.isClippingMask) add("MASK")
-                    if (layer.timeRemapEnabled) add("REMAP")
-                    if (layer.reversed) add("REV")
-                    if (layer.freezeFrameMs >= 0L) add("FREEZE")
-                    if (layer.audioMuted && (layer.type == LayerType.VIDEO || layer.type == LayerType.AUDIO)) add("MUTE")
-                    if (layer.parentId != null) add("↳ Rig")
-                    if (layer.effects.isNotEmpty()) add("${layer.effects.size} FX")
-                    if (layer.speedMultiplier != 1.0f && !layer.timeRemapEnabled) {
-                        add("${String.format("%.2f", layer.speedMultiplier).trimEnd('0').trimEnd('.')}x")
-                    }
-                }
-                if (metaParts.isNotEmpty()) {
-                    Text(
-                        text = metaParts.joinToString(" • "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+
+                    // Continuous unbroken vertical playhead line (KeyFlow Blue when layer selected, Emerald otherwise)
+                    val px = (playheadMs / durFloat).coerceIn(0f, 1f) * w
+                    drawLine(
+                        color = if (anyLayerSelected) KeyflowBlue else PlayheadEmerald,
+                        start = Offset(px, 0f),
+                        end = Offset(px, h),
+                        strokeWidth = 1.6.dp.toPx()
                     )
                 }
             }
         }
 
-        // Right Clip Bar Lane (renders live extracted/imported waveform for AUDIO & VIDEO clips!)
+        // Right 34dp Gutter: Clean 3-Line Hamburger Handle (Selects/Opens Layer Sheet)
         Box(
             modifier = Modifier
-                .weight(1f)
+                .width(TIMELINE_RIGHT_GUTTER)
                 .fillMaxHeight()
-                .background(AmBgDark)
-                .pointerInput(layer.id, durationMs) {
-                    detectTapGestures { offset ->
-                        val frac = (offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                        val tappedMs = (frac * durationMs).toLong()
-                        if (tappedMs in layer.startTimeMs..layer.endTimeMs) {
-                            onClickLayer()
-                        } else {
-                            onScrubPlayhead(tappedMs)
-                        }
-                    }
-                }
-                .pointerInput(durationMs) {
-                    detectHorizontalDragGestures { change, _ ->
-                        change.consume()
-                        val frac = (change.position.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                        onScrubPlayhead((frac * durationMs).toLong())
-                    }
-                }
+                .clickable(onClick = onClickLayer)
+                .testTag("layer_track_${layer.id}"),
+            contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val w = size.width
-                val h = size.height
-
-                beatMarkers.forEach { bm ->
-                    val bx = (bm / durFloat).coerceIn(0f, 1f) * w
-                    drawLine(OutlineSubtle.copy(alpha = 0.35f), Offset(bx, 0f), Offset(bx, h), strokeWidth = 1f)
-                }
-
-                val sX = (layer.startTimeMs / durFloat).coerceIn(0f, 1f) * w
-                val eX = (layer.endTimeMs / durFloat).coerceIn(0f, 1f) * w
-                val clipW = (eX - sX).coerceAtLeast(10f)
-                val barTop = 6f
-                val barH = h - 12f
-
-                drawRoundRect(
-                    color = swatch.copy(alpha = if (isSelected) 0.38f else 0.22f),
-                    topLeft = Offset(sX, barTop),
-                    size = Size(clipW, barH),
-                    cornerRadius = CornerRadius(8f, 8f)
-                )
-
-                if (layer.extractedWaveform.isNotEmpty() && (layer.type == LayerType.AUDIO || (layer.type == LayerType.VIDEO && !layer.audioMuted))) {
-                    val bins = layer.extractedWaveform
-                    val stepW = clipW / bins.size.coerceAtLeast(1)
-                    val wfColor = if (layer.type == LayerType.AUDIO) AudioCyan.copy(alpha = 0.85f) else ElectricBlue.copy(alpha = 0.50f)
-                    for (i in bins.indices) {
-                        val amp = bins[i].coerceIn(0.08f, 1f)
-                        val bh = amp * (barH - 6f)
-                        val bx = sX + i * stepW + stepW * 0.5f
-                        drawLine(
-                            color = wfColor,
-                            start = Offset(bx, h * 0.5f - bh * 0.5f),
-                            end = Offset(bx, h * 0.5f + bh * 0.5f),
-                            strokeWidth = (stepW * 0.62f).coerceIn(1.2f, 4f)
-                        )
-                    }
-                }
-
-                drawRoundRect(
-                    color = if (isSelected) AmTealBright else swatch.copy(alpha = 0.82f),
-                    topLeft = Offset(sX, barTop),
-                    size = Size(clipW, barH),
-                    cornerRadius = CornerRadius(8f, 8f),
-                    style = Stroke(width = if (isSelected) 2f else 1.2f)
-                )
-
-                if (isSelected) {
-                    drawRoundRect(PlayheadWhite, Offset(sX, barTop), Size(5f, barH), CornerRadius(3f, 3f))
-                    drawRoundRect(PlayheadWhite, Offset((eX - 5f).coerceAtLeast(0f), barTop), Size(5f, barH), CornerRadius(3f, 3f))
-                }
-
-                kfTimes.forEach { kt ->
-                    val kx = (kt / durFloat).coerceIn(0f, 1f) * w
-                    val cy = h * 0.5f
-                    val diamond = Path().apply {
-                        moveTo(kx, cy - 5f)
-                        lineTo(kx + 5f, cy)
-                        lineTo(kx, cy + 5f)
-                        lineTo(kx - 5f, cy)
-                        close()
-                    }
-                    drawPath(diamond, KeyframeAmber)
-                    drawPath(diamond, DeepBlack, style = Stroke(width = 1f))
-                }
-
-                val px = (playheadMs / durFloat).coerceIn(0f, 1f) * w
-                drawLine(PlayheadRed, Offset(px, 0f), Offset(px, h), strokeWidth = 2.2f)
-            }
+            Icon(
+                imageVector = Icons.Default.Menu,
+                contentDescription = layer.name,
+                tint = if (isSelected) Color.White else Color(0xFF7D8594),
+                modifier = Modifier.size(17.dp)
+            )
         }
     }
 }

@@ -1,0 +1,255 @@
+================================================================================
+          KEYFLAW .KFPACK PLUGIN CREATOR & SHADER DEVELOPER GUIDE
+                             (Version 1.4.9+)
+================================================================================
+
+Welcome, Plugin Creator!
+Keyflaw 1.4.9 upgrades the .kfpack plugin architecture with powerful new 
+capabilities: Multi-Pass Shader Pipelines, Bounding Box Expansion, and 
+Cinematic Directional Motion Blur Trails.
+
+This guide explains everything you can do and how to build high-performance,
+crash-free custom effects for the Keyflaw community.
+
+================================================================================
+1. WHAT IS A .KFPACK?
+================================================================================
+A `.kfpack` file is simply a standard .ZIP archive renamed to `.kfpack`.
+When a user taps or imports a .kfpack into Keyflaw, the app unpacks it and
+automatically registers all shaders and sliders into the effect picker!
+
+RECOMMENDED FOLDER STRUCTURE:
+-----------------------------
+my_suite.kfpack (ZIP archive)
+│
+├── suite.json                  <- Suite metadata (author, name, effect list)
+│
+└── effects/
+    ├── auto_shake/             <- Effect folder 1
+    │     ├── effect.json       <- Effect metadata & UI sliders
+    │     └── shader.glsl       <- Main fragment shader
+    │
+    └── cinematic_bloom/        <- Multi-Pass Effect folder 2
+          ├── effect.json
+          ├── pass1_downsample.glsl
+          ├── pass2_blur_h.glsl
+          ├── pass3_blur_v.glsl
+          └── pass4_composite.glsl
+
+
+================================================================================
+2. SUITE METADATA (`suite.json`)
+================================================================================
+Place this in the root of your pack:
+
+{
+  "id": "my_unique_suite_id",
+  "name": "Sapphire Lighting Suite",
+  "category": "Warna",
+  "author": "ryn",
+  "version": "1.0.0",
+  "minAppVersion": "1.2.4",
+  "description": "14 authentic cinema lighting effects for Keyflaw.",
+  "effects": [
+    "s_glow",
+    "s_rays",
+    "auto_shake"
+  ]
+}
+
+
+================================================================================
+3. EFFECT METADATA (`effect.json`) - WHAT'S NEW IN 1.4.9
+================================================================================
+
+Here is a full example showing every single new feature:
+
+{
+  "id": "s_ultraglow",
+  "name": "S_UltraGlow",
+  "category": "Warna",
+  "author": "ryn",
+  "version": "1.0.0",
+
+  /* NEW IN 1.4.9: Expand bounds so glows don't get clipped at clip edges! */
+  "expandBounds": 0.35,
+
+  /* NEW IN 1.4.9: Tells the engine this effect has motion/shutter integration */
+  "usesNativeMotionBlur": true,
+
+  /* NEW IN 1.4.9: Multi-pass separable rendering pipeline */
+  "passes": [
+    "pass1_downsample.glsl",
+    "pass2_blur_h.glsl",
+    "pass3_blur_v.glsl",
+    "pass4_composite.glsl"
+  ],
+
+  "parameters": [
+    {
+      "key": "brightness",
+      "label": "Glow Brightness",
+      "default": 1.0,
+      "min": 0.0,
+      "max": 5.0,
+      "step": 0.05
+    },
+    {
+      "key": "color",
+      "label": "Glow Color",
+      "type": "COLOR",
+      "default": "#FF6020"
+    },
+    {
+      "key": "enableTint",
+      "label": "Enable Color Tint",
+      "type": "BOOL",
+      "default": 1.0
+    }
+  ]
+}
+
+
+================================================================================
+4. EXPLAINING THE 3 NEW SUPERPOWERS IN 1.4.9
+================================================================================
+
+--------------------------------------------------------------------------------
+A. MULTI-PASS SHADER PIPELINE (`"passes": [...]`)
+--------------------------------------------------------------------------------
+Previously, you could only use 1 shader file. If you wanted a bloom or a blur, 
+doing 30 samples in one pass made low-end phones drop frames.
+
+Now, you can split your effect into sequential passes:
+1. Pass 1: Downsamples the highlights into a separate buffer.
+2. Pass 2: Blurs horizontally (e.g. 8 samples).
+3. Pass 3: Blurs vertically (8 samples). Total 16 samples instead of 64!
+4. Pass 4: Composites the blurred bloom over the original clip.
+
+If you only need 1 shader, just omit "passes" and provide "shader.glsl" as usual.
+
+--------------------------------------------------------------------------------
+B. BOUNDING BOX EXPANSION (`"expandBounds": 0.3`)
+--------------------------------------------------------------------------------
+Have you ever made a Glow, Light Rays, or Drop Shadow effect, and noticed the 
+light cuts off abruptly in an ugly square at the edge of the layer?
+
+Set `"expandBounds": 0.3` (30% padding) or `"expandBounds": 0.5` (50% padding)!
+Keyflaw will expand the rendering mesh bounding box beyond the original clip 
+quad so your glows, rays, and particles bleed outward naturally into the frame.
+
+--------------------------------------------------------------------------------
+C. SILKY-SMOOTH DIRECTIONAL MOTION TRAILS (NO CHOPPINESS)
+--------------------------------------------------------------------------------
+If you make a movement or camera shake shader (like Auto Shake, Twitch, or 
+Oscillate), users hate "static Gaussian blur" because it makes clips look like 
+a blurry out-of-focus fog, and discrete steps look like choppy "ghost echoes".
+
+TO GET REAL DIRECTIONAL SHUTTER TRAILS LIKE SAPPHIRE S_SHAKE:
+Add 20-tap stratified temporal dither inside your `shader.glsl`:
+
+```glsl
+// Fast screen-space blue noise hash
+float dither(vec2 coord) {
+    return fract(sin(dot(coord, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void main() {
+    float aspect = uTexelSize.y / uTexelSize.x;
+    float baseTime = max(uTime, 0.0);
+
+    // Fast path when blur is OFF
+    if (uMotionBlur < 0.5 || uTrailLength <= 0.001) {
+        vec2 uv = getTransformedUV(vTex, baseTime * uFrequency, aspect);
+        gl_FragColor = texture2D(uTexture, mirrorCoords(uv));
+        return;
+    }
+
+    // Continuous directional motion trail integration
+    float shutterDuration = (uTrailLength / 60.0);
+    float jitter = dither(gl_FragCoord.xy) - 0.5;
+
+    vec4 acc = vec4(0.0);
+    const int TAPS = 20;
+    const float invTaps = 1.0 / float(TAPS);
+
+    for (int i = 0; i < TAPS; i++) {
+        // Stratified sub-frame fraction [-0.5, +0.5] with dithered phase
+        float frac = (float(i) + jitter) * invTaps - 0.5;
+        float subTime = (baseTime + frac * shutterDuration) * uFrequency;
+        vec2 uv = getTransformedUV(vTex, subTime, aspect);
+        acc += texture2D(uTexture, mirrorCoords(uv));
+    }
+
+    gl_FragColor = acc * invTaps;
+}
+```
+
+WHY THIS LOOKS AMAZING:
+- It tracks the exact mathematical curve of the movement (roll + offset).
+- The `dither` seamlessly interweaves adjacent sub-taps across screen pixels.
+- Zero discrete ghost echoes, zero stepped choppiness, and 100% fluid film streaks!
+
+
+================================================================================
+5. BUILT-IN UNIFORMS PROVIDED BY KEYFLAW
+================================================================================
+Whenever Keyflaw compiles your GLSL fragment shader, it automatically supplies:
+
+  uniform sampler2D uTexture;    // The active video/image layer texture
+  varying vec2      vTex;        // Current texture UV coordinate (0.0 to 1.0)
+  uniform float     uTime;       // Current timeline playback time in seconds
+  uniform vec2      uTexelSize;  // (1.0 / layerWidth, 1.0 / layerHeight)
+
+All parameters declared in `effect.json` are exposed as:
+  `u` + Capitalized key name!
+
+  Example:
+    "key": "amplitude"   -->  uniform float uAmplitude;
+    "key": "motionBlur"  -->  uniform float uMotionBlur;
+    "key": "glowColor"   -->  uniform vec3  uGlowColor;   (for type: "COLOR")
+    "key": "tileEdges"   -->  uniform float uTileEdges;   (for type: "BOOL")
+
+
+================================================================================
+6. OFFICIAL CATEGORY NAMES
+================================================================================
+Assign your effect to any of these official categories so it sorts correctly 
+in the Keyflaw effect library:
+
+  - "Gerak"       (Motion, Shakes, Transforms, Zooms)
+  - "Warna"       (Color grading, LUTs, Glows, Invert)
+  - "Distorsi"    (Warps, Glitches, Chromatic Aberration, Ripples)
+  - "Stilisasi"   (Halftone, CRT, Pixelate, Edge Detect, Vignette)
+  - "Blur"        (Directional blurs, Radial blurs, Tilt-shift)
+  - "Simulasi"    (Rain, Snow, Film Grain, Light Leaks)
+  - "Generator"   (Fractal Noise, Gradients, Shapes)
+  - "Transisi"    (Wipes, Dissolves, Zooms)
+  - "Keying"      (Green screen, Luma key)
+  - "Perspective" (3D tilt, Cylinder, Sphere)
+  - "Custom"      (Community misc)
+
+
+================================================================================
+7. PACKAGING & TESTING YOUR PLUGIN
+================================================================================
+1. Create your files:
+   - `suite.json` in the root
+   - `effects/<your_effect_name>/effect.json`
+   - `effects/<your_effect_name>/shader.glsl` (or pass files)
+
+2. Select all items and compress to a `.zip` archive.
+   (IMPORTANT: Ensure `suite.json` is at the root of the ZIP, not inside a subfolder!)
+
+3. Rename the `.zip` file extension to `.kfpack`:
+   `my_pack.zip`  -->  `my_pack.kfpack`
+
+4. How to Install:
+   - On Android: Tap `my_pack.kfpack` in your file manager $\to$ select "Open with Keyflaw".
+   - Or inside Keyflaw: Go to Settings $\to$ "Effect Suites / Plugins" $\to$ "Import .kfpack".
+
+5. That's it! Your effect will instantly show up in the Effect Library ready to use!
+
+Happy Creating!
+Keyflaw Developer Team
+================================================================================

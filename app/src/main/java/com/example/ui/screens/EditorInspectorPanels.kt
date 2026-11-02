@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,6 +41,7 @@ import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FirstPage
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -87,10 +91,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.EffectNode
 import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
@@ -99,11 +105,16 @@ import com.example.data.model.Primitive3DType
 import com.example.data.model.PropertyTarget
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
+import com.example.engine.CustomFontRegistry
+import com.example.engine.EffectsCatalog
+import com.example.engine.PluginPackManager
+import com.example.ui.components.AmCustomColorAndGradientPicker
 import com.example.ui.components.AmKeyframeCluster
 import com.example.ui.components.AmPrimaryCtaButton
 import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
 import com.example.ui.components.AmTickWheelScrubber
+import com.example.ui.components.EyedropperColorSlot
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.AmTealContainer
@@ -111,6 +122,17 @@ import com.example.ui.theme.AudioCyan
 import com.example.ui.theme.DeepBlack
 import com.example.ui.theme.ElectricBlue
 import com.example.ui.theme.KeyframeAmber
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.filled.Diamond
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Cancel
+import androidx.compose.material.icons.outlined.Diamond
+import androidx.compose.material3.HorizontalDivider
+import com.example.ui.theme.KeyflowBlue
+import com.example.ui.theme.KeyflowBlueBright
+import com.example.ui.theme.KeyflowDrawerBg
+import com.example.ui.theme.KeyflowRailDivider
 import com.example.ui.theme.NeonPink
 import com.example.ui.theme.OutlineSubtle
 import com.example.ui.theme.PanelDark
@@ -149,6 +171,7 @@ fun AmClickedLayerSheet(
     selectedProperty: PropertyTarget,
     selectedEffectId: String? = null,
     selectedEffectSlot: EffectParamSlot = EffectParamSlot.PRIMARY,
+    selectedPluginParamKey: String? = null,
     playheadMs: Long,
     audioSpectrum: AudioSpectrumSnapshot,
     hasCopiedEffects: Boolean,
@@ -170,7 +193,10 @@ fun AmClickedLayerSheet(
     onUpdateBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit,
     onSelectEffectForInspection: (String) -> Unit = {},
     onSelectEffectSlot: (EffectParamSlot) -> Unit = {},
+    onSelectPluginParamKey: (String) -> Unit = {},
     onUpdateEffectSlotValue: (Float) -> Unit = {},
+    onUpdateCustomPluginParamValue: (String, Float) -> Unit = { _, _ -> },
+    onUpdateCustomPluginColor: (String, String) -> Unit = { _, _ -> },
     onToggleEffectKeyframe: () -> Unit = {},
     onJumpEffectKeyframe: (Boolean) -> Unit = {},
     onUpdateEffectBezierHandles: (Float, Float, Float, Float, Boolean) -> Unit = { _, _, _, _, _ -> },
@@ -204,6 +230,11 @@ fun AmClickedLayerSheet(
     onToggleLock: (String) -> Unit,
     onSetLayerParent: (String, String?) -> Unit,
     onUpdateLayerColor: (String, String) -> Unit,
+    onUpdateLayerGradientFill: (String, String, String, String, Float) -> Unit = { _, _, _, _, _ -> },
+    onUpdateAudioEffects: (String, Float, Float, Float, Float, Float, Float, Float, Float?) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
+    onImportCustomFont: (Uri) -> Unit = {},
+    onRequestEyedropper: (EyedropperColorSlot) -> Unit = {},
+    onRequestPluginColorEyedropper: (String) -> Unit = {},
     onUpdateBorderShadow: (String, Boolean, Float, String, Boolean, Float, String) -> Unit,
     onUpdateBlendMode: (String, String) -> Unit,
     onUpdateShapeKind: (String, String) -> Unit,
@@ -217,6 +248,13 @@ fun AmClickedLayerSheet(
     onNavigateTool: (StudioDestination) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val customFonts by CustomFontRegistry.customFonts.collectAsStateWithLifecycle()
+    val fontPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onImportCustomFont(uri)
+    }
     var parentMenuOpen by remember { mutableStateOf(false) }
     var renameDialogOpen by remember { mutableStateOf(false) }
     var renameDraft by remember(selectedLayer.id, selectedLayer.name) { mutableStateOf(selectedLayer.name) }
@@ -232,12 +270,12 @@ fun AmClickedLayerSheet(
         AlertDialog(
             onDismissRequest = { renameDialogOpen = false },
             containerColor = SurfaceDark,
-            title = { Text("Rename Layer", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
+            title = { Text("Rename", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) },
             text = {
                 OutlinedTextField(
                     value = renameDraft,
                     onValueChange = { renameDraft = it },
-                    label = { Text("Layer Name") },
+                    label = { Text("Name") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -261,26 +299,263 @@ fun AmClickedLayerSheet(
         )
     }
 
-    Surface(
-        color = SurfaceDark,
-        modifier = modifier
-            .fillMaxSize()
-            .border(0.6.dp, OutlineSubtle)
+    // Route Effects, Effect Detail (inline accordion), and Effect Easing directly to KeyflowEffectsSplitDrawer
+    if (activeTab == AmInspectorTab.EFFECTS ||
+        activeTab == AmInspectorTab.EFFECT_DETAIL ||
+        activeTab == AmInspectorTab.EFFECT_EASING
     ) {
-        Column(
-            modifier = Modifier
+        Surface(
+            color = KeyflowDrawerBg,
+            modifier = modifier
                 .fillMaxSize()
                 .navigationBarsPadding()
         ) {
-            // 1. CLEAN UN-SQUEEZED SELECTED LAYER HEADER BAR
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(PanelDark.copy(alpha = 0.70f))
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            KeyflowEffectsSplitDrawer(
+                activeTab = activeTab,
+                layer = selectedLayer,
+                selectedEffectId = selectedEffectId,
+                selectedSlot = selectedEffectSlot,
+                selectedPluginParamKey = selectedPluginParamKey,
+                playheadMs = playheadMs,
+                audioSpectrum = audioSpectrum,
+                hasCopiedEffects = hasCopiedEffects,
+                hasCopiedCurve = hasCopiedCurve,
+                onCloseDrawer = { onSetInspectorTab(AmInspectorTab.LAYER_OVERVIEW) },
+                onSetInspectorTab = onSetInspectorTab,
+                onSelectEffectForInspection = onSelectEffectForInspection,
+                onSelectSlot = onSelectEffectSlot,
+                onSelectPluginParamKey = onSelectPluginParamKey,
+                onUpdateSlotValue = onUpdateEffectSlotValue,
+                onUpdateCustomPluginParamValue = onUpdateCustomPluginParamValue,
+                onUpdateCustomPluginColor = onUpdateCustomPluginColor,
+                onToggleSlotKeyframe = onToggleEffectKeyframe,
+                onUpdateEffectBezierHandles = onUpdateEffectBezierHandles,
+                onUpdateSlotExpression = onUpdateEffectExpression,
+                onCopyCurve = { onCopyCurve(true) },
+                onPasteCurve = { onPasteCurve(true) },
+                onDragEffectKeyframeNode = { kfId, t, v -> onDragKeyframePoint(kfId, t, v, true) },
+                onScrubPlayhead = onScrubPlayhead,
+                onOpenFullGraph = { onOpenGraphEditor(true) },
+                onUpdateEffectNode = onUpdateEffectNode,
+                onMoveEffectOrder = onMoveEffectOrder,
+                onDuplicateEffect = onDuplicateEffect,
+                onResetEffect = onResetEffect,
+                onRemoveEffectNode = onRemoveEffectNode,
+                onClearAllEffects = onClearAllEffects,
+                onCopyEffects = onCopyEffects,
+                onPasteEffects = onPasteEffects,
+                onToggleMotionBlur = onToggleMotionBlur,
+                onNavigateTool = onNavigateTool,
+                onRequestEyedropper = onRequestEyedropper,
+                onRequestPluginColorEyedropper = onRequestPluginColorEyedropper
+            )
+        }
+        return
+    }
+
+    val activeLayerProp = selectedLayer.propertyFor(selectedProperty)
+    val hasLayerKfAtPlayhead = activeLayerProp.keyframes.any { abs(it.timeMs - playheadMs) <= 35L }
+    val supportsLayerKeyframes = activeTab == AmInspectorTab.MOVE_TRANSFORM ||
+        activeTab == AmInspectorTab.EASING_INLINE ||
+        activeTab == AmInspectorTab.BLENDING_OPACITY ||
+        (activeTab == AmInspectorTab.SPEED_TIMING && selectedLayer.timeRemapEnabled)
+    var subRailMenuOpen by remember { mutableStateOf(false) }
+
+    Surface(
+        color = KeyflowDrawerBg,
+        modifier = modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            HorizontalDivider(thickness = 0.8.dp, color = KeyflowRailDivider)
+            Row(modifier = Modifier.fillMaxSize()) {
+                // LEFT 50.dp KEYFLOW VERTICAL TOOL RAIL
+                Column(
+                    modifier = Modifier
+                        .width(50.dp)
+                        .fillMaxHeight()
+                        .background(KeyflowDrawerBg),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .clickable { onSetInspectorTab(AmInspectorTab.LAYER_OVERVIEW) }
+                            .testTag("collapse_layer_sheet_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Cancel,
+                            contentDescription = "Close Inspector",
+                            tint = Color(0xFFD5DCE8),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    HorizontalDivider(thickness = 0.8.dp, color = KeyflowRailDivider)
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (hasLayerKfAtPlayhead && supportsLayerKeyframes) KeyflowBlue.copy(alpha = 0.18f) else Color.Transparent)
+                            .clickable(enabled = supportsLayerKeyframes, onClick = onToggleKeyframe),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (hasLayerKfAtPlayhead) Icons.Filled.Diamond else Icons.Outlined.Diamond,
+                            contentDescription = "Toggle Keyframe",
+                            tint = when {
+                                !supportsLayerKeyframes -> Color(0xFF4E5563)
+                                hasLayerKfAtPlayhead -> KeyflowBlueBright
+                                activeLayerProp.keyframes.isNotEmpty() -> KeyframeAmber
+                                else -> Color(0xFFD5DCE8)
+                            },
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    val isInlineCurve = activeTab == AmInspectorTab.EASING_INLINE
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isInlineCurve) KeyflowBlue.copy(alpha = 0.18f) else Color.Transparent)
+                            .clickable(enabled = supportsLayerKeyframes) {
+                                if (isInlineCurve) {
+                                    onSetInspectorTab(
+                                        if (selectedProperty == PropertyTarget.TIME_REMAP) AmInspectorTab.SPEED_TIMING
+                                        else AmInspectorTab.MOVE_TRANSFORM
+                                    )
+                                } else {
+                                    onSetInspectorTab(AmInspectorTab.EASING_INLINE)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ShowChart,
+                            contentDescription = "Easing Curve",
+                            tint = when {
+                                !supportsLayerKeyframes -> Color(0xFF4E5563)
+                                isInlineCurve -> KeyflowBlueBright
+                                else -> Color(0xFFD5DCE8)
+                            },
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Box {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clickable { subRailMenuOpen = true },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More Layer Tools",
+                                tint = Color(0xFFD5DCE8),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = subRailMenuOpen,
+                            onDismissRequest = { subRailMenuOpen = false }
+                        ) {
+                            listOf(
+                                AmInspectorTab.EDIT_LAYER to "Edit Layer",
+                                AmInspectorTab.MOVE_TRANSFORM to "Move & Transform",
+                                AmInspectorTab.EFFECTS to "Effects",
+                                AmInspectorTab.BLENDING_OPACITY to "Blending & Mask",
+                                AmInspectorTab.SPEED_TIMING to "Speed & Audio",
+                                AmInspectorTab.COLOR_FILL to "Color & Fill",
+                                AmInspectorTab.BORDER_SHADOW to "Border & Shadow"
+                            ).forEach { (tab, title) ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = title,
+                                            color = if (activeTab == tab) KeyflowBlueBright else TextPrimary
+                                        )
+                                    },
+                                    onClick = {
+                                        subRailMenuOpen = false
+                                        onSetInspectorTab(tab)
+                                    }
+                                )
+                            }
+                            HorizontalDivider(color = OutlineSubtle)
+                            DropdownMenuItem(
+                                text = { Text("Rename Layer") },
+                                onClick = {
+                                    subRailMenuOpen = false
+                                    renameDraft = selectedLayer.name
+                                    renameDialogOpen = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (selectedLayer.locked) "Unlock Layer" else "Lock Layer") },
+                                onClick = {
+                                    subRailMenuOpen = false
+                                    onToggleLock(selectedLayer.id)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Parent Null Rig (${parentName ?: "None"})") },
+                                onClick = {
+                                    subRailMenuOpen = false
+                                    parentMenuOpen = true
+                                }
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = parentMenuOpen,
+                            onDismissRequest = { parentMenuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("None") },
+                                onClick = {
+                                    onSetLayerParent(selectedLayer.id, null)
+                                    parentMenuOpen = false
+                                }
+                            )
+                            nullCandidates.forEach { cand ->
+                                DropdownMenuItem(
+                                    text = { Text("↳ ${cand.name}") },
+                                    onClick = {
+                                        onSetLayerParent(selectedLayer.id, cand.id)
+                                        parentMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(0.8.dp)
+                        .fillMaxHeight()
+                        .background(KeyflowRailDivider)
+                )
+
+                // RIGHT SCROLLABLE SUB-PANEL CONTENT
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(KeyflowDrawerBg)
+                ) {
+                    if (false) {
+                        Row {
                 Row(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
@@ -374,7 +649,7 @@ fun AmClickedLayerSheet(
                             onDismissRequest = { parentMenuOpen = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("None (Unparented)") },
+                                text = { Text("None") },
                                 onClick = {
                                     onSetLayerParent(selectedLayer.id, null)
                                     parentMenuOpen = false
@@ -574,6 +849,7 @@ fun AmClickedLayerSheet(
                     )
                 }
             }
+                    } // end legacy header guard
 
             // 3. EXPRESSIVE SUB-PANEL BODY
             Box(
@@ -581,32 +857,28 @@ fun AmClickedLayerSheet(
                     .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 when (activeTab) {
                     AmInspectorTab.LAYER_OVERVIEW, AmInspectorTab.TIMELINE -> {
                         val editTileTitle = when (selectedLayer.type) {
                             LayerType.TEXT -> "Edit Text"
                             LayerType.SHAPE -> "Edit Shape"
-                            LayerType.MODEL_3D -> "Edit 3D Mesh"
-                            LayerType.VIDEO -> "Video & Audio"
-                            LayerType.IMAGE -> "Fit & Crop"
-                            LayerType.AUDIO -> "Audio Controls"
-                            LayerType.CAMERA -> "Camera Lens"
-                            LayerType.NULL_OBJECT -> "Null Hierarchy"
+                            LayerType.MODEL_3D -> "3D Mesh"
+                            LayerType.VIDEO -> "Video"
+                            LayerType.IMAGE -> "Image"
+                            LayerType.AUDIO -> "Audio"
+                            LayerType.CAMERA -> "Camera"
+                            LayerType.NULL_OBJECT -> "Null"
                         }
                         val editTileSubtitle = when (selectedLayer.type) {
                             LayerType.TEXT -> selectedLayer.fontFamilyName
                             LayerType.SHAPE -> selectedLayer.shapeKind
                             LayerType.MODEL_3D -> selectedLayer.primitive3D.label
-                            LayerType.VIDEO -> buildString {
-                                if (selectedLayer.timeRemapEnabled) append("Time Remap • ")
-                                if (selectedLayer.reversed) append("Reversed • ")
-                                append("${selectedLayer.mediaWidth}×${selectedLayer.mediaHeight}")
-                            }
+                            LayerType.VIDEO -> "${selectedLayer.mediaWidth}×${selectedLayer.mediaHeight}"
                             LayerType.IMAGE -> "${selectedLayer.mediaWidth}×${selectedLayer.mediaHeight}"
-                            LayerType.AUDIO -> if (selectedLayer.audioMuted) "Muted" else "Vol ${(selectedLayer.audioVolume * 100).toInt()}%"
-                            else -> "Parent: ${parentName ?: "None"}"
+                            LayerType.AUDIO -> if (selectedLayer.audioMuted) "Muted" else "${(selectedLayer.audioVolume * 100).toInt()}%"
+                            else -> parentName ?: "None"
                         }
                         val opacityEval = AnimationEvaluator.evaluateProperty(
                             selectedLayer.opacity,
@@ -619,10 +891,9 @@ fun AmClickedLayerSheet(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     AmOverviewWideTile(
                                         icon = Icons.Default.Speed,
-                                        title = if (selectedLayer.type == LayerType.VIDEO) "Speed & Remap" else "Speed & Pitch",
-                                        subtitle = if (selectedLayer.timeRemapEnabled) "Velocity Curve Active"
-                                        else if (selectedLayer.reversed) "Reversed • ${selectedLayer.speedMultiplier}x"
-                                        else "Reverse • Freeze • Velocity",
+                                        title = "Speed",
+                                        subtitle = if (selectedLayer.timeRemapEnabled) "Remap"
+                                        else "${selectedLayer.speedMultiplier}x",
                                         accent = KeyframeAmber,
                                         onClick = { onSetInspectorTab(AmInspectorTab.SPEED_TIMING) },
                                         modifier = Modifier.weight(1f),
@@ -632,7 +903,7 @@ fun AmClickedLayerSheet(
                                         AmOverviewWideTile(
                                             icon = Icons.Default.GraphicEq,
                                             title = "Extract Audio",
-                                            subtitle = if (selectedLayer.audioMuted) "Embedded Muted" else "Demux to Track",
+                                            subtitle = if (selectedLayer.audioMuted) "Muted" else "Audio",
                                             accent = AudioCyan,
                                             onClick = onExtractAudio,
                                             modifier = Modifier.weight(1f),
@@ -647,7 +918,11 @@ fun AmClickedLayerSheet(
                                     AmOverviewWideTile(
                                         icon = Icons.Default.Palette,
                                         title = "Color & Fill",
-                                        subtitle = selectedLayer.colorHex,
+                                        subtitle = when (selectedLayer.fillMode) {
+                                            "LINEAR_GRADIENT" -> "Linear"
+                                            "RADIAL_GRADIENT" -> "Radial"
+                                            else -> selectedLayer.colorHex
+                                        },
                                         accent = AmTeal,
                                         onClick = { onSetInspectorTab(AmInspectorTab.COLOR_FILL) },
                                         modifier = Modifier.weight(1f),
@@ -656,7 +931,7 @@ fun AmClickedLayerSheet(
                                     AmOverviewWideTile(
                                         icon = Icons.Default.BorderStyle,
                                         title = "Border & Shadow",
-                                        subtitle = if (selectedLayer.shadowEnabled) "Stroke + Glow" else "${selectedLayer.strokeWidth.toInt()}px Stroke",
+                                        subtitle = if (selectedLayer.shadowEnabled) "Shadow" else "${selectedLayer.strokeWidth.toInt()}px",
                                         accent = ElectricBlue,
                                         onClick = { onSetInspectorTab(AmInspectorTab.BORDER_SHADOW) },
                                         modifier = Modifier.weight(1f),
@@ -666,7 +941,7 @@ fun AmClickedLayerSheet(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     AmOverviewWideTile(
                                         icon = Icons.Default.Opacity,
-                                        title = "Blending & Mask",
+                                        title = "Blending & Opacity",
                                         subtitle = if (selectedLayer.isClippingMask) "Mask • $opacityEval%" else "$opacityEval% • ${selectedLayer.blendMode}",
                                         accent = AudioCyan,
                                         onClick = { onSetInspectorTab(AmInspectorTab.BLENDING_OPACITY) },
@@ -676,7 +951,7 @@ fun AmClickedLayerSheet(
                                     AmOverviewWideTile(
                                         icon = Icons.Default.OpenWith,
                                         title = "Move & Transform",
-                                        subtitle = "Pos, Pivot, Scale",
+                                        subtitle = null,
                                         accent = AmTealBright,
                                         onClick = { onSetInspectorTab(AmInspectorTab.MOVE_TRANSFORM) },
                                         modifier = Modifier.weight(1f),
@@ -706,10 +981,7 @@ fun AmClickedLayerSheet(
                                     AmOverviewWideTile(
                                         icon = Icons.Default.AutoFixHigh,
                                         title = "Effects",
-                                        subtitle = buildString {
-                                            if (selectedLayer.motionBlurEnabled) append("M-Blur • ")
-                                            append(if (selectedLayer.effects.isEmpty()) "Add Shaders" else "${selectedLayer.effects.size} Active")
-                                        },
+                                        subtitle = if (selectedLayer.motionBlurEnabled) "Motion Blur" else null,
                                         accent = NeonPink,
                                         badge = selectedLayer.effects.size.takeIf { it > 0 }?.toString(),
                                         onClick = { onSetInspectorTab(AmInspectorTab.EFFECTS) },
@@ -748,7 +1020,8 @@ fun AmClickedLayerSheet(
                             onSetInspectorTab = onSetInspectorTab,
                             onNavigateTool = onNavigateTool,
                             onExtractAudio = onExtractAudio,
-                            onUpdateAudioVolume = onUpdateAudioVolume
+                            onUpdateAudioVolume = onUpdateAudioVolume,
+                            onUpdateAudioEffects = onUpdateAudioEffects
                         )
                     }
 
@@ -793,31 +1066,20 @@ fun AmClickedLayerSheet(
                     }
 
                     AmInspectorTab.COLOR_FILL -> {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Fill & Tint Palette", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                            AM_SWATCHES.chunked(7).forEach { rowColors ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    rowColors.forEach { hex ->
-                                        val c = remember(hex) {
-                                            runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrDefault(AmTeal)
-                                        }
-                                        val isSel = selectedLayer.colorHex.equals(hex, ignoreCase = true)
-                                        Box(
-                                            modifier = Modifier
-                                                .size(34.dp)
-                                                .clip(CircleShape)
-                                                .background(c)
-                                                .border(
-                                                    width = if (isSel) 3.dp else 1.dp,
-                                                    color = if (isSel) Color.White else OutlineSubtle,
-                                                    shape = CircleShape
-                                                )
-                                                .clickable { onUpdateLayerColor(selectedLayer.id, hex) }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        AmCustomColorAndGradientPicker(
+                            primaryHex = selectedLayer.colorHex,
+                            onPrimaryHexChange = { hex -> onUpdateLayerColor(selectedLayer.id, hex) },
+                            onRequestEyedropper = onRequestEyedropper,
+                            primaryEyedropperSlot = EyedropperColorSlot.LAYER_PRIMARY,
+                            supportsGradient = true,
+                            fillMode = selectedLayer.fillMode,
+                            gradientEndHex = selectedLayer.gradientEndColorHex,
+                            gradientAngleDeg = selectedLayer.gradientAngleDeg,
+                            onGradientChange = { mode, startHex, endHex, angle ->
+                                onUpdateLayerGradientFill(selectedLayer.id, mode, startHex, endHex, angle)
+                            },
+                            testTagPrefix = "layer_color_fill_picker"
+                        )
                     }
 
                     AmInspectorTab.BORDER_SHADOW -> {
@@ -827,7 +1089,7 @@ fun AmClickedLayerSheet(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Stroke / Border", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                Text("Stroke", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                                 Switch(
                                     checked = selectedLayer.strokeEnabled,
                                     onCheckedChange = { enabled ->
@@ -846,7 +1108,7 @@ fun AmClickedLayerSheet(
                                     minValue = 0f,
                                     maxValue = 32f,
                                     unit = "px",
-                                    label = "Stroke Width",
+                                    label = "Width",
                                     onValueChange = { w ->
                                         onUpdateBorderShadow(
                                             selectedLayer.id, true, w,
@@ -855,13 +1117,28 @@ fun AmClickedLayerSheet(
                                         )
                                     }
                                 )
+                                AmCustomColorAndGradientPicker(
+                                    primaryHex = selectedLayer.strokeColorHex,
+                                    onPrimaryHexChange = { hex ->
+                                        onUpdateBorderShadow(
+                                            selectedLayer.id, true, selectedLayer.strokeWidth,
+                                            hex, selectedLayer.shadowEnabled,
+                                            selectedLayer.shadowBlur, selectedLayer.shadowColorHex
+                                        )
+                                    },
+                                    onRequestEyedropper = onRequestEyedropper,
+                                    primaryEyedropperSlot = EyedropperColorSlot.LAYER_STROKE,
+                                    supportsGradient = false,
+                                    compact = true,
+                                    testTagPrefix = "stroke_color_picker"
+                                )
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Drop Shadow / Glow", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                Text("Shadow", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                                 Switch(
                                     checked = selectedLayer.shadowEnabled,
                                     onCheckedChange = { sh ->
@@ -880,7 +1157,7 @@ fun AmClickedLayerSheet(
                                     minValue = 2f,
                                     maxValue = 60f,
                                     unit = "px",
-                                    label = "Shadow Blur Radius",
+                                    label = "Blur",
                                     onValueChange = { blur ->
                                         onUpdateBorderShadow(
                                             selectedLayer.id, selectedLayer.strokeEnabled, selectedLayer.strokeWidth,
@@ -888,6 +1165,21 @@ fun AmClickedLayerSheet(
                                             blur, selectedLayer.shadowColorHex
                                         )
                                     }
+                                )
+                                AmCustomColorAndGradientPicker(
+                                    primaryHex = selectedLayer.shadowColorHex,
+                                    onPrimaryHexChange = { hex ->
+                                        onUpdateBorderShadow(
+                                            selectedLayer.id, selectedLayer.strokeEnabled, selectedLayer.strokeWidth,
+                                            selectedLayer.strokeColorHex, true,
+                                            selectedLayer.shadowBlur, hex
+                                        )
+                                    },
+                                    onRequestEyedropper = onRequestEyedropper,
+                                    primaryEyedropperSlot = EyedropperColorSlot.LAYER_SHADOW,
+                                    supportsGradient = false,
+                                    compact = true,
+                                    testTagPrefix = "shadow_color_picker"
                                 )
                             }
                         }
@@ -915,7 +1207,7 @@ fun AmClickedLayerSheet(
                                     minValue = 0f,
                                     maxValue = 100f,
                                     unit = "%",
-                                    label = "Layer Opacity",
+                                    label = "Opacity",
                                     onValueChange = onUpdatePropertyValue,
                                     modifier = Modifier.weight(1f)
                                 )
@@ -948,10 +1240,7 @@ fun AmClickedLayerSheet(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Icon(Icons.Default.Layers, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(18.dp))
-                                    Column {
-                                        Text("Clipping Mask", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                                        Text("Mask upper layers inside alpha", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                                    }
+                                    Text("Mask", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                                 }
                                 Switch(
                                     checked = selectedLayer.isClippingMask,
@@ -966,7 +1255,7 @@ fun AmClickedLayerSheet(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             when (selectedLayer.type) {
                                 LayerType.SHAPE -> {
-                                    Text("Shape Primitive", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                                    Text("Shape", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -982,36 +1271,105 @@ fun AmClickedLayerSheet(
                                             )
                                         }
                                     }
+
+                                    Text("Fill", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                                    AmCustomColorAndGradientPicker(
+                                        primaryHex = selectedLayer.colorHex,
+                                        onPrimaryHexChange = { hex -> onUpdateLayerColor(selectedLayer.id, hex) },
+                                        onRequestEyedropper = onRequestEyedropper,
+                                        primaryEyedropperSlot = EyedropperColorSlot.LAYER_PRIMARY,
+                                        supportsGradient = true,
+                                        fillMode = selectedLayer.fillMode,
+                                        gradientEndHex = selectedLayer.gradientEndColorHex,
+                                        gradientAngleDeg = selectedLayer.gradientAngleDeg,
+                                        onGradientChange = { mode, startHex, endHex, angle ->
+                                            onUpdateLayerGradientFill(selectedLayer.id, mode, startHex, endHex, angle)
+                                        },
+                                        compact = true,
+                                        testTagPrefix = "shape_inline_color_picker"
+                                    )
                                 }
 
                                 LayerType.TEXT -> {
                                     OutlinedTextField(
                                         value = selectedLayer.textContent,
                                         onValueChange = { onUpdateTextLayer(selectedLayer.id, it, selectedLayer.fontFamilyName) },
-                                        label = { Text("Kinetic Text Content") },
+                                        label = { Text("Text") },
                                         singleLine = true,
                                         shape = RoundedCornerShape(10.dp),
                                         modifier = Modifier.fillMaxWidth()
                                     )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Font",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = TextSecondary
+                                        )
+                                        AmTimingBarButton(
+                                            icon = Icons.Default.Add,
+                                            label = "Import",
+                                            active = customFonts.isNotEmpty(),
+                                            onClick = {
+                                                fontPickerLauncher.launch(
+                                                    arrayOf(
+                                                        "font/*",
+                                                        "application/x-font-ttf",
+                                                        "application/x-font-opentype",
+                                                        "*/*"
+                                                    )
+                                                )
+                                            },
+                                            testTag = "import_custom_font_button"
+                                        )
+                                    }
+
+                                    val availableFonts = remember(context, customFonts) {
+                                        CustomFontRegistry.allAvailableFonts(context)
+                                    }
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .horizontalScroll(rememberScrollState()),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        listOf("Space Grotesk", "JetBrains Mono", "Serif", "Cursive").forEach { font ->
+                                        availableFonts.forEach { opt ->
+                                            val label = if (opt.isCustomImported) "★ ${opt.displayName}" else opt.displayName
                                             AmSegmentChip(
-                                                label = font,
-                                                selected = selectedLayer.fontFamilyName == font,
+                                                label = label,
+                                                selected = selectedLayer.fontFamilyName.equals(opt.displayName, ignoreCase = true),
                                                 compact = true,
-                                                onClick = { onUpdateTextLayer(selectedLayer.id, selectedLayer.textContent, font) }
+                                                onClick = {
+                                                    onUpdateTextLayer(selectedLayer.id, selectedLayer.textContent, opt.displayName)
+                                                }
                                             )
                                         }
                                     }
+
+                                    Text("Color", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                                    AmCustomColorAndGradientPicker(
+                                        primaryHex = selectedLayer.colorHex,
+                                        onPrimaryHexChange = { hex -> onUpdateLayerColor(selectedLayer.id, hex) },
+                                        onRequestEyedropper = onRequestEyedropper,
+                                        primaryEyedropperSlot = EyedropperColorSlot.LAYER_PRIMARY,
+                                        supportsGradient = true,
+                                        fillMode = selectedLayer.fillMode,
+                                        gradientEndHex = selectedLayer.gradientEndColorHex,
+                                        gradientAngleDeg = selectedLayer.gradientAngleDeg,
+                                        onGradientChange = { mode, startHex, endHex, angle ->
+                                            onUpdateLayerGradientFill(selectedLayer.id, mode, startHex, endHex, angle)
+                                        },
+                                        compact = true,
+                                        testTagPrefix = "text_inline_color_picker"
+                                    )
                                 }
 
                                 LayerType.MODEL_3D -> {
-                                    Text("3D Mesh Primitive", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                                    Text("Mesh", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -1040,22 +1398,22 @@ fun AmClickedLayerSheet(
                             ) {
                                 AmTimingBarButton(
                                     icon = Icons.Default.AspectRatio,
-                                    label = "Fit Comp",
+                                    label = "Fit",
                                     onClick = { onFitOrFillComposition(false) }
                                 )
                                 AmTimingBarButton(
                                     icon = Icons.Default.AspectRatio,
-                                    label = "Fill Comp",
+                                    label = "Fill",
                                     onClick = { onFitOrFillComposition(true) }
                                 )
                                 AmSegmentChip(
-                                    label = if (selectedLayer.flipX) "Flip H: ON" else "Flip H",
+                                    label = "Flip H",
                                     selected = selectedLayer.flipX,
                                     compact = true,
                                     onClick = { onFlipLayer(true) }
                                 )
                                 AmSegmentChip(
-                                    label = if (selectedLayer.flipY) "Flip V: ON" else "Flip V",
+                                    label = "Flip V",
                                     selected = selectedLayer.flipY,
                                     compact = true,
                                     onClick = { onFlipLayer(false) }
@@ -1064,277 +1422,11 @@ fun AmClickedLayerSheet(
                         }
                     }
 
-                    AmInspectorTab.EFFECTS -> {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(PanelDark)
-                                    .border(1.dp, if (selectedLayer.motionBlurEnabled) AmTeal else OutlineSubtle, RoundedCornerShape(10.dp))
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Icon(Icons.Default.BlurLinear, contentDescription = null, tint = AmTealBright, modifier = Modifier.size(18.dp))
-                                    Column {
-                                        Text("Motion Blur", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                                        Text("GPU Shutter ${selectedLayer.shutterAngle.toInt()}°", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                                    }
-                                }
-                                Switch(
-                                    checked = selectedLayer.motionBlurEnabled,
-                                    onCheckedChange = { en -> onToggleMotionBlur(en, selectedLayer.shutterAngle) },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = DeepBlack, checkedTrackColor = AmTeal)
-                                )
-                            }
-                            if (selectedLayer.motionBlurEnabled) {
-                                AmTickWheelScrubber(
-                                    value = selectedLayer.shutterAngle,
-                                    minValue = 45f,
-                                    maxValue = 360f,
-                                    unit = "°",
-                                    label = "Shutter Angle",
-                                    onValueChange = { deg -> onToggleMotionBlur(true, deg) }
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                AmTimingBarButton(
-                                    icon = Icons.Default.ContentCopy,
-                                    label = "Copy FX",
-                                    onClick = onCopyEffects,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                AmTimingBarButton(
-                                    icon = Icons.Default.ContentPaste,
-                                    label = "Paste FX",
-                                    active = hasCopiedEffects,
-                                    onClick = onPasteEffects,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (selectedLayer.effects.isNotEmpty() && onClearAllEffects != null) {
-                                    AmTimingBarButton(
-                                        icon = Icons.Default.DeleteOutline,
-                                        label = "Clear All",
-                                        onClick = onClearAllEffects,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .testTag("clear_all_layer_effects_button")
-                                    )
-                                }
-                            }
-
-                            if (selectedLayer.effects.isNotEmpty()) {
-                                Text(
-                                    text = "Tap any effect to configure all parameters, keyframes ◆ & curve editor:",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = AmTealBright
-                                )
-                            }
-
-                            selectedLayer.effects.forEachIndexed { idx, fx ->
-                                val fxKfCount = fx.allKeyframeTimes().size
-                                val livePrimary = AnimationEvaluator.evaluateProperty(
-                                    fx.primaryProp,
-                                    playheadMs,
-                                    audioSpectrum
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(11.dp))
-                                        .background(PanelDark)
-                                        .border(
-                                            1.dp,
-                                            if (fx.id == selectedEffectId) AmTeal else OutlineSubtle,
-                                            RoundedCornerShape(11.dp)
-                                        )
-                                        .clickable { onSelectEffectForInspection(fx.id) }
-                                        .testTag("layer_effect_item_${fx.id}")
-                                        .padding(horizontal = 10.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (fx.enabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = "Toggle effect",
-                                        tint = if (fx.enabled) AmTealBright else TextMuted,
-                                        modifier = Modifier
-                                            .size(18.dp)
-                                            .clickable { onUpdateEffectNode(fx.copy(enabled = !fx.enabled)) }
-                                    )
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                        ) {
-                                            Text(
-                                                text = fx.displayName,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                color = TextPrimary,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            if (fxKfCount > 0) {
-                                                Text(
-                                                    text = "◆$fxKfCount",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = KeyframeAmber,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            text = "5 Params • Primary ${(livePrimary * 100).toInt()}% • Tap to Edit & Curve",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = TextSecondary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-
-                                    if (selectedLayer.effects.size > 1) {
-                                        Icon(
-                                            imageVector = Icons.Default.KeyboardArrowUp,
-                                            contentDescription = "Move effect up",
-                                            tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.3f),
-                                            modifier = Modifier
-                                                .size(18.dp)
-                                                .clickable(enabled = idx > 0) { onMoveEffectOrder(fx.id, true) }
-                                        )
-                                        Icon(
-                                            imageVector = Icons.Default.KeyboardArrowDown,
-                                            contentDescription = "Move effect down",
-                                            tint = if (idx < selectedLayer.effects.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.3f),
-                                            modifier = Modifier
-                                                .size(18.dp)
-                                                .clickable(enabled = idx < selectedLayer.effects.lastIndex) { onMoveEffectOrder(fx.id, false) }
-                                        )
-                                    }
-
-                                    Icon(
-                                        imageVector = Icons.Default.Tune,
-                                        contentDescription = "Configure effect properties",
-                                        tint = AmTealBright,
-                                        modifier = Modifier.size(17.dp)
-                                    )
-                                    AmSquareIconButton(
-                                        icon = Icons.Default.DeleteOutline,
-                                        contentDescription = "Delete ${fx.displayName}",
-                                        tint = NeonPink,
-                                        onClick = { onRemoveEffectNode(fx.id) },
-                                        sizeDp = 30.dp,
-                                        testTag = "delete_effect_row_${fx.id}"
-                                    )
-                                }
-                            }
-
-                            AmPrimaryCtaButton(
-                                text = "ADD EFFECT",
-                                icon = Icons.Default.Add,
-                                compact = true,
-                                onClick = { onNavigateTool(StudioDestination.EFFECTS_BROWSER) },
-                                modifier = Modifier.fillMaxWidth(),
-                                testTag = "open_effects_browser_cta"
-                            )
-                        }
-                    }
-
-                    AmInspectorTab.EFFECT_DETAIL -> {
-                        val activeFx = selectedLayer.effects.firstOrNull { it.id == selectedEffectId }
-                            ?: selectedLayer.effects.lastOrNull()
-                        if (activeFx == null) {
-                            onSetInspectorTab(AmInspectorTab.EFFECTS)
-                        } else {
-                            val fxIdx = selectedLayer.effects.indexOfFirst { it.id == activeFx.id }.coerceAtLeast(0)
-                            AmEffectDetailInspectorPanel(
-                                layer = selectedLayer,
-                                effect = activeFx,
-                                effectIndex = fxIdx,
-                                totalEffects = selectedLayer.effects.size,
-                                selectedSlot = selectedEffectSlot,
-                                playheadMs = playheadMs,
-                                audioSpectrum = audioSpectrum,
-                                onBackToEffectsList = { onSetInspectorTab(AmInspectorTab.EFFECTS) },
-                                onSelectSlot = onSelectEffectSlot,
-                                onUpdateSlotValue = onUpdateEffectSlotValue,
-                                onToggleSlotKeyframe = onToggleEffectKeyframe,
-                                onJumpSlotKeyframe = onJumpEffectKeyframe,
-                                onOpenEffectCurveEditor = { onSetInspectorTab(AmInspectorTab.EFFECT_EASING) },
-                                onOpenFullGraphForEffect = { onOpenGraphEditor(true) },
-                                onUpdateSlotExpression = onUpdateEffectExpression,
-                                onUpdateEffectNode = onUpdateEffectNode,
-                                onMoveEffectOrder = { up -> onMoveEffectOrder(activeFx.id, up) },
-                                onDuplicateEffect = { onDuplicateEffect(activeFx.id) },
-                                onResetEffect = { onResetEffect(activeFx.id) },
-                                onRemoveEffect = { onRemoveEffectNode(activeFx.id) }
-                            )
-                        }
-                    }
-
-                    AmInspectorTab.EFFECT_EASING -> {
-                        val activeFx = selectedLayer.effects.firstOrNull { it.id == selectedEffectId }
-                            ?: selectedLayer.effects.lastOrNull()
-                        if (activeFx == null) {
-                            onSetInspectorTab(AmInspectorTab.EFFECTS)
-                        } else {
-                            AmEffectInlineCurvePanel(
-                                layer = selectedLayer,
-                                effect = activeFx,
-                                selectedSlot = selectedEffectSlot,
-                                playheadMs = playheadMs,
-                                hasCopiedCurve = hasCopiedCurve,
-                                onSelectSlot = onSelectEffectSlot,
-                                onUpdateEffectBezierHandles = onUpdateEffectBezierHandles,
-                                onCopyCurve = { onCopyCurve(true) },
-                                onPasteCurve = { onPasteCurve(true) },
-                                onDragEffectKeyframeNode = { kfId, t, v -> onDragKeyframePoint(kfId, t, v, true) },
-                                onScrubPlayhead = onScrubPlayhead,
-                                onReturnToEffectDetail = { onSetInspectorTab(AmInspectorTab.EFFECT_DETAIL) },
-                                onOpenFullGraph = { onOpenGraphEditor(true) }
-                            )
-                        }
-                    }
+                    AmInspectorTab.EFFECTS,
+                    AmInspectorTab.EFFECT_DETAIL,
+                    AmInspectorTab.EFFECT_EASING -> Unit
                 }
             }
-
-            // 4. BREATHABLE HORIZONTAL BOTTOM QUICK-SWITCH BAR
-            if (activeTab != AmInspectorTab.LAYER_OVERVIEW) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(PanelDark)
-                        .border(0.6.dp, OutlineSubtle)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    listOf(
-                        AmInspectorTab.LAYER_OVERVIEW to "Overview",
-                        AmInspectorTab.SPEED_TIMING to "Speed",
-                        AmInspectorTab.MOVE_TRANSFORM to "Move",
-                        AmInspectorTab.BLENDING_OPACITY to "Blend & Mask",
-                        AmInspectorTab.COLOR_FILL to "Color",
-                        AmInspectorTab.BORDER_SHADOW to "Stroke",
-                        AmInspectorTab.EDIT_LAYER to "Edit",
-                        AmInspectorTab.EFFECTS to "Effects"
-                    ).forEach { (tab, label) ->
-                        val isSel = activeTab == tab ||
-                            (activeTab == AmInspectorTab.EASING_INLINE && tab == AmInspectorTab.MOVE_TRANSFORM) ||
-                            ((activeTab == AmInspectorTab.EFFECT_DETAIL || activeTab == AmInspectorTab.EFFECT_EASING) && tab == AmInspectorTab.EFFECTS)
-                        AmSegmentChip(
-                            label = label,
-                            selected = isSel,
-                            compact = true,
-                            onClick = { onSetInspectorTab(tab) }
-                        )
-                    }
                 }
             }
         }
@@ -1345,7 +1437,7 @@ fun AmClickedLayerSheet(
 private fun AmOverviewWideTile(
     icon: ImageVector,
     title: String,
-    subtitle: String,
+    subtitle: String? = null,
     accent: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1354,7 +1446,7 @@ private fun AmOverviewWideTile(
 ) {
     Row(
         modifier = modifier
-            .height(52.dp)
+            .height(50.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(PanelDark)
             .border(1.dp, OutlineSubtle, RoundedCornerShape(12.dp))
@@ -1366,12 +1458,12 @@ private fun AmOverviewWideTile(
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(30.dp)
                 .clip(RoundedCornerShape(9.dp))
                 .background(accent.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(imageVector = icon, contentDescription = title, tint = accent, modifier = Modifier.size(18.dp))
+            Icon(imageVector = icon, contentDescription = title, tint = accent, modifier = Modifier.size(17.dp))
         }
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1394,13 +1486,15 @@ private fun AmOverviewWideTile(
                     }
                 }
             }
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

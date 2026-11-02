@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -48,11 +49,30 @@ object EffectThumbnailPreviewer {
         override fun sizeOf(key: String, value: IntArray): Int = 1
     }
 
-    fun layerSignature(layer: Layer?): String {
+    fun layerSignature(
+        layer: Layer?,
+        playheadMs: Long = 0L,
+        audio: AudioSpectrumSnapshot = AudioSpectrumSnapshot()
+    ): String {
         if (layer == null) return "default_sample_layer"
-        return "${layer.id}|${layer.type.name}|${layer.shapeKind}|${layer.colorHex}|" +
+        val hasDynamicFrame = layer.type == LayerType.VIDEO ||
+            layer.posX.keyframes.isNotEmpty() ||
+            layer.posY.keyframes.isNotEmpty() ||
+            layer.scale.keyframes.isNotEmpty() ||
+            layer.rotationZ.keyframes.isNotEmpty() ||
+            layer.opacity.keyframes.isNotEmpty() ||
+            layer.timeRemapEnabled
+        val frameBucket = if (hasDynamicFrame) {
+            val srcMs = if (layer.type == LayerType.VIDEO) {
+                AnimationEvaluator.evaluateSourceMediaTimeMs(layer, playheadMs, audio)
+            } else playheadMs
+            srcMs / 100L
+        } else 0L
+
+        return "${layer.id}|${layer.type.name}|${layer.shapeKind}|${layer.colorHex}|${layer.fillMode}|" +
+            "${layer.gradientEndColorHex}|${layer.gradientAngleDeg.toInt()}|${layer.fontFamilyName}|" +
             "${layer.textContent.take(16)}|${layer.mediaUri}|${layer.primitive3D.name}|" +
-            "${layer.strokeEnabled}|${layer.strokeColorHex}"
+            "${layer.strokeEnabled}|${layer.strokeColorHex}|f$frameBucket"
     }
 
     fun getCachedImmediate(layerSig: String, effectId: String): ImageBitmap? {
@@ -68,21 +88,25 @@ object EffectThumbnailPreviewer {
     suspend fun generateLowResEffectThumbnail(
         context: Context?,
         selectedLayer: Layer?,
-        effect: EffectDefinition
+        effect: EffectDefinition,
+        playheadMs: Long = 0L,
+        audio: AudioSpectrumSnapshot = AudioSpectrumSnapshot()
     ): ImageBitmap = withContext(Dispatchers.Default) {
-        val sig = layerSignature(selectedLayer)
+        val sig = layerSignature(selectedLayer, playheadMs, audio)
         val cacheKey = "$sig|${effect.id}"
         synchronized(thumbCache) { thumbCache.get(cacheKey) }?.let { return@withContext it }
 
         workerSemaphore.withPermit {
             synchronized(thumbCache) { thumbCache.get(cacheKey) }?.let { return@withContext it }
 
-            val basePixels = obtainBaseLayerPixels(context, selectedLayer, sig)
+            val basePixels = obtainBaseLayerPixels(context, selectedLayer, playheadMs, audio, sig)
             val outPixels = IntArray(PIXEL_COUNT)
             applyLowResEffectKernel(basePixels, outPixels, effect)
 
-            val outBmp = Bitmap.createBitmap(outPixels, THUMB_SIZE, THUMB_SIZE, Bitmap.Config.ARGB_8888)
-                .asImageBitmap()
+            // Compress directly into RGB_565 (2 bytes/px — 50% smaller RAM footprint, zero extra bitmap alloc!)
+            val compressed565 = Bitmap.createBitmap(THUMB_SIZE, THUMB_SIZE, Bitmap.Config.RGB_565)
+            compressed565.setPixels(outPixels, 0, THUMB_SIZE, 0, 0, THUMB_SIZE, THUMB_SIZE)
+            val outBmp = compressed565.asImageBitmap()
             synchronized(thumbCache) {
                 thumbCache.put(cacheKey, outBmp)
             }
@@ -92,22 +116,29 @@ object EffectThumbnailPreviewer {
 
     /**
      * Synchronous helper for unit/Robolectric tests and immediate single-card previews.
+     * Returns an `RGB_565` compressed `56x56` Bitmap reflecting the layer at [playheadMs].
      */
     fun generateThumbnailSync(
         context: Context?,
         selectedLayer: Layer?,
-        effect: EffectDefinition
+        effect: EffectDefinition,
+        playheadMs: Long = 0L,
+        audio: AudioSpectrumSnapshot = AudioSpectrumSnapshot()
     ): Bitmap {
-        val sig = layerSignature(selectedLayer)
-        val basePixels = obtainBaseLayerPixels(context, selectedLayer, sig)
+        val sig = layerSignature(selectedLayer, playheadMs, audio)
+        val basePixels = obtainBaseLayerPixels(context, selectedLayer, playheadMs, audio, sig)
         val outPixels = IntArray(PIXEL_COUNT)
         applyLowResEffectKernel(basePixels, outPixels, effect)
-        return Bitmap.createBitmap(outPixels, THUMB_SIZE, THUMB_SIZE, Bitmap.Config.ARGB_8888)
+        val compressed565 = Bitmap.createBitmap(THUMB_SIZE, THUMB_SIZE, Bitmap.Config.RGB_565)
+        compressed565.setPixels(outPixels, 0, THUMB_SIZE, 0, 0, THUMB_SIZE, THUMB_SIZE)
+        return compressed565
     }
 
     private fun obtainBaseLayerPixels(
         context: Context?,
         layer: Layer?,
+        playheadMs: Long,
+        audio: AudioSpectrumSnapshot,
         sig: String
     ): IntArray {
         synchronized(basePixelsCache) { basePixelsCache.get(sig) }?.let { return it }
@@ -143,19 +174,35 @@ object EffectThumbnailPreviewer {
             c.drawCircle(s * 0.5f, s * 0.5f, s * 0.16f, stroke)
         } else {
             val baseCol = runCatching { Color.parseColor(layer.colorHex) }.getOrDefault(Color.rgb(0, 210, 168))
+            val endCol = runCatching { Color.parseColor(layer.gradientEndColorHex) }.getOrDefault(Color.rgb(0, 148, 255))
+            val tr = AnimationEvaluator.evaluateWorldTransform(
+                layer = layer,
+                allLayers = listOf(layer),
+                timeMs = playheadMs,
+                audio = audio
+            )
+            c.save()
+            c.translate(s * 0.5f + (tr.posX / 1080f) * s * 0.45f, s * 0.5f + (tr.posY / 1080f) * s * 0.45f)
+            c.rotate(tr.rotZ)
+            val thumbScale = tr.scale.coerceIn(0.45f, 1.85f)
+            c.scale(thumbScale, thumbScale)
+
             when (layer.type) {
                 LayerType.VIDEO, LayerType.IMAGE -> {
+                    val srcTimeMs = if (layer.type == LayerType.VIDEO) {
+                        AnimationEvaluator.evaluateSourceMediaTimeMs(layer, playheadMs, audio)
+                    } else 0L
                     val mediaBmp = if (context != null) {
-                        MediaEngine.getMediaBitmapForPreRender(context, layer, layer.sourceOffsetMs, 96)
+                        MediaEngine.getMediaBitmapForPreRender(context, layer, srcTimeMs, 80)
                     } else null
                     if (mediaBmp != null && !mediaBmp.isRecycled) {
                         val aspect = mediaBmp.width.toFloat().coerceAtLeast(1f) / mediaBmp.height.toFloat().coerceAtLeast(1f)
-                        val hw = if (aspect >= 1f) s * 0.42f else (s * 0.42f * aspect)
-                        val hh = if (aspect >= 1f) (s * 0.42f / aspect) else s * 0.42f
-                        c.drawBitmap(mediaBmp, null, RectF(s * 0.5f - hw, s * 0.5f - hh, s * 0.5f + hw, s * 0.5f + hh), fill)
+                        val hw = if (aspect >= 1f) s * 0.50f else (s * 0.50f * aspect)
+                        val hh = if (aspect >= 1f) (s * 0.50f / aspect) else s * 0.50f
+                        c.drawBitmap(mediaBmp, null, RectF(-hw, -hh, hw, hh), fill)
                     } else {
                         fill.color = baseCol
-                        c.drawRoundRect(RectF(s * 0.16f, s * 0.24f, s * 0.84f, s * 0.76f), 8f, 8f, fill)
+                        c.drawRoundRect(RectF(-s * 0.36f, -s * 0.26f, s * 0.36f, s * 0.26f), 8f, 8f, fill)
                     }
                 }
                 LayerType.TEXT -> {
@@ -163,15 +210,18 @@ object EffectThumbnailPreviewer {
                         color = baseCol
                         textAlign = Paint.Align.CENTER
                         textSize = s * 0.30f
-                        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                        typeface = CustomFontRegistry.resolveTypeface(context, layer.fontFamilyName)
+                        shader = when (layer.fillMode) {
+                            "LINEAR_GRADIENT" -> LinearGradient(-s * 0.3f, 0f, s * 0.3f, 0f, baseCol, endCol, Shader.TileMode.CLAMP)
+                            "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, s * 0.35f, baseCol, endCol, Shader.TileMode.CLAMP)
+                            else -> null
+                        }
                     }
-                    val snippet = layer.textContent.trim().ifBlank { "Aa" }.take(4)
-                    c.drawText(snippet, s * 0.5f, s * 0.60f, tp)
+                    val snippet = layer.textContent.trim().ifBlank { "Aa" }.take(5)
+                    c.drawText(snippet, 0f, s * 0.11f, tp)
                 }
                 LayerType.MODEL_3D -> {
                     fill.color = baseCol
-                    c.save()
-                    c.translate(s * 0.5f, s * 0.5f)
                     val r = s * 0.28f
                     when (layer.primitive3D) {
                         Primitive3DType.PYRAMID -> c.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(3, r, null), fill)
@@ -185,13 +235,26 @@ object EffectThumbnailPreviewer {
                     stroke.color = Color.WHITE
                     stroke.strokeWidth = 1.4f
                     c.drawCircle(0f, 0f, r * 0.4f, stroke)
-                    c.restore()
                 }
                 else -> {
-                    fill.color = baseCol
-                    c.save()
-                    c.translate(s * 0.5f, s * 0.5f)
                     val r = s * 0.30f
+                    fill.color = baseCol
+                    fill.shader = when (layer.fillMode) {
+                        "LINEAR_GRADIENT" -> {
+                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
+                            LinearGradient(
+                                -(cos(rad) * r).toFloat(),
+                                -(sin(rad) * r).toFloat(),
+                                (cos(rad) * r).toFloat(),
+                                (sin(rad) * r).toFloat(),
+                                baseCol,
+                                endCol,
+                                Shader.TileMode.CLAMP
+                            )
+                        }
+                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, r, baseCol, endCol, Shader.TileMode.CLAMP)
+                        else -> null
+                    }
                     when (layer.shapeKind) {
                         "Circle" -> c.drawCircle(0f, 0f, r, fill)
                         "Rectangle" -> c.drawRect(RectF(-r, -r * 0.75f, r, r * 0.75f), fill)
@@ -200,14 +263,15 @@ object EffectThumbnailPreviewer {
                         "Hexagon" -> c.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(6, r, null), fill)
                         else -> c.drawRoundRect(RectF(-r, -r * 0.75f, r, r * 0.75f), 7f, 7f, fill)
                     }
+                    fill.shader = null
                     if (layer.strokeEnabled) {
                         stroke.color = runCatching { Color.parseColor(layer.strokeColorHex) }.getOrDefault(Color.WHITE)
                         stroke.strokeWidth = 2f
                         c.drawCircle(0f, 0f, r * 0.9f, stroke)
                     }
-                    c.restore()
                 }
             }
+            c.restore()
         }
 
         val pixels = IntArray(PIXEL_COUNT)
@@ -325,6 +389,75 @@ object EffectThumbnailPreviewer {
                             val ng = (bg * (1f - mixW * 0.5f) + br * mixW * 0.9f).toInt()
                             val nb = (bb * (1f - mixW) + bg * mixW * 1.25f).toInt()
                             dst[idx] = packRgb(nr, ng, nb)
+                        }
+                    }
+                    11 -> { // Text Transform / Range Wipe
+                        val colBand = (x * 4) / n
+                        val yShift = if (colBand == 1 || colBand == 2) -6 else 0
+                        val sampled = sampleClamped(src, n, x, y - yShift)
+                        val boost = if (colBand == 1) 1.2f else 0.9f
+                        dst[idx] = packRgb(
+                            (((sampled ushr 16) and 0xFF) * boost).toInt(),
+                            (((sampled ushr 8) and 0xFF) * boost).toInt(),
+                            ((sampled and 0xFF) * boost).toInt()
+                        )
+                    }
+                    12 -> { // Chroma Key / Luma Key Checkerboard Preview
+                        val isGreenish = bg > (br + 24) && bg > (bb + 18)
+                        val isDarkBg = br < 36 && bg < 42 && bb < 52
+                        if (isGreenish || isDarkBg) {
+                            val chk = (((x / 6) + (y / 6)) % 2) == 0
+                            val c = if (chk) 46 else 26
+                            dst[idx] = packRgb(c, c + 3, c + 8)
+                        } else {
+                            dst[idx] = base
+                        }
+                    }
+                    99 -> { // Custom .kfpack / .fppack Plugin Effect Preview
+                        val plug = PluginPackManager.findPluginEffect(effect.id)
+                        val pCat = plug?.category?.lowercase().orEmpty()
+                        val tintCol = runCatching { Color.parseColor(effect.defaultTintHex) }.getOrDefault(Color.rgb(28, 240, 196))
+                        val tr = (tintCol ushr 16) and 0xFF
+                        val tg = (tintCol ushr 8) and 0xFF
+                        val tb = tintCol and 0xFF
+                        when {
+                            pCat == "warna" || pCat == "blur" -> {
+                                val c1 = sampleClamped(src, n, x - 3, y)
+                                val c2 = sampleClamped(src, n, x + 3, y)
+                                val c3 = sampleClamped(src, n, x, y - 3)
+                                val c4 = sampleClamped(src, n, x, y + 3)
+                                val lum = (((c1 ushr 16 and 0xFF) + (c2 ushr 16 and 0xFF) + (c3 ushr 8 and 0xFF) + (c4 and 0xFF)) / 1020f)
+                                dst[idx] = packRgb(
+                                    br + (tr * lum * 0.85f).toInt(),
+                                    bg + (tg * lum * 0.85f).toInt(),
+                                    bb + (tb * lum * 0.85f).toInt()
+                                )
+                            }
+                            pCat == "distorsi" || pCat == "perspective" -> {
+                                val dx = ((u - 0.5f) * 8f).roundToInt()
+                                val cr = sampleClamped(src, n, x + dx + 2, y)
+                                val cb = sampleClamped(src, n, x - dx - 2, y)
+                                dst[idx] = packRgb((cr ushr 16) and 0xFF, bg, cb and 0xFF)
+                            }
+                            pCat == "stilisasi" -> {
+                                val dot = (((x % 5) - 2) * ((x % 5) - 2) + ((y % 5) - 2) * ((y % 5) - 2)) <= 3
+                                val lum = (br * 0.3f + bg * 0.59f + bb * 0.11f) / 255f
+                                if (dot && lum > 0.22f) {
+                                    dst[idx] = packRgb((br * 0.5f + tr * 0.6f).toInt(), (bg * 0.5f + tg * 0.6f).toInt(), (bb * 0.5f + tb * 0.6f).toInt())
+                                } else {
+                                    dst[idx] = packRgb((br * 0.35f).toInt(), (bg * 0.35f).toInt(), (bb * 0.4f).toInt())
+                                }
+                            }
+                            else -> {
+                                // Gerak / Directional Motion Blur Streak
+                                val c1 = sampleClamped(src, n, x - 4, y + 1)
+                                val c2 = sampleClamped(src, n, x + 4, y - 1)
+                                dst[idx] = packRgb(
+                                    (br * 2 + ((c1 ushr 16) and 0xFF) + ((c2 ushr 16) and 0xFF)) / 4,
+                                    (bg * 2 + ((c1 ushr 8) and 0xFF) + ((c2 ushr 8) and 0xFF)) / 4,
+                                    (bb * 2 + (c1 and 0xFF) + (c2 and 0xFF)) / 4
+                                )
+                            }
                         }
                     }
                     else -> { // Shake / Squeeze / Vignette / Pinch
