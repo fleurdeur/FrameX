@@ -171,9 +171,12 @@ fun onGoogleSignInClicked(
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
+                Log.d("Auth", "Attempting sign in with credential")
                 Firebase.auth.signInWithCredential(authCredential).await()
+                Log.d("Auth", "Sign in successful")
                 onAuthSuccess()
             } else {
+                Log.e("Auth", "Unexpected credential type")
                 onAuthError("Unexpected credential type")
             }
         } catch (e: GetCredentialCancellationException) {

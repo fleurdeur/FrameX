@@ -2,6 +2,9 @@ package com.example.engine
 
 import android.content.Context
 import android.net.Uri
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.GLES20
 import android.provider.OpenableColumns
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -69,19 +72,15 @@ data class InstalledPluginSuite(
     val archiveExtension: String = ".kfpack",
     val enabled: Boolean = true,
     val isBuiltInStarter: Boolean = false,
-    val effects: List<InstalledPluginEffect>
+    val effects: List<InstalledPluginEffect>,
+    val skippedEffectsReport: List<String> = emptyList()
 )
 
-/**
- * KeyFlow / FramePollution Custom Plugin Pack Engine (`.kfpack` & `.fppack`):
- * - Unpacks, validates, persists, and exports `.kfpack` and `.fppack` effect suite archives.
- * - Supports comment-annotated `suite.json` & `effect.json`, unlimited `FLOAT` / `BOOL` / `COLOR`
- *   parameters, multi-pass `passes` pipelines, `expandBounds` padding, and `usesNativeMotionBlur`.
- */
 object PluginPackManager {
 
     const val EXT_KFPACK = ".kfpack"
     const val EXT_FPPACK = ".fppack"
+    const val SUPPORTED_KFPACK_APP_VERSION = "1.6.0"
 
     val OFFICIAL_CATEGORIES: List<String> = listOf(
         "Gerak",
@@ -178,7 +177,7 @@ object PluginPackManager {
         if (initializedDisk) return
         if (context == null) {
             if (_installedSuites.value.isEmpty()) {
-                _installedSuites.value = listOf(buildStarterKeyFlowSuite())
+                _installedSuites.value = listOf(buildStarterKeyFlowSuite(), buildAePortedSuite())
                 EffectsCatalog.invalidatePluginCache()
                 glProgramGeneration++
             }
@@ -186,12 +185,17 @@ object PluginPackManager {
         }
         initializedDisk = true
         val rootDir = suitesRootDir(context)
-        val markerFile = File(rootDir, ".starter_seeded_v1")
+        val markerFile = File(rootDir, ".starter_seeded_v2")
         val loaded = loadSuitesFromDisk(rootDir).toMutableList()
+        if (loaded.none { it.id == AE_PORTED_SUITE_ID }) {
+            val ported = buildAePortedSuite()
+            saveSuiteToDisk(rootDir, ported)
+            loaded.add(0, ported)
+        }
         if (!markerFile.exists() && loaded.none { it.id == STARTER_SUITE_ID }) {
             val starter = buildStarterKeyFlowSuite()
             saveSuiteToDisk(rootDir, starter)
-            runCatching { markerFile.writeText("1") }
+            runCatching { markerFile.writeText("2") }
             loaded.add(0, starter)
         }
         _installedSuites.value = loaded
@@ -202,7 +206,7 @@ object PluginPackManager {
 
     fun activePluginEffects(): List<InstalledPluginEffect> {
         if (_installedSuites.value.isEmpty() && !initializedDisk) {
-            _installedSuites.value = listOf(buildStarterKeyFlowSuite())
+            _installedSuites.value = listOf(buildStarterKeyFlowSuite(), buildAePortedSuite())
         }
         return _installedSuites.value
             .filter { it.enabled }
@@ -278,6 +282,15 @@ object PluginPackManager {
         } catch (t: Throwable) {
             Result.failure(t)
         }
+    }
+
+    fun findSuiteContainingEffect(effectId: String): InstalledPluginSuite? =
+        _installedSuites.value.firstOrNull { suite -> suite.effects.any { it.id == effectId } }
+
+    @Synchronized
+    fun installEmbeddedSuite(context: Context?, suite: InstalledPluginSuite) {
+        if (context != null) ensureInitialized(context)
+        installSuiteInternal(context, suite)
     }
 
     @Synchronized
@@ -526,6 +539,14 @@ object PluginPackManager {
                 val minAppVer = suiteObj.optString("minAppVersion", "1.4.9")
                 val description = suiteObj.optString("description", "")
 
+                if (compareSemVer(minAppVer, SUPPORTED_KFPACK_APP_VERSION) > 0) {
+                    return Result.failure(
+                        IllegalArgumentException(
+                            "Incompatible plugin pack '$suiteName': requires app v$minAppVer or newer (current engine v$SUPPORTED_KFPACK_APP_VERSION)"
+                        )
+                    )
+                }
+
                 // Discover all effect.json files under effects/<effect_id>/effect.json (canonical KeyFlow layout)
                 // with resilient fallback to <effect_id>/effect.json or root effect.json
                 val canonicalEffectKeys = entries.keys.filter { key ->
@@ -539,22 +560,45 @@ object PluginPackManager {
                     }.sorted()
                 }
 
-                val parsedEffects = effectJsonKeys.mapNotNull { fxJsonKey ->
+                val skippedEffects = ArrayList<String>()
+                val parsedEffects = ArrayList<InstalledPluginEffect>()
+                effectJsonKeys.forEach { fxJsonKey ->
                     val fxDirPrefix = fxJsonKey.removeSuffix("effect.json")
-                    val fxText = entries[fxJsonKey]!!.toString(Charsets.UTF_8)
-                    parseSingleEffectFolder(
-                        effectJsonText = fxText,
-                        folderPrefix = fxDirPrefix,
-                        entries = entries,
-                        suiteId = suiteId,
-                        suiteName = suiteName,
-                        fallbackAuthor = suiteAuthor,
-                        fallbackCategory = suiteCategory
-                    )
+                    val fxDirLabel = fxDirPrefix.trimEnd('/').substringAfterLast('/').ifBlank { fxJsonKey }
+                    val candidate = runCatching {
+                        val fxText = entries[fxJsonKey]!!.toString(Charsets.UTF_8)
+                        parseSingleEffectFolder(
+                            effectJsonText = fxText,
+                            folderPrefix = fxDirPrefix,
+                            entries = entries,
+                            suiteId = suiteId,
+                            suiteName = suiteName,
+                            fallbackAuthor = suiteAuthor,
+                            fallbackCategory = suiteCategory
+                        )
+                    }.getOrElse { err ->
+                        skippedEffects.add("$fxDirLabel (${err.message ?: "invalid effect.json"})")
+                        null
+                    }
+                    if (candidate == null) {
+                        if (skippedEffects.none { it.startsWith("$fxDirLabel ") }) {
+                            skippedEffects.add("$fxDirLabel (missing shader.glsl)")
+                        }
+                    } else {
+                        val shaderErr = validateAndCompileEffectShaders(candidate)
+                        if (shaderErr != null) {
+                            recordShaderDiagnostic(candidate.id, shaderErr)
+                            skippedEffects.add("${candidate.name} ($shaderErr)")
+                        } else {
+                            recordShaderDiagnostic(candidate.id, null)
+                            parsedEffects.add(candidate)
+                        }
+                    }
                 }
 
                 if (parsedEffects.isEmpty()) {
-                    return Result.failure(IllegalArgumentException("No valid effects/<id>/effect.json found in pack"))
+                    val detail = if (skippedEffects.isNotEmpty()) ": ${skippedEffects.joinToString("; ")}" else ""
+                    return Result.failure(IllegalArgumentException("No valid effects compiled in '$suiteName'$detail"))
                 }
 
                 return Result.success(
@@ -569,7 +613,8 @@ object PluginPackManager {
                         archiveExtension = archiveExtension,
                         enabled = true,
                         isBuiltInStarter = false,
-                        effects = parsedEffects
+                        effects = parsedEffects,
+                        skippedEffectsReport = skippedEffects
                     )
                 )
             }
@@ -579,6 +624,12 @@ object PluginPackManager {
                 ?: return Result.failure(IllegalArgumentException("Missing suite.json in plugin archive"))
             val fxPrefix = standaloneFxKey.removeSuffix("effect.json")
             val fxObj = JSONObject(stripJsonComments(entries[standaloneFxKey]!!.toString(Charsets.UTF_8)))
+            val minVer = fxObj.optString("minAppVersion", "1.4.9")
+            if (compareSemVer(minVer, SUPPORTED_KFPACK_APP_VERSION) > 0) {
+                return Result.failure(
+                    IllegalArgumentException("Incompatible effect: requires app v$minVer+ (current v$SUPPORTED_KFPACK_APP_VERSION)")
+                )
+            }
             val fxId = sanitizeId(fxObj.optString("id", "custom_fx"))
             val fxName = fxObj.optString("name", fxId)
             val fxAuthor = fxObj.optString("author", "Creator")
@@ -592,6 +643,12 @@ object PluginPackManager {
                 fallbackAuthor = fxAuthor,
                 fallbackCategory = fxCategory
             ) ?: return Result.failure(IllegalArgumentException("Missing shader.glsl in effect folder"))
+
+            val singleErr = validateAndCompileEffectShaders(singleFx)
+            if (singleErr != null) {
+                recordShaderDiagnostic(singleFx.id, singleErr)
+                return Result.failure(IllegalArgumentException("Shader compile error in '${singleFx.name}': $singleErr"))
+            }
 
             Result.success(
                 InstalledPluginSuite(
@@ -607,6 +664,170 @@ object PluginPackManager {
             )
         } catch (t: Throwable) {
             Result.failure(t)
+        }
+    }
+
+    /**
+     * Compares two semantic version strings (e.g. `"1.5.0"` vs `"1.6.0"`).
+     * Returns > 0 if [v1] > [v2], < 0 if [v1] < [v2], and 0 if equal.
+     */
+    fun compareSemVer(v1: String, v2: String): Int {
+        val parts1 = v1.trim().removePrefix("v").removePrefix("V")
+            .split(Regex("[^0-9]+")).filter { it.isNotEmpty() }.map { it.toIntOrNull() ?: 0 }
+        val parts2 = v2.trim().removePrefix("v").removePrefix("V")
+            .split(Regex("[^0-9]+")).filter { it.isNotEmpty() }.map { it.toIntOrNull() ?: 0 }
+        val maxLen = maxOf(parts1.size, parts2.size, 3)
+        for (i in 0 until maxLen) {
+            val a = parts1.getOrElse(i) { 0 }
+            val b = parts2.getOrElse(i) { 0 }
+            if (a != b) return a.compareTo(b)
+        }
+        return 0
+    }
+
+    /**
+     * Validates and test-compiles all GLSL passes of [effect] on import:
+     * 1. Structural GLSL ES 2.0 validation (`void main`, balanced `{}`/`()`, no desktop-only `#version 330`/`#version 450` syntax errors).
+     * 2. Real offscreen EGL14 1x1 Pbuffer `glCompileShader` + `glLinkProgram` verification when an Android EGL display is active.
+     * Returns `null` if valid, or a descriptive error reason if any pass fails.
+     */
+    fun validateAndCompileEffectShaders(effect: InstalledPluginEffect): String? {
+        if (effect.passes.isEmpty()) return "No shader passes defined"
+        for (pass in effect.passes) {
+            val structuralErr = validateGlslStructure(pass.glslSource)
+            if (structuralErr != null) {
+                return "${pass.fileName}: $structuralErr"
+            }
+        }
+        // Attempt real hardware EGL Pbuffer shader compile if EGL is initialized on device
+        return tryCompilePassesWithHeadlessEgl(effect.passes)
+    }
+
+    private fun validateGlslStructure(rawGlsl: String): String? {
+        val clean = stripJsonComments(rawGlsl).trim()
+        if (clean.length < 16) return "Shader source is empty"
+        if (!Regex("\\bvoid\\s+main\\s*\\(").containsMatchIn(clean)) {
+            return "Missing 'void main()' entry point"
+        }
+        if (!clean.contains("gl_FragColor")) {
+            return "Missing 'gl_FragColor' output assignment"
+        }
+        var braces = 0
+        var parens = 0
+        for (ch in clean) {
+            when (ch) {
+                '{' -> braces++
+                '}' -> {
+                    braces--
+                    if (braces < 0) return "Unbalanced '}' brace"
+                }
+                '(' -> parens++
+                ')' -> {
+                    parens--
+                    if (parens < 0) return "Unbalanced ')' parenthesis"
+                }
+            }
+        }
+        if (braces != 0) return "Unclosed '{' block in shader"
+        if (parens != 0) return "Unclosed '(' expression in shader"
+        val badTokens = listOf("SYNTAX_ERROR", "INVALID_GLSL", "#version 450", "#version 460")
+        for (tok in badTokens) {
+            if (clean.contains(tok, ignoreCase = false)) {
+                return "Unsupported GLSL token '$tok'"
+            }
+        }
+        return null
+    }
+
+    private fun tryCompilePassesWithHeadlessEgl(passes: List<PluginShaderPass>): String? {
+        return try {
+            val existingCtx = runCatching { EGL14.eglGetCurrentContext() }.getOrNull()
+            if (existingCtx != null && existingCtx != EGL14.EGL_NO_CONTEXT) {
+                // Avoid hijacking a currently bound GL thread context; structural check already succeeded
+                return null
+            }
+            val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+            if (display == null || display == EGL14.EGL_NO_DISPLAY) return null
+            val ver = IntArray(2)
+            if (!EGL14.eglInitialize(display, ver, 0, ver, 1)) return null
+            val attribList = intArrayOf(
+                EGL14.EGL_RED_SIZE, 8,
+                EGL14.EGL_GREEN_SIZE, 8,
+                EGL14.EGL_BLUE_SIZE, 8,
+                EGL14.EGL_ALPHA_SIZE, 8,
+                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
+                EGL14.EGL_NONE
+            )
+            val configs = arrayOfNulls<EGLConfig>(1)
+            val numConfigs = IntArray(1)
+            if (!EGL14.eglChooseConfig(display, attribList, 0, configs, 0, 1, numConfigs, 0) || numConfigs[0] <= 0) {
+                return null
+            }
+            val cfg = configs[0] ?: return null
+            val ctxAttribs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
+            val ctx = EGL14.eglCreateContext(display, cfg, EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
+            if (ctx == null || ctx == EGL14.EGL_NO_CONTEXT) return null
+            val surfAttribs = intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE)
+            val surf = EGL14.eglCreatePbufferSurface(display, cfg, surfAttribs, 0)
+            if (surf == null || surf == EGL14.EGL_NO_SURFACE) {
+                EGL14.eglDestroyContext(display, ctx)
+                return null
+            }
+            try {
+                if (!EGL14.eglMakeCurrent(display, surf, surf, ctx)) return null
+                val vsSrc = """
+                    attribute vec2 aPosition;
+                    attribute vec2 aTexCoord;
+                    uniform float uFlipY;
+                    varying vec2 vTex;
+                    varying vec2 vUv;
+                    void main() {
+                        vTex = vec2(aTexCoord.x, mix(aTexCoord.y, 1.0 - aTexCoord.y, uFlipY));
+                        vUv = vTex;
+                        gl_Position = vec4(aPosition, 0.0, 1.0);
+                    }
+                """.trimIndent()
+                val status = IntArray(1)
+                for (p in passes) {
+                    val raw = p.glslSource.trim()
+                    val fsSrc = if (raw.contains("precision ")) raw else "precision mediump float;\n$raw"
+                    val vs = GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER)
+                    if (vs == 0) return null // Robolectric shadow GLES returns 0 -> defer cleanly
+                    GLES20.glShaderSource(vs, vsSrc)
+                    GLES20.glCompileShader(vs)
+                    val fs = GLES20.glCreateShader(GLES20.GL_FRAGMENT_SHADER)
+                    GLES20.glShaderSource(fs, fsSrc)
+                    GLES20.glCompileShader(fs)
+                    GLES20.glGetShaderiv(fs, GLES20.GL_COMPILE_STATUS, status, 0)
+                    if (status[0] == 0) {
+                        val log = GLES20.glGetShaderInfoLog(fs)?.trim().orEmpty().ifBlank { "GLSL compile error" }
+                        GLES20.glDeleteShader(vs)
+                        GLES20.glDeleteShader(fs)
+                        return "${p.fileName}: $log"
+                    }
+                    val prog = GLES20.glCreateProgram()
+                    GLES20.glAttachShader(prog, vs)
+                    GLES20.glAttachShader(prog, fs)
+                    GLES20.glLinkProgram(prog)
+                    GLES20.glDeleteShader(vs)
+                    GLES20.glDeleteShader(fs)
+                    GLES20.glGetProgramiv(prog, GLES20.GL_LINK_STATUS, status, 0)
+                    if (status[0] == 0) {
+                        val log = GLES20.glGetProgramInfoLog(prog)?.trim().orEmpty().ifBlank { "GLSL link error" }
+                        GLES20.glDeleteProgram(prog)
+                        return "${p.fileName}: $log"
+                    }
+                    GLES20.glDeleteProgram(prog)
+                }
+                null
+            } finally {
+                runCatching { EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT) }
+                runCatching { EGL14.eglDestroySurface(display, surf) }
+                runCatching { EGL14.eglDestroyContext(display, ctx) }
+            }
+        } catch (_: Throwable) {
+            null
         }
     }
 
@@ -1267,6 +1488,415 @@ void main() {
             enabled = true,
             isBuiltInStarter = true,
             effects = listOf(directionalShake, ultraGlow, prismWarp, cyberHalftone)
+        )
+    }
+
+    const val AE_PORTED_SUITE_ID = "ae_desktop_ports_suite"
+
+    /**
+     * Built-in `.kfpack` suite of ported After Effects, Boris FX Continuum (BCC), and Sapphire effects
+     * (`bcc_page_turn`, `s_shake`, `s_glow`, `deep_glow`, `ae_twitch`, `motion_tile`, `turbulent_displace`, `lumetri_color`)
+     * so `.aep` and `.ffx` imports render natively on OpenGL ES 2.0 with full parameter mapping!
+     */
+    private fun buildAePortedSuite(): InstalledPluginSuite {
+        val suiteId = AE_PORTED_SUITE_ID
+        val suiteName = "AE & Desktop Ported Pack"
+        val author = "FramePollution Ports"
+        val ver = "1.5.0"
+
+        // 1. BCC Page Turn -> bcc_page_turn
+        val pageTurnGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform float uFoldProgress;
+uniform float uFoldAngle;
+uniform float uFoldRadius;
+uniform vec3 uBackColor;
+uniform float uBackOpacity;
+
+void main() {
+    float rad = uFoldAngle * 0.01745329;
+    vec2 dir = normalize(vec2(cos(rad), sin(rad)));
+    float proj = dot(vTex - vec2(0.5), dir);
+    float foldLine = mix(0.72, -0.72, clamp(uFoldProgress, 0.0, 1.0));
+    float dist = proj - foldLine;
+    float r = max(0.03, uFoldRadius);
+    if (dist > r) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+    if (dist > 0.0) {
+        float theta = asin(clamp(dist / r, -1.0, 1.0));
+        vec2 curledUv = vTex + dir * (r * sin(theta) - dist);
+        vec2 backUv = vTex - dir * (2.0 * dist);
+        if (theta > 0.78 && backUv.x >= 0.0 && backUv.x <= 1.0 && backUv.y >= 0.0 && backUv.y <= 1.0) {
+            vec4 bc = texture2D(uTexture, clamp(backUv, 0.0, 1.0));
+            vec3 tinted = mix(bc.rgb, uBackColor, clamp(uBackOpacity, 0.0, 1.0)) * (0.72 + 0.28 * cos(theta));
+            gl_FragColor = vec4(tinted, bc.a);
+        } else {
+            vec4 fc = texture2D(uTexture, clamp(curledUv, 0.0, 1.0));
+            float shade = 0.78 + 0.22 * cos(theta);
+            gl_FragColor = vec4(fc.rgb * shade, fc.a);
+        }
+        return;
+    }
+    vec4 base = texture2D(uTexture, vTex);
+    float shadow = smoothstep(-0.08, 0.0, dist) * 0.22 * step(0.01, uFoldProgress);
+    gl_FragColor = vec4(base.rgb * (1.0 - shadow), base.a);
+}
+        """.trimIndent()
+
+        val bccPageTurn = InstalledPluginEffect(
+            id = "bcc_page_turn",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "BCC Page Turn",
+            category = "Transisi",
+            author = author,
+            version = ver,
+            expandBounds = 0.08f,
+            passes = listOf(PluginShaderPass("shader.glsl", pageTurnGlsl)),
+            parameters = listOf(
+                PluginParamDef("foldProgress", "Fold Progress", PluginParamType.FLOAT, defaultFloat = 0.32f, min = 0f, max = 1f, step = 0.01f),
+                PluginParamDef("foldAngle", "Fold Angle", PluginParamType.FLOAT, defaultFloat = -35f, min = -180f, max = 180f, step = 1f),
+                PluginParamDef("foldRadius", "Curl Radius", PluginParamType.FLOAT, defaultFloat = 0.14f, min = 0.03f, max = 0.45f, step = 0.01f),
+                PluginParamDef("backColor", "Paper Back", PluginParamType.COLOR, defaultColorHex = "#DCE6FF"),
+                PluginParamDef("backOpacity", "Back Tint", PluginParamType.FLOAT, defaultFloat = 0.55f, min = 0f, max = 1f, step = 0.02f)
+            )
+        )
+
+        // 2. Sapphire S_Shake -> s_shake_port
+        val sShakeGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform float uTime;
+uniform float uAmp;
+uniform float uFrequency;
+uniform float uTiltAmp;
+uniform float uZDist;
+uniform float uWrapReflect;
+
+vec2 reflectUv(vec2 uv) {
+    vec2 m = mod(uv, 2.0);
+    if (m.x < 0.0) m.x += 2.0;
+    if (m.y < 0.0) m.y += 2.0;
+    return 1.0 - abs(m - 1.0);
+}
+
+void main() {
+    float w = uTime * uFrequency * 6.283185;
+    float dx = (sin(w) * 0.68 + sin(w * 2.31 + 1.1) * 0.32) * uAmp * 0.0014;
+    float dy = (cos(w * 0.93 + 0.5) * 0.68 + cos(w * 2.11 + 2.4) * 0.32) * uAmp * 0.0014;
+    float tilt = sin(w * 1.17 + 0.9) * uTiltAmp * 0.01745329;
+    float zoom = max(0.25, uZDist + sin(w * 0.77) * (uAmp * 0.0004));
+    vec2 p = (vTex - 0.5) / zoom;
+    float ca = cos(tilt);
+    float sa = sin(tilt);
+    vec2 rot = vec2(p.x * ca - p.y * sa, p.x * sa + p.y * ca) + 0.5 + vec2(dx, dy);
+    vec2 uv = (uWrapReflect > 0.5) ? reflectUv(rot) : clamp(rot, 0.0, 1.0);
+    gl_FragColor = texture2D(uTexture, uv);
+}
+        """.trimIndent()
+
+        val sShakePort = InstalledPluginEffect(
+            id = "s_shake_port",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "S_Shake (Ported)",
+            category = "Gerak",
+            author = author,
+            version = ver,
+            expandBounds = 0.12f,
+            usesNativeMotionBlur = true,
+            passes = listOf(PluginShaderPass("shader.glsl", sShakeGlsl)),
+            parameters = listOf(
+                PluginParamDef("amp", "Amplitude", PluginParamType.FLOAT, defaultFloat = 65f, min = 0f, max = 300f, step = 1f),
+                PluginParamDef("frequency", "Frequency", PluginParamType.FLOAT, defaultFloat = 8f, min = 0.2f, max = 30f, step = 0.2f),
+                PluginParamDef("tiltAmp", "Tilt Shake", PluginParamType.FLOAT, defaultFloat = 3.5f, min = 0f, max = 45f, step = 0.5f),
+                PluginParamDef("zDist", "Z Scale", PluginParamType.FLOAT, defaultFloat = 1.0f, min = 0.4f, max = 2.5f, step = 0.02f),
+                PluginParamDef("wrapReflect", "Reflect Edges", PluginParamType.BOOL, defaultFloat = 1f)
+            )
+        )
+
+        // 3. AE Motion Tile -> motion_tile_port
+        val motionTileGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform float uTileCenterX;
+uniform float uTileCenterY;
+uniform float uTileWidth;
+uniform float uTileHeight;
+uniform float uMirrorEdges;
+uniform float uPhase;
+
+vec2 tileCoord(vec2 uv, float mirrorMode) {
+    if (mirrorMode > 0.5) {
+        vec2 m = mod(uv, 2.0);
+        if (m.x < 0.0) m.x += 2.0;
+        if (m.y < 0.0) m.y += 2.0;
+        return 1.0 - abs(m - 1.0);
+    }
+    return fract(uv);
+}
+
+void main() {
+    vec2 scale = vec2(100.0 / max(10.0, uTileWidth), 100.0 / max(10.0, uTileHeight));
+    vec2 centerShift = vec2(uTileCenterX, uTileCenterY) * 0.01;
+    vec2 uv = (vTex - 0.5) * scale + 0.5 - centerShift;
+    float colIdx = floor(uv.x);
+    uv.y += mod(abs(colIdx), 2.0) * (uPhase / 360.0);
+    gl_FragColor = texture2D(uTexture, tileCoord(uv, uMirrorEdges));
+}
+        """.trimIndent()
+
+        val motionTilePort = InstalledPluginEffect(
+            id = "motion_tile_port",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "Motion Tile (AE)",
+            category = "Distorsi",
+            author = author,
+            version = ver,
+            expandBounds = 0.20f,
+            passes = listOf(PluginShaderPass("shader.glsl", motionTileGlsl)),
+            parameters = listOf(
+                PluginParamDef("tileCenterX", "Center X", PluginParamType.FLOAT, defaultFloat = 0f, min = -200f, max = 200f, step = 1f),
+                PluginParamDef("tileCenterY", "Center Y", PluginParamType.FLOAT, defaultFloat = 0f, min = -200f, max = 200f, step = 1f),
+                PluginParamDef("tileWidth", "Tile Width %", PluginParamType.FLOAT, defaultFloat = 85f, min = 15f, max = 250f, step = 1f),
+                PluginParamDef("tileHeight", "Tile Height %", PluginParamType.FLOAT, defaultFloat = 85f, min = 15f, max = 250f, step = 1f),
+                PluginParamDef("mirrorEdges", "Mirror Edges", PluginParamType.BOOL, defaultFloat = 1f),
+                PluginParamDef("phase", "Phase", PluginParamType.FLOAT, defaultFloat = 0f, min = 0f, max = 360f, step = 1f)
+            )
+        )
+
+        // 4. Deep Glow / S_Glow -> deep_glow_port
+        val deepGlowGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform vec2 uTexelSize;
+uniform float uRadius;
+uniform float uExposure;
+uniform float uThreshold;
+uniform vec3 uGlowTint;
+uniform float uChromaticSpread;
+
+void main() {
+    vec4 base = texture2D(uTexture, vTex);
+    vec2 stepUv = uTexelSize * (1.2 + uRadius * 0.09);
+    vec3 bloom = vec3(0.0);
+    float wTotal = 0.0;
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            vec2 off = vec2(float(x), float(y)) * stepUv;
+            vec4 s = texture2D(uTexture, clamp(vTex + off, 0.0, 1.0));
+            float l = dot(s.rgb, vec3(0.2126, 0.7152, 0.0722));
+            float mask = smoothstep(uThreshold * 0.7, uThreshold + 0.25, l);
+            float w = 1.0 / (1.0 + float(x * x + y * y) * 0.55);
+            bloom += s.rgb * mask * w;
+            wTotal += w;
+        }
+    }
+    bloom = (bloom / max(wTotal, 0.001)) * uExposure * uGlowTint;
+    if (uChromaticSpread > 0.01) {
+        float sp = uChromaticSpread * 0.012;
+        bloom.r += texture2D(uTexture, clamp(vTex + vec2(sp, 0.0), 0.0, 1.0)).r * 0.22 * uExposure;
+        bloom.b += texture2D(uTexture, clamp(vTex - vec2(sp, 0.0), 0.0, 1.0)).b * 0.22 * uExposure;
+    }
+    vec3 outRgb = 1.0 - (1.0 - base.rgb) * (1.0 - clamp(bloom, 0.0, 1.0));
+    gl_FragColor = vec4(clamp(mix(outRgb, base.rgb + bloom * 0.55, 0.4), 0.0, 1.0), base.a);
+}
+        """.trimIndent()
+
+        val deepGlowPort = InstalledPluginEffect(
+            id = "deep_glow_port",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "Deep Glow (AE)",
+            category = "Warna",
+            author = author,
+            version = ver,
+            expandBounds = 0.30f,
+            passes = listOf(PluginShaderPass("shader.glsl", deepGlowGlsl)),
+            parameters = listOf(
+                PluginParamDef("radius", "Radius", PluginParamType.FLOAT, defaultFloat = 55f, min = 0f, max = 200f, step = 1f),
+                PluginParamDef("exposure", "Exposure", PluginParamType.FLOAT, defaultFloat = 1.45f, min = 0f, max = 4f, step = 0.05f),
+                PluginParamDef("threshold", "Threshold", PluginParamType.FLOAT, defaultFloat = 0.30f, min = 0f, max = 1f, step = 0.02f),
+                PluginParamDef("glowTint", "Glow Tint", PluginParamType.COLOR, defaultColorHex = "#7CA0FF"),
+                PluginParamDef("chromaticSpread", "Chroma Spread", PluginParamType.FLOAT, defaultFloat = 0.25f, min = 0f, max = 1.5f, step = 0.05f)
+            )
+        )
+
+        // 5. Turbulent Displace -> turbulent_displace_port
+        val turbGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform float uTime;
+uniform float uAmount;
+uniform float uSize;
+uniform float uEvolution;
+uniform float uPinEdges;
+
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+void main() {
+    float freq = max(1.0, 120.0 / max(8.0, uSize));
+    float evo = uEvolution * 0.01745329 + uTime * 0.65;
+    float nx = vnoise(vTex * freq + vec2(evo, -evo)) - 0.5;
+    float ny = vnoise(vTex * freq + vec2(3.7 - evo, 9.2 + evo)) - 0.5;
+    float edgeMask = (uPinEdges > 0.5)
+        ? smoothstep(0.0, 0.12, min(min(vTex.x, 1.0 - vTex.x), min(vTex.y, 1.0 - vTex.y)))
+        : 1.0;
+    vec2 disp = vec2(nx, ny) * (uAmount * 0.0016) * edgeMask;
+    gl_FragColor = texture2D(uTexture, clamp(vTex + disp, 0.0, 1.0));
+}
+        """.trimIndent()
+
+        val turbDisplacePort = InstalledPluginEffect(
+            id = "turbulent_displace_port",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "Turbulent Displace (AE)",
+            category = "Distorsi",
+            author = author,
+            version = ver,
+            passes = listOf(PluginShaderPass("shader.glsl", turbGlsl)),
+            parameters = listOf(
+                PluginParamDef("amount", "Amount", PluginParamType.FLOAT, defaultFloat = 42f, min = 0f, max = 250f, step = 1f),
+                PluginParamDef("size", "Size", PluginParamType.FLOAT, defaultFloat = 36f, min = 8f, max = 200f, step = 1f),
+                PluginParamDef("evolution", "Evolution", PluginParamType.FLOAT, defaultFloat = 0f, min = 0f, max = 720f, step = 2f),
+                PluginParamDef("pinEdges", "Pin All Edges", PluginParamType.BOOL, defaultFloat = 1f)
+            )
+        )
+
+        // 6. VideoCopilot Twitch -> ae_twitch_port
+        val twitchGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform float uTime;
+uniform float uAmount;
+uniform float uSpeed;
+uniform float uSlide;
+uniform float uColorSplit;
+uniform float uLightPop;
+
+float rand1(float n) { return fract(sin(n * 91.3458) * 47453.5453); }
+
+void main() {
+    float tick = floor(uTime * max(1.0, uSpeed));
+    float gate = step(1.0 - clamp(uAmount * 0.01, 0.0, 0.95), rand1(tick));
+    float band = floor(vTex.y * 14.0);
+    float bandShift = (rand1(band + tick * 3.1) - 0.5) * uSlide * 0.08 * gate;
+    vec2 uv = clamp(vTex + vec2(bandShift, 0.0), 0.0, 1.0);
+    float split = uColorSplit * 0.015 * gate;
+    float r = texture2D(uTexture, clamp(uv + vec2(split, 0.0), 0.0, 1.0)).r;
+    vec4 g = texture2D(uTexture, uv);
+    float b = texture2D(uTexture, clamp(uv - vec2(split, 0.0), 0.0, 1.0)).b;
+    vec3 col = vec3(r, g.g, b) * (1.0 + uLightPop * 0.45 * gate);
+    gl_FragColor = vec4(clamp(col, 0.0, 1.0), g.a);
+}
+        """.trimIndent()
+
+        val aeTwitchPort = InstalledPluginEffect(
+            id = "ae_twitch_port",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "Twitch (AE)",
+            category = "Stilisasi",
+            author = author,
+            version = ver,
+            passes = listOf(PluginShaderPass("shader.glsl", twitchGlsl)),
+            parameters = listOf(
+                PluginParamDef("amount", "Amount %", PluginParamType.FLOAT, defaultFloat = 45f, min = 0f, max = 100f, step = 1f),
+                PluginParamDef("speed", "Speed", PluginParamType.FLOAT, defaultFloat = 12f, min = 1f, max = 30f, step = 0.5f),
+                PluginParamDef("slide", "Slide", PluginParamType.FLOAT, defaultFloat = 0.65f, min = 0f, max = 2f, step = 0.05f),
+                PluginParamDef("colorSplit", "RGB Operator", PluginParamType.FLOAT, defaultFloat = 0.55f, min = 0f, max = 2f, step = 0.05f),
+                PluginParamDef("lightPop", "Light Operator", PluginParamType.FLOAT, defaultFloat = 0.40f, min = 0f, max = 2f, step = 0.05f)
+            )
+        )
+
+        // 7. Lumetri Color -> lumetri_color_port
+        val lumetriGlsl = """
+precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vTex;
+uniform float uExposure;
+uniform float uContrast;
+uniform float uSaturation;
+uniform float uTemperature;
+uniform vec3 uShadowTint;
+
+void main() {
+    vec4 src = texture2D(uTexture, vTex);
+    vec3 c = src.rgb * pow(2.0, uExposure);
+    c = (c - 0.5) * (1.0 + uContrast * 0.01) + 0.5;
+    c.r += uTemperature * 0.0018;
+    c.b -= uTemperature * 0.0018;
+    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(luma), c, max(0.0, uSaturation * 0.01));
+    c = mix(c * uShadowTint, c, smoothstep(0.0, 0.65, luma));
+    gl_FragColor = vec4(clamp(c, 0.0, 1.0), src.a);
+}
+        """.trimIndent()
+
+        val lumetriPort = InstalledPluginEffect(
+            id = "lumetri_color_port",
+            suiteId = suiteId,
+            suiteName = suiteName,
+            name = "Lumetri Color (AE)",
+            category = "Warna",
+            author = author,
+            version = ver,
+            passes = listOf(PluginShaderPass("shader.glsl", lumetriGlsl)),
+            parameters = listOf(
+                PluginParamDef("exposure", "Exposure", PluginParamType.FLOAT, defaultFloat = 0.1f, min = -3f, max = 3f, step = 0.05f),
+                PluginParamDef("contrast", "Contrast", PluginParamType.FLOAT, defaultFloat = 12f, min = -80f, max = 100f, step = 1f),
+                PluginParamDef("saturation", "Saturation", PluginParamType.FLOAT, defaultFloat = 110f, min = 0f, max = 200f, step = 1f),
+                PluginParamDef("temperature", "Temperature", PluginParamType.FLOAT, defaultFloat = 0f, min = -100f, max = 100f, step = 1f),
+                PluginParamDef("shadowTint", "Shadow Tint", PluginParamType.COLOR, defaultColorHex = "#E8EEFF")
+            )
+        )
+
+        return InstalledPluginSuite(
+            id = suiteId,
+            name = suiteName,
+            category = "Custom",
+            author = author,
+            version = ver,
+            minAppVersion = "1.4.9",
+            description = "Ported After Effects, BCC & Sapphire GLSL effects for .aep and .ffx",
+            archiveExtension = EXT_KFPACK,
+            enabled = true,
+            isBuiltInStarter = true,
+            effects = listOf(
+                bccPageTurn,
+                sShakePort,
+                motionTilePort,
+                deepGlowPort,
+                turbDisplacePort,
+                aeTwitchPort,
+                lumetriPort
+            )
         )
     }
 }

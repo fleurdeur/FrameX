@@ -33,8 +33,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -90,6 +93,8 @@ fun AmMoveTransformPanel(
     onUpdateExpression: (String) -> Unit,
     onDragLayerOnCanvas: (dxProj: Float, dyProj: Float) -> Unit,
     onResetTransform: () -> Unit,
+    onResetPropertyTarget: (PropertyTarget) -> Unit = {},
+    onResetMoveSubMode: (Int) -> Unit = {},
     onToggleKeyframe: () -> Unit,
     onJumpKeyframe: (Boolean) -> Unit,
     onSetInspectorTab: (AmInspectorTab) -> Unit,
@@ -104,205 +109,335 @@ fun AmMoveTransformPanel(
     val evalPivotY = AnimationEvaluator.evaluateProperty(selectedLayer.pivotY, playheadMs, audioSpectrum)
     val hasKfAtPlayhead = activeProp.keyframes.any { abs(it.timeMs - playheadMs) <= 25L }
 
+    var prefer3DSubMode by remember {
+        mutableStateOf(
+            selectedProperty == PropertyTarget.POS_Z ||
+                selectedProperty == PropertyTarget.ROTATION_X ||
+                selectedProperty == PropertyTarget.ROTATION_Y
+        )
+    }
+    LaunchedEffect(selectedProperty) {
+        when (selectedProperty) {
+            PropertyTarget.POS_Z, PropertyTarget.ROTATION_X, PropertyTarget.ROTATION_Y -> {
+                prefer3DSubMode = true
+            }
+            PropertyTarget.POS_X, PropertyTarget.POS_Y,
+            PropertyTarget.PIVOT_X, PropertyTarget.PIVOT_Y,
+            PropertyTarget.SCALE -> {
+                prefer3DSubMode = false
+            }
+            else -> Unit
+        }
+    }
+
     val isMoveMode = selectedProperty == PropertyTarget.POS_X || selectedProperty == PropertyTarget.POS_Y
     val isPivotMode = selectedProperty == PropertyTarget.PIVOT_X || selectedProperty == PropertyTarget.PIVOT_Y
-    val isRotateMode = selectedProperty == PropertyTarget.ROTATION_Z
     val isScaleMode = selectedProperty == PropertyTarget.SCALE
     val is3DMode = selectedProperty == PropertyTarget.POS_Z ||
         selectedProperty == PropertyTarget.ROTATION_X ||
-        selectedProperty == PropertyTarget.ROTATION_Y
+        selectedProperty == PropertyTarget.ROTATION_Y ||
+        (prefer3DSubMode && selectedProperty == PropertyTarget.ROTATION_Z)
+    val isRotateMode = selectedProperty == PropertyTarget.ROTATION_Z && !is3DMode
+    val isAnyRotationTarget = selectedProperty == PropertyTarget.ROTATION_X ||
+        selectedProperty == PropertyTarget.ROTATION_Y ||
+        selectedProperty == PropertyTarget.ROTATION_Z
+
+    val activeSubModeIndex = when {
+        isMoveMode -> 0
+        isPivotMode -> 1
+        isScaleMode -> 2
+        isRotateMode -> 3
+        else -> 4
+    }
+    val subModeResetLabel = when (activeSubModeIndex) {
+        0 -> "Reset Pos"
+        1 -> "Reset Pivot"
+        2 -> "Reset Scale"
+        3 -> "Reset Rot"
+        else -> "Reset 3D"
+    }
 
     val currentDragCallback by rememberUpdatedState(onDragLayerOnCanvas)
 
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.Top
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // 1. COMPACT LEFT COLUMN (104.dp)
-        Column(
-            modifier = Modifier.width(104.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            AmKeyframeCluster(
-                hasKeyframeAtPlayhead = hasKfAtPlayhead,
-                keyframeCount = activeProp.keyframes.size,
-                onPrevKeyframe = { onJumpKeyframe(false) },
-                onToggleKeyframe = onToggleKeyframe,
-                onNextKeyframe = { onJumpKeyframe(true) }
-            )
-
+            // Top Action Row: Axis / Property Chips on left + Prev/Next Keyframe, Full Graph, and Reset on right
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(PanelDark)
-                    .border(1.dp, OutlineSubtle, RoundedCornerShape(9.dp))
-                    .clickable { onSetInspectorTab(AmInspectorTab.EASING_INLINE) }
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ShowChart,
-                    contentDescription = "Inline Easing Curve",
-                    tint = AmTealBright,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Easing",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextPrimary,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(AmTealContainer.copy(alpha = 0.55f))
-                    .border(1.dp, AmTeal.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
-                    .clickable { onNavigateTool(StudioDestination.GRAPH_EDITOR) }
-                    .testTag("tool_graph_button")
-                    .padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Timeline,
-                    contentDescription = "Full Graph Editor",
-                    tint = AmTealBright,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Graph",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AmTealBright,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(28.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(PanelDark)
-                    .border(1.dp, OutlineSubtle, RoundedCornerShape(8.dp))
-                    .clickable(onClick = onResetTransform)
-                    .padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(Icons.Default.Refresh, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(13.dp))
-                Spacer(modifier = Modifier.width(3.dp))
-                Text("Reset", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-            }
-        }
-
-        // 2. SPACIOUS CENTER WORKSPACE
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                val visibleTargets = when {
-                    isMoveMode -> listOf(PropertyTarget.POS_X, PropertyTarget.POS_Y)
-                    isPivotMode -> listOf(PropertyTarget.PIVOT_X, PropertyTarget.PIVOT_Y)
-                    isRotateMode -> listOf(PropertyTarget.ROTATION_Z)
-                    isScaleMode -> listOf(PropertyTarget.SCALE)
-                    else -> listOf(PropertyTarget.POS_Z, PropertyTarget.ROTATION_X, PropertyTarget.ROTATION_Y)
-                }
-                visibleTargets.forEach { target ->
-                    val kfCount = selectedLayer.propertyFor(target).keyframes.size
-                    AmSegmentChip(
-                        label = if (kfCount > 0) "${target.label} ◆$kfCount" else target.label,
-                        selected = selectedProperty == target,
-                        compact = true,
-                        onClick = { onSelectProperty(target) },
-                        testTag = "prop_chip_${target.name}"
-                    )
-                }
-            }
-
-            if (isMoveMode || isPivotMode) {
-                Box(
+                Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(58.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(DeepBlack)
-                        .border(1.dp, OutlineSubtle, RoundedCornerShape(10.dp))
-                        .pointerInput(isPivotMode) {
-                            detectDragGestures { change, dragAmount ->
-                                change.consume()
-                                currentDragCallback(dragAmount.x * 1.45f, dragAmount.y * 1.45f)
-                            }
-                        }
-                        .testTag("am_swipe_to_move_pad"),
-                    contentAlignment = Alignment.Center
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val step = 18f
-                        var x = -size.height
-                        while (x < size.width + size.height) {
-                            drawLine(
-                                color = OutlineSubtle.copy(alpha = 0.28f),
-                                start = Offset(x, 0f),
-                                end = Offset(x + size.height, size.height),
-                                strokeWidth = 1f
-                            )
-                            drawLine(
-                                color = OutlineSubtle.copy(alpha = 0.18f),
-                                start = Offset(x + size.height, 0f),
-                                end = Offset(x, size.height),
-                                strokeWidth = 1f
-                            )
-                            x += step
-                        }
-                        drawLine(
-                            color = AmTeal.copy(alpha = 0.35f),
-                            start = Offset(size.width * 0.5f, 6f),
-                            end = Offset(size.width * 0.5f, size.height - 6f),
-                            strokeWidth = 1.2f
-                        )
-                        drawLine(
-                            color = AmTeal.copy(alpha = 0.35f),
-                            start = Offset(12f, size.height * 0.5f),
-                            end = Offset(size.width - 12f, size.height * 0.5f),
-                            strokeWidth = 1.2f
+                    val visibleTargets = when {
+                        isMoveMode -> listOf(PropertyTarget.POS_X, PropertyTarget.POS_Y)
+                        isPivotMode -> listOf(PropertyTarget.PIVOT_X, PropertyTarget.PIVOT_Y)
+                        isRotateMode -> listOf(PropertyTarget.ROTATION_Z)
+                        isScaleMode -> listOf(PropertyTarget.SCALE)
+                        else -> listOf(
+                            PropertyTarget.POS_Z,
+                            PropertyTarget.ROTATION_X,
+                            PropertyTarget.ROTATION_Y,
+                            PropertyTarget.ROTATION_Z
                         )
                     }
-                    Text(
-                        text = if (isPivotMode) {
-                            "${evalPivotX.toInt()}, ${evalPivotY.toInt()}"
-                        } else {
-                            "${evalX.toInt()}, ${evalY.toInt()}"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AmTealBright,
-                        fontWeight = FontWeight.Bold
-                    )
+                    visibleTargets.forEach { target ->
+                        val kfCount = selectedLayer.propertyFor(target).keyframes.size
+                        AmSegmentChip(
+                            label = if (kfCount > 0) "${target.label} ◆$kfCount" else target.label,
+                            selected = selectedProperty == target,
+                            compact = true,
+                            onClick = { onSelectProperty(target) },
+                            testTag = "prop_chip_${target.name}"
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Prev / Next Keyframe jump pills (Toggle Keyframe diamond lives on the left KeyFlow rail — no duplicate!)
+                    if (activeProp.keyframes.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .height(30.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(PanelDark)
+                                .border(1.dp, OutlineSubtle, RoundedCornerShape(8.dp))
+                                .clickable { onJumpKeyframe(false) }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("⟨◆", style = MaterialTheme.typography.labelSmall, color = KeyframeAmber, fontWeight = FontWeight.Bold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .height(30.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(PanelDark)
+                                .border(1.dp, OutlineSubtle, RoundedCornerShape(8.dp))
+                                .clickable { onJumpKeyframe(true) }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("◆⟩", style = MaterialTheme.typography.labelSmall, color = KeyframeAmber, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(AmTealContainer.copy(alpha = 0.65f))
+                            .border(1.dp, AmTeal.copy(alpha = 0.60f), RoundedCornerShape(8.dp))
+                            .clickable { onNavigateTool(StudioDestination.GRAPH_EDITOR) }
+                            .testTag("tool_graph_button")
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Timeline,
+                            contentDescription = "Full Graph Editor",
+                            tint = AmTealBright,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Graph",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmTealBright,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(PanelDark)
+                            .border(1.dp, OutlineSubtle, RoundedCornerShape(8.dp))
+                            .clickable { onResetMoveSubMode(activeSubModeIndex) }
+                            .testTag("reset_move_submode_button")
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = subModeResetLabel,
+                            tint = TextSecondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(subModeResetLabel, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    }
+                }
+            }
+
+            // Spacious 2D Swipe Pad + Quick Snap Presets side-by-side when in Move or Pivot mode
+            if (isMoveMode || isPivotMode) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(72.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(DeepBlack)
+                            .border(1.dp, OutlineSubtle, RoundedCornerShape(12.dp))
+                            .pointerInput(isPivotMode) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    currentDragCallback(dragAmount.x * 1.45f, dragAmount.y * 1.45f)
+                                }
+                            }
+                            .testTag("am_swipe_to_move_pad"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val step = 18f
+                            var x = -size.height
+                            while (x < size.width + size.height) {
+                                drawLine(
+                                    color = OutlineSubtle.copy(alpha = 0.28f),
+                                    start = Offset(x, 0f),
+                                    end = Offset(x + size.height, size.height),
+                                    strokeWidth = 1f
+                                )
+                                drawLine(
+                                    color = OutlineSubtle.copy(alpha = 0.18f),
+                                    start = Offset(x + size.height, 0f),
+                                    end = Offset(x, size.height),
+                                    strokeWidth = 1f
+                                )
+                                x += step
+                            }
+                            drawLine(
+                                color = AmTeal.copy(alpha = 0.35f),
+                                start = Offset(size.width * 0.5f, 6f),
+                                end = Offset(size.width * 0.5f, size.height - 6f),
+                                strokeWidth = 1.2f
+                            )
+                            drawLine(
+                                color = AmTeal.copy(alpha = 0.35f),
+                                start = Offset(12f, size.height * 0.5f),
+                                end = Offset(size.width - 12f, size.height * 0.5f),
+                                strokeWidth = 1.2f
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = if (isPivotMode) {
+                                    "Pivot  ${evalPivotX.toInt()}, ${evalPivotY.toInt()}"
+                                } else {
+                                    "X ${evalX.toInt()}   •   Y ${evalY.toInt()}"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AmTealBright,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Swipe anywhere to nudge 2D",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+
+                    // Compact quick-center column beside the 2D touch pad
+                    Column(
+                        modifier = Modifier.width(78.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(33.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(PanelDark)
+                                .border(1.dp, OutlineSubtle, RoundedCornerShape(9.dp))
+                                .clickable {
+                                    onSelectProperty(if (isPivotMode) PropertyTarget.PIVOT_X else PropertyTarget.POS_X)
+                                    onUpdatePropertyValue(0f)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Center X", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(33.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(PanelDark)
+                                .border(1.dp, OutlineSubtle, RoundedCornerShape(9.dp))
+                                .clickable {
+                                    onSelectProperty(if (isPivotMode) PropertyTarget.PIVOT_Y else PropertyTarget.POS_Y)
+                                    onUpdatePropertyValue(0f)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Center Y", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                        }
+                    }
+                }
+            } else if (isScaleMode || isAnyRotationTarget) {
+                // Full 360-degree angle presets (-360° .. +360°) for 2D & 3D Move rotation, or quick scale presets
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val quickPresets = if (isScaleMode) {
+                        listOf("50%" to 50f, "75%" to 75f, "100%" to 100f, "125%" to 125f, "150%" to 150f, "200%" to 200f)
+                    } else {
+                        listOf(
+                            "-360°" to -360f,
+                            "-180°" to -180f,
+                            "-90°" to -90f,
+                            "-45°" to -45f,
+                            "0°" to 0f,
+                            "45°" to 45f,
+                            "90°" to 90f,
+                            "180°" to 180f,
+                            "360°" to 360f
+                        )
+                    }
+                    quickPresets.forEach { (lbl, targetVal) ->
+                        AmSegmentChip(
+                            label = lbl,
+                            selected = abs(evalVal - targetVal) < 0.5f,
+                            compact = true,
+                            onClick = { onUpdatePropertyValue(targetVal) },
+                            testTag = "preset_${lbl.replace("°", "deg").replace("%", "pct")}"
+                        )
+                    }
                 }
             }
 
             AmTickWheelScrubber(
                 value = evalVal,
-                minValue = selectedProperty.minVal,
-                maxValue = selectedProperty.maxVal,
+                minValue = selectedProperty.defaultSliderMin,
+                maxValue = selectedProperty.defaultSliderMax,
                 unit = selectedProperty.unit,
                 label = selectedProperty.label,
+                unbounded = selectedProperty.unbounded,
                 onValueChange = onUpdatePropertyValue,
+                onReset = { onResetPropertyTarget(selectedProperty) },
                 testTag = "property_value_slider"
             )
 
@@ -313,7 +448,7 @@ fun AmMoveTransformPanel(
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Expr", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                Text("Motion", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                 listOf(
                     "Off" to "",
                     "Spring" to "spring(3, 4, 55)",
@@ -331,47 +466,114 @@ fun AmMoveTransformPanel(
             }
         }
 
-        // 3. COMPACT RIGHT VERTICAL 5-ICON SUB-TOOL RAIL (48.dp)
-        Column(
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            horizontalAlignment = Alignment.End
+        // 2. DEDICATED BOTTOM SUB-TOOL BUTTONS BAR (Utilizes available bottom space without crowding)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(PanelDark)
+                .border(1.dp, OutlineSubtle, RoundedCornerShape(10.dp))
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            AmSubToolRailButton(
+            AmSubToolBottomButton(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Default.OpenWith,
                 label = "Move",
                 selected = isMoveMode,
-                onClick = { onSelectProperty(PropertyTarget.POS_X) },
+                onClick = {
+                    prefer3DSubMode = false
+                    onSelectProperty(PropertyTarget.POS_X)
+                },
                 testTag = "subtool_move"
             )
-            AmSubToolRailButton(
+            AmSubToolBottomButton(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Default.Adjust,
                 label = "Pivot",
                 selected = isPivotMode,
-                onClick = { onSelectProperty(PropertyTarget.PIVOT_X) },
+                onClick = {
+                    prefer3DSubMode = false
+                    onSelectProperty(PropertyTarget.PIVOT_X)
+                },
                 testTag = "subtool_pivot"
             )
-            AmSubToolRailButton(
+            AmSubToolBottomButton(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Default.RotateRight,
                 label = "Rotate",
                 selected = isRotateMode,
-                onClick = { onSelectProperty(PropertyTarget.ROTATION_Z) },
+                onClick = {
+                    prefer3DSubMode = false
+                    onSelectProperty(PropertyTarget.ROTATION_Z)
+                },
                 testTag = "subtool_rotate"
             )
-            AmSubToolRailButton(
+            AmSubToolBottomButton(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Default.CropFree,
                 label = "Scale",
                 selected = isScaleMode,
-                onClick = { onSelectProperty(PropertyTarget.SCALE) },
+                onClick = {
+                    prefer3DSubMode = false
+                    onSelectProperty(PropertyTarget.SCALE)
+                },
                 testTag = "subtool_scale"
             )
-            AmSubToolRailButton(
+            AmSubToolBottomButton(
+                modifier = Modifier.weight(1f),
                 icon = Icons.Default.ViewInAr,
                 label = "3D/Z",
                 selected = is3DMode,
-                onClick = { onSelectProperty(PropertyTarget.POS_Z) },
+                onClick = {
+                    prefer3DSubMode = true
+                    onSelectProperty(PropertyTarget.POS_Z)
+                },
                 testTag = "subtool_3d"
             )
         }
+    }
+
+@Composable
+private fun AmSubToolBottomButton(
+    modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val bg = if (selected) AmTealContainer else PanelDark
+    val tint = if (selected) AmTealBright else TextSecondary
+    val borderCol = if (selected) AmTeal else Color.Transparent
+    Column(
+        modifier = modifier
+            .height(48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(bg)
+            .border(1.dp, borderCol, RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tint,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 10.5.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = tint,
+            maxLines = 1
+        )
     }
 }
 
@@ -437,8 +639,8 @@ fun AmInlineEasingPanel(
 
         com.example.ui.components.AmControllableCurveEditor(
             property = prop,
-            minValue = selectedProperty.minVal,
-            maxValue = selectedProperty.maxVal,
+            minValue = selectedProperty.defaultSliderMin,
+            maxValue = selectedProperty.defaultSliderMax,
             playheadMs = playheadMs,
             clipStartMs = selectedLayer.startTimeMs,
             clipEndMs = selectedLayer.endTimeMs,

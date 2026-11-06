@@ -47,6 +47,7 @@ class StudioDspAudioProcessor : BaseAudioProcessor() {
     @Volatile var echoMix: Float = 0f
     @Volatile var echoDelayMs: Float = 240f
     @Volatile var filterCutoff: Float = 1.0f
+    @Volatile var volumeMultiplier: Float = 1.0f
 
     private var sampleRateHz: Int = 44100
     private var channelCount: Int = 2
@@ -105,10 +106,12 @@ class StudioDspAudioProcessor : BaseAudioProcessor() {
         echoMix = layer.audioEchoMix.coerceIn(0f, 1f)
         echoDelayMs = layer.audioEchoDelayMs.coerceIn(60f, 650f)
         filterCutoff = layer.audioFilterCutoff.coerceIn(0.05f, 1.0f)
+        volumeMultiplier = if (layer.audioMuted) 0f else layer.audioVolume.coerceIn(0f, 5.0f)
     }
 
     fun hasActiveDsp(): Boolean {
-        return reverbMix > 0.008f ||
+        return kotlin.math.abs(volumeMultiplier - 1.0f) > 0.01f ||
+            reverbMix > 0.008f ||
             bassBoost > 0.008f ||
             echoMix > 0.008f ||
             filterCutoff < 0.985f

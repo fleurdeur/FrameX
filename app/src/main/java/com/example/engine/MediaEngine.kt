@@ -79,10 +79,11 @@ object MediaEngine {
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile var activePreviewQuality: PreviewQuality = PreviewQuality.HALF
-    @Volatile var fastKeyframeScrubEnabled: Boolean = true
+    @Volatile var fastKeyframeScrubEnabled: Boolean = false
     @Volatile var isRapidScrubbing: Boolean = false
+    @Volatile var maxPooledRetrievers: Int = 4
 
-    private val bitmapCache = object : LruCache<String, Bitmap>(64 * 1024) {
+    private val bitmapCache = object : LruCache<String, Bitmap>(96 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return (value.allocationByteCount / 1024).coerceAtLeast(1)
         }
@@ -98,14 +99,24 @@ object MediaEngine {
     // Background-mirrored local file paths for content:// URIs (non-blocking)
     private val localMirrorPathByUri = ConcurrentHashMap<String, String>()
     private val mirroringInProgress = ConcurrentHashMap.newKeySet<String>()
+    private val unreachableUris = ConcurrentHashMap.newKeySet<String>()
+
+    fun isUriUnreachable(uriStr: String): Boolean =
+        uriStr.isNotBlank() && unreachableUris.contains(uriStr)
+
+    fun markUriUnreachable(uriStr: String) {
+        if (uriStr.isNotBlank()) {
+            unreachableUris.add(uriStr)
+        }
+    }
 
     // Reusable MediaMetadataRetriever session pool (avoids 60-150ms container re-open per frame!)
     private class PooledRetriever(val uriStr: String, val retriever: MediaMetadataRetriever)
     private val retrieverPoolLock = Any()
-    private val retrieverPool = ArrayDeque<PooledRetriever>(4)
+    private val retrieverPool = ArrayDeque<PooledRetriever>(8)
 
-    private const val BUCKET_MS = 40L
-    private const val MAX_IMAGE_EDGE = 1280
+    private const val BUCKET_MS = 20L
+    private const val MAX_IMAGE_EDGE = 1440
     private const val MAX_BG_MIRROR_BYTES = 120L * 1024L * 1024L
 
     fun quantizeVideoBucketMs(sourceTimeMs: Long): Long =
@@ -136,10 +147,15 @@ object MediaEngine {
     }
 
     fun configureCacheLimitMb(totalLimitMb: Int) {
-        val mediaKb = ((totalLimitMb.coerceIn(64, 512) * 0.42f).toInt().coerceIn(24, 220)) * 1024
+        val mediaKb = ((totalLimitMb.coerceIn(32, 2048) * 0.44f).toInt().coerceIn(16, 960)) * 1024
         synchronized(bitmapCache) {
             bitmapCache.resize(mediaKb)
         }
+    }
+
+    fun configureDecoderPool(poolSize: Int) {
+        maxPooledRetrievers = poolSize.coerceIn(2, 8)
+        HardwareVideoPreviewEngine.maxPooledVideoPlayers = poolSize.coerceIn(2, 8)
     }
 
     fun getUsedCacheMb(): Float {
@@ -154,6 +170,8 @@ object MediaEngine {
         cachedTimestampsByUri.clear()
         lastGoodFrameByUri.clear()
         pendingDecodeTimeMs.clear()
+        unreachableUris.clear()
+        FFmpegReverseVideoEngine.clearAllCaches()
         releaseRetrieverPool()
     }
 
@@ -250,8 +268,6 @@ object MediaEngine {
                         cacheVideoFrame(finalUriStr, 0L, firstBmp)
                         onFrameWarmProgress?.invoke()
                     }
-                    // Lightly warm 12 sparse keyframes in hardware for instant scrub fallback
-                    warmSparseKeyframesHardwareAsync(appCtx, finalUriStr, probed.durationMs)
                 }
 
                 ImportedMediaInfo(
@@ -305,57 +321,57 @@ object MediaEngine {
         focusSourceMs: Long = -1L,
         onFrameReady: (() -> Unit)? = null
     ) {
-        if (layer.type != LayerType.VIDEO || layer.mediaUri.isBlank()) return
+        if (layer.type != LayerType.VIDEO || layer.mediaUri.isBlank() || isUriUnreachable(layer.mediaUri)) return
         val uriStr = layer.mediaUri
         val guard = hwWarmRunningForUri.getOrPut("nl|$uriStr") { AtomicBoolean(false) }
         if (!guard.compareAndSet(false, true)) return
         val appCtx = context.applicationContext
         val clipSpanMs = (layer.endTimeMs - layer.startTimeMs).coerceAtLeast(300L)
         val rawDur = if (layer.sourceDurationMs > 0L) layer.sourceDurationMs else (layer.sourceOffsetMs + clipSpanMs)
-        val dur = rawDur.coerceIn(300L, 60_000L)
+        val dur = rawDur.coerceIn(300L, 180_000L)
         val safeMaxMs = (dur - BUCKET_MS).coerceAtLeast(0L)
-        val winStartMs = if (focusSourceMs >= 0L) {
-            (focusSourceMs - 2_800L).coerceAtLeast(0L)
+        val anchorMs = if (focusSourceMs >= 0L) {
+            focusSourceMs.coerceIn(0L, safeMaxMs)
+        } else if (layer.reversed) {
+            safeMaxMs
         } else {
             0L
         }
-        val winEndMs = if (focusSourceMs >= 0L) {
-            (focusSourceMs + 2_800L).coerceAtMost(safeMaxMs)
-        } else {
-            safeMaxMs.coerceAtMost(10_000L)
-        }
+        val winStartMs = (anchorMs - 4_200L).coerceAtLeast(0L)
+        val winEndMs = (anchorMs + 4_200L).coerceAtMost(safeMaxMs)
 
         engineScope.launch {
             try {
                 val timestamps = ArrayList<Long>()
                 var t = quantizeVideoBucketMs(winStartMs)
-                while (t <= winEndMs && timestamps.size < 220) {
+                while (t <= winEndMs && timestamps.size < 360) {
                     if (!hasCachedVideoBucket(uriStr, t)) timestamps.add(t)
                     t += BUCKET_MS
                 }
                 if (timestamps.isNotEmpty()) {
-                    // Partition into ~1.6s (40-bucket) ascending GOP chunks; decode tail-first when reversed!
-                    val chunks = timestamps.chunked(40).let { list ->
-                        if (layer.reversed) list.asReversed() else list
+                    // Partition into ~1.0s (50-bucket) ascending GOP chunks ordered closest-to-anchor first
+                    // (biasing backwards when reversed), and decode ALL chunks inside ONE persistent EGL+MediaCodec session!
+                    val rawChunks = timestamps.chunked(50)
+                    val orderedChunks = rawChunks.sortedBy { chunk ->
+                        val mid = chunk[chunk.size / 2]
+                        val dist = abs(mid - anchorMs)
+                        if (layer.reversed && mid <= anchorMs) dist - 250L else dist
                     }
                     val targetEdge = activePreviewQuality.maxVideoEdge.coerceIn(192, 540)
-                    for (chunk in chunks) {
-                        var emittedInChunk = 0
-                        SequentialVideoDecoder.decodeSortedTimestampsHardware(
-                            context = appCtx,
-                            uriStr = uriStr,
-                            sortedTimestampsMs = chunk,
-                            maxEdge = targetEdge,
-                            preferRgb565 = true
-                        ) { bucketMs, bmp ->
-                            cacheVideoFrame(uriStr, bucketMs, bmp)
-                            emittedInChunk++
-                            if (emittedInChunk == 1 || emittedInChunk % 10 == 0) {
-                                onFrameReady?.invoke()
-                            }
+                    var emittedTotal = 0
+                    SequentialVideoDecoder.decodeChunkedTimestampsHardware(
+                        context = appCtx,
+                        uriStr = uriStr,
+                        timestampChunksMs = orderedChunks,
+                        maxEdge = targetEdge
+                    ) { bucketMs, bmp ->
+                        cacheVideoFrame(uriStr, bucketMs, bmp)
+                        emittedTotal++
+                        if (emittedTotal == 1 || emittedTotal % 8 == 0) {
+                            onFrameReady?.invoke()
                         }
-                        if (emittedInChunk > 0) onFrameReady?.invoke()
                     }
+                    if (emittedTotal > 0) onFrameReady?.invoke()
                 }
             } finally {
                 guard.set(false)
@@ -376,7 +392,7 @@ object MediaEngine {
         onAsyncFrameReady: () -> Unit
     ): Bitmap? {
         val uriStr = layer.mediaUri
-        if (uriStr.isBlank()) return null
+        if (uriStr.isBlank() || isUriUnreachable(uriStr)) return null
 
         if (layer.type == LayerType.IMAGE) {
             val key = "img|$uriStr"
@@ -392,6 +408,9 @@ object MediaEngine {
                         if (decoded != null) {
                             putCachedBitmap(key, decoded)
                             lastGoodFrameByUri[uriStr] = decoded
+                            onAsyncFrameReady()
+                        } else {
+                            markUriUnreachable(uriStr)
                             onAsyncFrameReady()
                         }
                     } finally {
@@ -464,6 +483,9 @@ object MediaEngine {
         val appCtx = context.applicationContext
         project.layers.forEach { layer ->
             if (!layer.visible || layer.type != LayerType.VIDEO || layer.mediaUri.isBlank()) return@forEach
+            if (layer.reversed && !layer.timeRemapEnabled && layer.freezeFrameMs < 0L) {
+                FFmpegReverseVideoEngine.prepareReversedProxyAsync(appCtx, layer)
+            }
             if (HardwareVideoPreviewEngine.isEligibleForLiveOesStream(layer)) return@forEach
             if (playheadMs !in (layer.startTimeMs - 200L)..layer.endTimeMs) return@forEach
             val srcMs = AnimationEvaluator.evaluateSourceMediaTimeMs(layer, playheadMs.coerceAtLeast(layer.startTimeMs), audio)
@@ -481,14 +503,17 @@ object MediaEngine {
         maxEdgePx: Int
     ): Bitmap? {
         val uriStr = layer.mediaUri
-        if (uriStr.isBlank()) return null
+        if (uriStr.isBlank() || isUriUnreachable(uriStr)) return null
         if (layer.type == LayerType.IMAGE) {
             val key = "img|$uriStr"
             synchronized(bitmapCache) { bitmapCache.get(key) }?.takeIf { !it.isRecycled }?.let { return it }
             return decodeImageInternal(context, uriStr)?.also {
                 putCachedBitmap(key, it)
                 lastGoodFrameByUri[uriStr] = it
-            } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
+            } ?: run {
+                markUriUnreachable(uriStr)
+                lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
+            }
         }
         if (layer.type == LayerType.VIDEO) {
             val clampedSourceMs = if (layer.sourceDurationMs > 50L) {
@@ -526,14 +551,17 @@ object MediaEngine {
         sourceTimeMs: Long
     ): Bitmap? {
         val uriStr = layer.mediaUri
-        if (uriStr.isBlank()) return null
+        if (uriStr.isBlank() || isUriUnreachable(uriStr)) return null
         if (layer.type == LayerType.IMAGE) {
             val key = "img|$uriStr"
             synchronized(bitmapCache) { bitmapCache.get(key) }?.takeIf { !it.isRecycled }?.let { return it }
             return decodeImageInternal(context, uriStr)?.also {
                 putCachedBitmap(key, it)
                 lastGoodFrameByUri[uriStr] = it
-            } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
+            } ?: run {
+                markUriUnreachable(uriStr)
+                lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
+            }
         }
         if (layer.type == LayerType.VIDEO) {
             val clampedSourceMs = if (layer.sourceDurationMs > 50L) {
@@ -552,7 +580,7 @@ object MediaEngine {
                     timeMs = clampedSourceMs,
                     srcW = layer.mediaWidth.takeIf { it > 0 } ?: 1280,
                     srcH = layer.mediaHeight.takeIf { it > 0 } ?: 720,
-                    maxEdge = 960,
+                    maxEdge = 1280,
                     syncOnly = false
                 )?.also { cacheVideoFrame(uriStr, bucketMs, it) }
             } ?: lastGoodFrameByUri[uriStr]?.takeIf { !it.isRecycled }
@@ -838,6 +866,7 @@ object MediaEngine {
         uriStr: String,
         block: (MediaMetadataRetriever) -> T?
     ): T? {
+        if (isUriUnreachable(uriStr)) return null
         var leased: PooledRetriever? = null
         synchronized(retrieverPoolLock) {
             val idx = retrieverPool.indexOfFirst { it.uriStr == uriStr }
@@ -851,6 +880,7 @@ object MediaEngine {
                 setRetrieverSource(context, r, uriStr)
                 PooledRetriever(uriStr, r)
             } catch (_: Throwable) {
+                markUriUnreachable(uriStr)
                 runCatching { r.release() }
                 return null
             }
@@ -863,7 +893,8 @@ object MediaEngine {
             null
         } finally {
             synchronized(retrieverPoolLock) {
-                if (retrieverPool.size >= 3) {
+                val poolCap = maxPooledRetrievers.coerceIn(2, 8)
+                while (retrieverPool.size >= poolCap) {
                     val evicted = retrieverPool.removeFirst()
                     runCatching { evicted.retriever.release() }
                 }
@@ -1140,14 +1171,17 @@ class TimelineAudioController(private val appContext: Context) {
 
     private class AudioTrackSlot(
         val layerId: String,
+        var rawMediaUri: String,
         var preparedUri: String,
         val player: ExoPlayer,
         val dspProcessor: StudioDspAudioProcessor
     ) {
         @Volatile var isReady: Boolean = false
         @Volatile var isPlayingNow: Boolean = false
+        @Volatile var hasError: Boolean = false
         @Volatile var lastKnownPosMs: Long = 0L
         @Volatile var lastKnownNano: Long = 0L
+        @Volatile var seekSettlingUntilWallMs: Long = 0L
         var appliedSpeed: Float = 1.0f
         var appliedPitch: Float = 1.0f
         var appliedVolume: Float = -1f
@@ -1156,12 +1190,45 @@ class TimelineAudioController(private val appContext: Context) {
 
     private val audioSlots = ConcurrentHashMap<String, AudioTrackSlot>()
 
+    @Volatile
+    private var audioSamplerScheduled = false
+
+    private val audioPositionSamplerRunnable = object : Runnable {
+        override fun run() {
+            audioSamplerScheduled = false
+            val nowWall = SystemClock.elapsedRealtime()
+            val nowNano = System.nanoTime()
+            var anyPlaying = false
+            audioSlots.values.forEach { slot ->
+                val p = slot.player
+                if (p.playWhenReady && p.playbackState == Player.STATE_READY && !slot.hasError) {
+                    anyPlaying = true
+                    if (nowWall >= slot.seekSettlingUntilWallMs) {
+                        slot.lastKnownPosMs = p.currentPosition.coerceAtLeast(0L)
+                        slot.lastKnownNano = nowNano
+                    }
+                }
+            }
+            if (anyPlaying) {
+                audioSamplerScheduled = true
+                mainHandler.postDelayed(this, 40L)
+            }
+        }
+    }
+
+    private fun ensureAudioSamplerOnMain() {
+        if (!audioSamplerScheduled) {
+            audioSamplerScheduled = true
+            mainHandler.postDelayed(audioPositionSamplerRunnable, 40L)
+        }
+    }
+
     /**
      * Pre-prepares standalone AUDIO layers ahead of playback so pressing Play has zero prepare() lag.
      */
     fun prewarmProjectAudio(project: Project) {
         val audioLayers = project.layers.filter {
-            it.type == LayerType.AUDIO && it.mediaUri.isNotBlank()
+            it.type == LayerType.AUDIO && it.mediaUri.isNotBlank() && !MediaEngine.isUriUnreachable(it.mediaUri)
         }
         runOnMain {
             val keepIds = audioLayers.map { it.id }.toSet()
@@ -1186,11 +1253,20 @@ class TimelineAudioController(private val appContext: Context) {
             return
         }
 
-        // Only standalone AUDIO layers are driven here; eligible VIDEO layers play audio via HardwareVideoPreviewEngine!
+        val maxPooledVideo = HardwareVideoPreviewEngine.maxPooledVideoPlayers.coerceIn(2, 8)
+        val liveOesHandledVideoIds = project.layers
+            .filter { HardwareVideoPreviewEngine.isEligibleForLiveOesStream(it) }
+            .take(maxPooledVideo)
+            .map { it.id }
+            .toSet()
+
+        // Standalone AUDIO layers + any overflow VIDEO layers exceeding the OES pool play audio here!
         val activeAudioLayers = project.layers.filter { layer ->
             layer.visible &&
-                layer.type == LayerType.AUDIO &&
+                ((layer.type == LayerType.AUDIO) ||
+                    (layer.type == LayerType.VIDEO && layer.id !in liveOesHandledVideoIds)) &&
                 layer.mediaUri.isNotBlank() &&
+                !MediaEngine.isUriUnreachable(layer.mediaUri) &&
                 !layer.audioMuted &&
                 layer.audioVolume > 0.01f &&
                 !layer.reversed &&
@@ -1210,12 +1286,17 @@ class TimelineAudioController(private val appContext: Context) {
                 }
             }
 
-            val driftLimit = max(syncDriftThresholdMs, 300L)
+            val driftLimit = syncDriftThresholdMs.coerceIn(175L, 320L)
 
             activeAudioLayers.forEach { layer ->
                 val slot = obtainOrCreateAudioSlotOnMain(layer) ?: return@forEach
+                if (slot.hasError) return@forEach
                 slot.dspProcessor.updateFromLayer(layer)
                 val p = slot.player
+                if (p.playbackState == Player.STATE_IDLE) {
+                    runCatching { p.prepare() }
+                }
+
                 val targetMediaMs = AnimationEvaluator.evaluateSourceMediaTimeMs(layer, playheadMs)
 
                 val spd = layer.speedMultiplier.coerceIn(0.25f, 3.0f)
@@ -1228,38 +1309,47 @@ class TimelineAudioController(private val appContext: Context) {
                     slot.appliedPitch = pitchFactor
                 }
 
-                // Smooth 20ms boundary envelope prevents clicks on abrupt clip cuts
+                // Smooth 16ms boundary envelope prevents clicks on abrupt clip cuts
                 val edgeDistMs = minOf(playheadMs - layer.startTimeMs, layer.endTimeMs - playheadMs)
-                val edgeEnvelope = (edgeDistMs / 20f).coerceIn(0.15f, 1f)
+                val edgeEnvelope = (edgeDistMs / 16f).coerceIn(0.20f, 1f)
                 val vol = (layer.audioVolume.coerceIn(0f, 1.5f).coerceAtMost(1f)) * edgeEnvelope
-                if (abs(slot.appliedVolume - vol) > 0.02f) {
+                if (abs(slot.appliedVolume - vol) > 0.015f) {
                     p.volume = vol
                     slot.appliedVolume = vol
                 }
 
                 val curPos = p.currentPosition.coerceAtLeast(0L)
-                slot.lastKnownPosMs = curPos
-                slot.lastKnownNano = System.nanoTime()
+                if (nowWall >= slot.seekSettlingUntilWallMs && p.isPlaying) {
+                    slot.lastKnownPosMs = curPos
+                    slot.lastKnownNano = System.nanoTime()
+                }
 
-                val wasPlaying = p.playWhenReady && slot.isPlayingNow
+                val endedOrStopped = p.playbackState == Player.STATE_ENDED || !p.playWhenReady
                 val drift = abs(curPos - targetMediaMs)
-                val cooldownOk = (nowWall - slot.lastSeekWallMs) >= 750L
+                val cooldownOk = (nowWall - slot.lastSeekWallMs) >= 1_100L && nowWall >= slot.seekSettlingUntilWallMs
 
-                if (!wasPlaying) {
+                if (endedOrStopped) {
+                    // Always seek to the exact frame when pressing Play from ANY timeline position!
                     p.setSeekParameters(SeekParameters.EXACT)
-                    if (drift > 35L || forceExactSeek) {
-                        p.seekTo(targetMediaMs)
-                        slot.lastSeekWallMs = nowWall
-                        slot.lastKnownPosMs = targetMediaMs
-                    }
+                    p.seekTo(targetMediaMs)
+                    slot.lastSeekWallMs = nowWall
+                    slot.seekSettlingUntilWallMs = nowWall + 340L
+                    slot.lastKnownPosMs = targetMediaMs
+                    slot.lastKnownNano = System.nanoTime()
                     p.play()
                     slot.isPlayingNow = true
                 } else if (forceExactSeek || (drift > driftLimit && cooldownOk)) {
                     p.setSeekParameters(SeekParameters.EXACT)
                     p.seekTo(targetMediaMs)
                     slot.lastSeekWallMs = nowWall
+                    slot.seekSettlingUntilWallMs = nowWall + 340L
                     slot.lastKnownPosMs = targetMediaMs
+                    slot.lastKnownNano = System.nanoTime()
+                    if (!p.isPlaying) {
+                        p.play()
+                    }
                 }
+                ensureAudioSamplerOnMain()
             }
         }
     }
@@ -1282,9 +1372,10 @@ class TimelineAudioController(private val appContext: Context) {
         } ?: return null
 
         val slot = audioSlots[masterAudio.id] ?: return null
-        if (!slot.isPlayingNow || !slot.isReady || slot.lastKnownNano <= 0L) return null
+        if (!slot.isPlayingNow || !slot.isReady || slot.hasError || slot.lastKnownNano <= 0L) return null
+        if (SystemClock.elapsedRealtime() < slot.seekSettlingUntilWallMs) return null
 
-        val elapsedMs = ((System.nanoTime() - slot.lastKnownNano) / 1_000_000L).coerceIn(0L, 160L)
+        val elapsedMs = ((System.nanoTime() - slot.lastKnownNano) / 1_000_000L).coerceIn(0L, 240L)
         val spd = masterAudio.speedMultiplier.coerceIn(0.25f, 3.0f)
         val estMediaMs = slot.lastKnownPosMs + (elapsedMs * spd).toLong()
         val compOffsetMs = ((estMediaMs - masterAudio.sourceOffsetMs) / spd).toLong()
@@ -1316,12 +1407,15 @@ class TimelineAudioController(private val appContext: Context) {
     }
 
     private fun obtainOrCreateAudioSlotOnMain(layer: Layer): AudioTrackSlot? {
+        if (MediaEngine.isUriUnreachable(layer.mediaUri)) return null
         val resolvedUriStr = MediaEngine.resolvePlayableUriString(layer.mediaUri)
         val existing = audioSlots[layer.id]
         if (existing != null) {
             if (existing.preparedUri != resolvedUriStr) {
+                existing.rawMediaUri = layer.mediaUri
                 existing.preparedUri = resolvedUriStr
                 existing.isReady = false
+                existing.hasError = false
                 runCatching {
                     existing.player.setMediaItem(MediaItem.fromUri(Uri.parse(resolvedUriStr)))
                     existing.player.prepare()
@@ -1347,8 +1441,10 @@ class TimelineAudioController(private val appContext: Context) {
                         .build()
                 }
             }
+                .setEnableDecoderFallback(true)
+                .setMediaCodecSelector(UniversalCodecEngine.buildUniversalMediaCodecSelector())
             val loadControl = DefaultLoadControl.Builder()
-                .setBufferDurationsMs(1_500, 6_000, 100, 200)
+                .setBufferDurationsMs(1_000, 4_500, 45, 90)
                 .build()
             val exo = ExoPlayer.Builder(appContext, renderersFactory)
                 .setLoadControl(loadControl)
@@ -1363,11 +1459,13 @@ class TimelineAudioController(private val appContext: Context) {
             exo.repeatMode = Player.REPEAT_MODE_OFF
             exo.setSeekParameters(SeekParameters.EXACT)
 
-            val slot = AudioTrackSlot(layer.id, resolvedUriStr, exo, dspProcessor)
+            val slot = AudioTrackSlot(layer.id, layer.mediaUri, resolvedUriStr, exo, dspProcessor)
             exo.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     slot.isReady = playbackState == Player.STATE_READY
                     if (playbackState == Player.STATE_READY) {
+                        slot.hasError = false
+                        slot.seekSettlingUntilWallMs = 0L
                         slot.lastKnownPosMs = exo.currentPosition.coerceAtLeast(0L)
                         slot.lastKnownNano = System.nanoTime()
                     }
@@ -1378,7 +1476,14 @@ class TimelineAudioController(private val appContext: Context) {
                     if (isPlaying) {
                         slot.lastKnownPosMs = exo.currentPosition.coerceAtLeast(0L)
                         slot.lastKnownNano = System.nanoTime()
+                        ensureAudioSamplerOnMain()
                     }
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    slot.hasError = true
+                    slot.isReady = false
+                    slot.isPlayingNow = false
                 }
             })
 

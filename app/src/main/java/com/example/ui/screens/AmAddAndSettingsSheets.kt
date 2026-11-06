@@ -28,8 +28,12 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.TextFields
@@ -88,6 +92,8 @@ import com.example.viewmodel.StudioDestination
 import kotlin.math.cos
 import kotlin.math.sin
 
+private val KeyflowBlueBright = Color(0xFF38BDF8)
+
 private val AM_SHAPES = listOf(
     "Rectangle",
     "Rounded Rect",
@@ -106,18 +112,22 @@ private val AM_SHAPES = listOf(
 @Composable
 fun AmAddElementBottomSheet(
     hasCopiedLayer: Boolean,
+    pinnedAePlugins: List<com.example.scriptengine.InstalledPlugin> = emptyList(),
+    onOpenAePlugin: (com.example.scriptengine.InstalledPlugin) -> Unit = {},
     onAddShapeKind: (String) -> Unit,
     onAddLayerType: (LayerType) -> Unit,
     onPickVideo: () -> Unit,
     onPickImage: () -> Unit,
     onPickAudio: () -> Unit,
+    onImportUniversalFile: () -> Unit = {},
     onPasteLayer: () -> Unit,
     onAddBeatBookmark: () -> Unit,
+    onAddAdjustmentLayer: () -> Unit = {},
     onNavigateTool: (StudioDestination) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var activeTab by remember { mutableIntStateOf(0) }
+    var activeTab by remember { mutableIntStateOf(if (pinnedAePlugins.isNotEmpty()) 4 else 0) }
     val tabs = listOf("Shape", "Media", "Audio", "Object", "Element")
     val dismissInteraction = remember { MutableInteractionSource() }
     val cardInteraction = remember { MutableInteractionSource() }
@@ -249,12 +259,12 @@ fun AmAddElementBottomSheet(
                                 modifier = Modifier.weight(1f)
                             )
                             AmCompactMediaButton(
-                                icon = Icons.Default.MusicNote,
-                                title = "Audio",
+                                icon = Icons.Default.FileUpload,
+                                title = "Import File",
                                 tint = AmTealBright,
                                 onClick = {
                                     onDismiss()
-                                    onPickAudio()
+                                    onImportUniversalFile()
                                 },
                                 modifier = Modifier.weight(1f)
                             )
@@ -268,7 +278,7 @@ fun AmAddElementBottomSheet(
                         ) {
                             AmCompactMediaButton(
                                 icon = Icons.Default.MusicNote,
-                                title = "Audio",
+                                title = "Audio Track",
                                 tint = AmTealBright,
                                 onClick = {
                                     onDismiss()
@@ -278,21 +288,11 @@ fun AmAddElementBottomSheet(
                             )
                             AmCompactMediaButton(
                                 icon = Icons.Default.GraphicEq,
-                                title = "Reactor",
+                                title = "Audio Studio",
                                 tint = AudioCyan,
                                 onClick = {
                                     onDismiss()
                                     onNavigateTool(StudioDestination.AUDIO_REACTOR)
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                            AmCompactMediaButton(
-                                icon = Icons.Default.BookmarkAdd,
-                                title = "Bookmark",
-                                tint = NeonPink,
-                                onClick = {
-                                    onAddBeatBookmark()
-                                    onDismiss()
                                 },
                                 modifier = Modifier.weight(1f)
                             )
@@ -305,11 +305,22 @@ fun AmAddElementBottomSheet(
                             horizontalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
                             AmCompactMediaButton(
-                                icon = Icons.Default.Videocam,
-                                title = "Camera",
-                                tint = KeyframeAmber,
+                                icon = Icons.Default.Layers,
+                                title = "Adjustment",
+                                subtitle = "Color & FX",
+                                tint = KeyflowBlueBright,
                                 onClick = {
-                                    onAddLayerType(LayerType.CAMERA)
+                                    onAddAdjustmentLayer()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1.15f)
+                            )
+                            AmCompactMediaButton(
+                                icon = Icons.Default.Folder,
+                                title = "Group",
+                                tint = Color(0xFFA78BFA),
+                                onClick = {
+                                    onAddLayerType(LayerType.GROUP)
                                     onDismiss()
                                 },
                                 modifier = Modifier.weight(1f)
@@ -326,7 +337,7 @@ fun AmAddElementBottomSheet(
                             )
                             AmCompactMediaButton(
                                 icon = Icons.Default.ViewInAr,
-                                title = "3D",
+                                title = "3D Scene",
                                 tint = AmTeal,
                                 onClick = {
                                     onDismiss()
@@ -339,30 +350,72 @@ fun AmAddElementBottomSheet(
 
                     else -> {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            pinnedAePlugins.forEach { plugin ->
+                                AmCompactMediaButton(
+                                    icon = Icons.Default.Extension,
+                                    title = plugin.displayName,
+                                    subtitle = "v${plugin.version}",
+                                    tint = AmTealBright,
+                                    onClick = {
+                                        onDismiss()
+                                        onOpenAePlugin(plugin)
+                                    },
+                                    modifier = Modifier
+                                        .width(156.dp)
+                                        .testTag("fab_plugin_item_${plugin.bundleId}")
+                                )
+                            }
                             AmCompactMediaButton(
-                                icon = Icons.Default.AccountTree,
-                                title = "Null",
-                                tint = RigGreen,
+                                icon = Icons.Default.Extension,
+                                title = "AE Plugins",
+                                subtitle = ".zip / .zxp / .jsxbin",
+                                tint = AmTealBright,
                                 onClick = {
-                                    onAddLayerType(LayerType.NULL_OBJECT)
                                     onDismiss()
+                                    onNavigateTool(StudioDestination.AE_PLUGINS)
                                 },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .width(152.dp)
+                                    .testTag("fab_open_ae_plugins_browser")
                             )
                             AmCompactMediaButton(
-                                icon = Icons.Default.ContentPaste,
-                                title = "Paste",
-                                tint = if (hasCopiedLayer) AmTealBright else TextMuted,
+                                icon = Icons.Default.Extension,
+                                title = "Shader Packs",
+                                subtitle = ".kfpack",
+                                tint = AudioCyan,
                                 onClick = {
-                                    if (hasCopiedLayer) {
-                                        onPasteLayer()
-                                        onDismiss()
-                                    }
+                                    onDismiss()
+                                    onNavigateTool(StudioDestination.PLUGIN_MANAGER)
                                 },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.width(142.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (pinnedAePlugins.isNotEmpty() && activeTab != 4) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        pinnedAePlugins.forEach { plugin ->
+                            AmSegmentChip(
+                                label = "⚡ ${plugin.displayName}",
+                                selected = false,
+                                compact = true,
+                                onClick = {
+                                    onDismiss()
+                                    onOpenAePlugin(plugin)
+                                },
+                                testTag = "fab_quick_plugin_${plugin.bundleId}"
                             )
                         }
                     }
@@ -374,6 +427,17 @@ fun AmAddElementBottomSheet(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    AmQuickFabPill(
+                        icon = Icons.Default.Layers,
+                        label = "Adjust",
+                        iconTint = KeyflowBlueBright,
+                        filled = false,
+                        onClick = {
+                            onAddAdjustmentLayer()
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
                     AmQuickFabPill(
                         icon = Icons.Default.Videocam,
                         label = "Camera",

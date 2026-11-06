@@ -3,35 +3,66 @@ package com.example
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.data.model.LayerType
 import com.example.data.repository.ProjectRepository
 import com.example.engine.PluginPackManager
+import com.example.engine.UiOptimizationEngine
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.authStateFlow
 import com.example.ui.auth.signOutUser
+import com.example.ui.screens.AePluginsBrowserScreen
 import com.example.ui.screens.AppSettingsScreen
 import com.example.ui.screens.AudioReactorScreen
+import com.example.ui.screens.DepthMapScreen
 import com.example.ui.screens.EditorWorkspaceScreen
 import com.example.ui.screens.EffectsBrowserScreen
 import com.example.ui.screens.ExportPipelineScreen
 import com.example.ui.screens.GraphEditorScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.ImportPreviewScreen
 import com.example.ui.screens.PluginManagerScreen
 import com.example.ui.screens.Workspace3DScreen
 import com.example.ui.theme.FramePollutionTheme
@@ -46,18 +77,18 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
 
-    private val _incomingPluginPackUri = MutableStateFlow<Uri?>(null)
+    private val _incomingUniversalUri = MutableStateFlow<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PluginPackManager.ensureInitialized(applicationContext)
-        handleIncomingPluginIntent(intent)
+        handleIncomingFileIntent(intent)
         enableEdgeToEdge()
         setContent {
             FramePollutionTheme {
                 FramePollutionAppRoot(
-                    incomingPluginPackFlow = _incomingPluginPackUri.asStateFlow(),
-                    onConsumeIncomingPluginPack = { _incomingPluginPackUri.value = null }
+                    incomingUniversalUriFlow = _incomingUniversalUri.asStateFlow(),
+                    onConsumeIncomingUniversalUri = { _incomingUniversalUri.value = null }
                 )
             }
         }
@@ -66,45 +97,48 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleIncomingPluginIntent(intent)
+        handleIncomingFileIntent(intent)
     }
 
-    private fun handleIncomingPluginIntent(intent: Intent?) {
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        UiOptimizationEngine.onTrimMemory(level)
+    }
+
+    private fun handleIncomingFileIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
         val dataUri = intent.data ?: return
-        // Pre-unpack into disk storage immediately so even unauthenticated launches persist the pack
-        runCatching {
-            PluginPackManager.importPackFromUri(applicationContext, dataUri)
+        val uriText = dataUri.toString().lowercase()
+        if (uriText.endsWith(".kfpack") || uriText.endsWith(".fppack")) {
+            runCatching {
+                PluginPackManager.importPackFromUri(applicationContext, dataUri)
+            }
         }
-        _incomingPluginPackUri.value = dataUri
+        _incomingUniversalUri.value = dataUri
     }
 }
 
 @Composable
 fun FramePollutionAppRoot(
-    incomingPluginPackFlow: StateFlow<Uri?> = MutableStateFlow<Uri?>(null).asStateFlow(),
-    onConsumeIncomingPluginPack: () -> Unit = {}
+    incomingUniversalUriFlow: StateFlow<Uri?> = MutableStateFlow<Uri?>(null).asStateFlow(),
+    onConsumeIncomingUniversalUri: () -> Unit = {}
 ) {
     val auth = Firebase.auth
-    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
-    val user = currentUser
+    val user = auth.currentUser
 
-    if (user == null) {
-        AuthScreen()
-    } else {
-        AuthenticatedStudioShell(
-            currentUserId = user.uid,
-            incomingPluginPackFlow = incomingPluginPackFlow,
-            onConsumeIncomingPluginPack = onConsumeIncomingPluginPack
-        )
-    }
+    // Bypass auth screen and use a guest user ID
+    AuthenticatedStudioShell(
+        currentUserId = user?.uid ?: "guest_user",
+        incomingUniversalUriFlow = incomingUniversalUriFlow,
+        onConsumeIncomingUniversalUri = onConsumeIncomingUniversalUri
+    )
 }
 
 @Composable
 private fun AuthenticatedStudioShell(
     currentUserId: String,
-    incomingPluginPackFlow: StateFlow<Uri?>,
-    onConsumeIncomingPluginPack: () -> Unit
+    incomingUniversalUriFlow: StateFlow<Uri?>,
+    onConsumeIncomingUniversalUri: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -133,12 +167,15 @@ private fun AuthenticatedStudioShell(
     val isLiveMic by studioViewModel.isLiveMicActive.collectAsStateWithLifecycle()
     val installedPluginSuites by studioViewModel.installedPluginSuites.collectAsStateWithLifecycle()
     val pluginShaderDiagnostics by studioViewModel.pluginShaderDiagnostics.collectAsStateWithLifecycle()
-    val incomingPluginUri by incomingPluginPackFlow.collectAsStateWithLifecycle()
+    val installedAePlugins by studioViewModel.installedAePlugins.collectAsStateWithLifecycle()
+    val rotoStrokes by studioViewModel.rotoEngine.strokes.collectAsStateWithLifecycle()
+    val rotoModelState by studioViewModel.rotoEngine.modelState.collectAsStateWithLifecycle()
+    val incomingUri by incomingUniversalUriFlow.collectAsStateWithLifecycle()
 
-    LaunchedEffect(incomingPluginUri) {
-        val uri = incomingPluginUri ?: return@LaunchedEffect
-        studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = true)
-        onConsumeIncomingPluginPack()
+    LaunchedEffect(incomingUri) {
+        val uri = incomingUri ?: return@LaunchedEffect
+        studioViewModel.importUniversalFile(context, uri)
+        onConsumeIncomingUniversalUri()
     }
 
     val pluginSuitesRevision = remember(installedPluginSuites) {
@@ -157,13 +194,27 @@ private fun AuthenticatedStudioShell(
             .firstOrNull { it.extractedWaveform.isNotEmpty() }
             ?.extractedWaveform
             ?: studioViewModel.audioEngine.buildWaveformEnvelope(
-                wsState.activeProject.durationMs,
+                wsState.activeProject.effectiveEditDurationMs(),
                 wsState.activeProject.bpm
             )
     }
     val selectedLayer = wsState.activeProject.layers.firstOrNull { it.id == wsState.selectedLayerId }
 
-    if (wsState.destination != StudioDestination.HOME) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, studioViewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                studioViewModel.pausePlayback()
+                studioViewModel.saveRecentEditsBeforeClosing(silent = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    if (wsState.destination != StudioDestination.HOME && wsState.destination != StudioDestination.IMPORT_PREVIEW) {
         BackHandler {
             studioViewModel.navigateBackToParent()
         }
@@ -178,6 +229,7 @@ private fun AuthenticatedStudioShell(
                 onDeleteProject = studioViewModel::deleteCloudProject,
                 onSignOut = {
                     studioViewModel.pausePlayback()
+                    studioViewModel.saveRecentEditsBeforeClosing(silent = true)
                     signOutUser(
                         credentialManager = credentialManager,
                         onSignOutComplete = {},
@@ -185,8 +237,57 @@ private fun AuthenticatedStudioShell(
                     )
                 },
                 defaultPreferences = preferences,
+                isImportingFile = wsState.isImportingFile,
+                importProgressFraction = wsState.importProgressFraction,
+                importProgressLabel = wsState.importProgressLabel,
                 onOpenSettings = { studioViewModel.navigateTo(StudioDestination.SETTINGS) },
-                onOpenPlugins = { studioViewModel.navigateTo(StudioDestination.PLUGIN_MANAGER) }
+                onOpenPlugins = { studioViewModel.navigateTo(StudioDestination.AE_PLUGINS) },
+                onImportProjectXml = { uri -> studioViewModel.importUniversalFile(context, uri) },
+                installedAePlugins = installedAePlugins,
+                onImportAePluginUri = studioViewModel::importAePluginFromUri,
+                onToggleAePluginEnabled = studioViewModel::toggleAePluginEnabled,
+                onToggleAePluginShowInTimeline = studioViewModel::toggleAePluginShowInTimeline,
+                onToggleAePluginPinToAddMenu = studioViewModel::toggleAePluginPinToAddMenu,
+                onToggleAePluginFileNetwork = studioViewModel::toggleAePluginFileNetwork,
+                onUseAePlugin = { plugin -> studioViewModel.openFloatingPlugin(plugin) },
+                onRunAePluginProbe = studioViewModel::runAePluginProbe,
+                onClearAePluginData = studioViewModel::clearAePluginData,
+                onUninstallAePlugin = studioViewModel::uninstallAePlugin,
+                depthEngine = studioViewModel.depthEngine,
+                activeProjectId = wsState.activeProject.id,
+                onImportDepthIntoProjects = studioViewModel::importDepthMapIntoProjects,
+                onStatusMessage = studioViewModel::postTransientBanner
+            )
+        }
+        StudioDestination.AE_PLUGINS -> {
+            AePluginsBrowserScreen(
+                installedPlugins = installedAePlugins,
+                onImportPluginUri = studioViewModel::importAePluginFromUri,
+                onToggleEnabled = studioViewModel::toggleAePluginEnabled,
+                onToggleShowInTimeline = studioViewModel::toggleAePluginShowInTimeline,
+                onTogglePinToAddMenu = studioViewModel::toggleAePluginPinToAddMenu,
+                onToggleFileNetworkAllowed = studioViewModel::toggleAePluginFileNetwork,
+                onUsePlugin = { plugin -> studioViewModel.openFloatingPlugin(plugin) },
+                onRunProbe = studioViewModel::runAePluginProbe,
+                onClearData = studioViewModel::clearAePluginData,
+                onUninstallPlugin = studioViewModel::uninstallAePlugin,
+                onStatusMessage = studioViewModel::postTransientBanner,
+                onBack = studioViewModel::navigateBackToParent
+            )
+        }
+        StudioDestination.DEPTH_MAP -> {
+            val knownProjects = (cloudProjects as? com.example.viewmodel.UiState.Success)?.data.orEmpty()
+            DepthMapScreen(
+                depthEngine = studioViewModel.depthEngine,
+                projects = knownProjects,
+                activeProjectId = wsState.activeProject.id,
+                onImportDepthIntoProjects = studioViewModel::importDepthMapIntoProjects,
+                onStatusMessage = studioViewModel::postTransientBanner
+            )
+        }
+        StudioDestination.IMPORT_PREVIEW -> {
+            ImportPreviewScreen(
+                viewModel = studioViewModel
             )
         }
         StudioDestination.SETTINGS -> {
@@ -195,9 +296,11 @@ private fun AuthenticatedStudioShell(
                 codecCapabilities = studioViewModel.codecCapabilities,
                 installedSuitesCount = installedPluginSuites.size,
                 installedPluginEffectsCount = totalPluginEffectsCount,
+                installedAePluginsCount = installedAePlugins.size,
                 onOpenPluginManager = { studioViewModel.navigateTo(StudioDestination.PLUGIN_MANAGER) },
+                onOpenAePlugins = { studioViewModel.navigateTo(StudioDestination.AE_PLUGINS) },
                 onImportPluginUri = { uri ->
-                    studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = true)
+                    studioViewModel.importUniversalFile(context, uri)
                 },
                 onUpdatePreferences = studioViewModel::updateStudioPreferences,
                 onApplyQualityNow = studioViewModel::setPreviewQuality,
@@ -244,7 +347,7 @@ private fun AuthenticatedStudioShell(
                 audioSpectrum = spectrum,
                 preferences = preferences,
                 preRenderState = preRenderState,
-                onBack = { studioViewModel.navigateTo(StudioDestination.HOME) },
+                onBack = studioViewModel::closeAndSaveActiveProject,
                 onSaveCloud = { studioViewModel.saveCurrentProjectToCloud(silent = false) },
                 onUndo = studioViewModel::undo,
                 onRedo = studioViewModel::redo,
@@ -263,13 +366,28 @@ private fun AuthenticatedStudioShell(
                 onToggleBeatBookmark = studioViewModel::toggleBeatBookmarkAtPlayhead,
                 onJumpBookmark = studioViewModel::jumpToBookmark,
                 onJumpKeyframe = studioViewModel::jumpToAdjacentKeyframe,
-                onSelectLayer = studioViewModel::selectLayer,
+                onSelectLayer = { id -> studioViewModel.selectLayer(id) },
+                onToggleLayerMultiSelection = studioViewModel::toggleLayerMultiSelection,
+                onGroupSelectedLayers = studioViewModel::groupSelectedLayers,
+                onPreRenderLayerOrGroup = { studioViewModel.triggerSelectedLayerOrGroupPreRender(context) },
+                onImportUniversalFile = { uri -> studioViewModel.importUniversalFile(context, uri) },
+                onDeselectLayer = studioViewModel::deselectLayer,
+                onToggleCameraPreview = studioViewModel::toggleActiveCameraPreview,
                 onSelectProperty = studioViewModel::selectProperty,
                 onUpdatePropertyValue = studioViewModel::updateSelectedPropertyValue,
                 onUpdateExpression = studioViewModel::updatePropertyExpression,
                 onDragLayerOnCanvas = studioViewModel::dragSelectedLayerByDelta,
                 onScaleAndRotateLayerOnCanvas = studioViewModel::scaleAndRotateSelectedLayerByDelta,
                 onResetTransform = studioViewModel::resetSelectedLayerTransform,
+                onResetPropertyTarget = studioViewModel::resetPropertyTarget,
+                onResetMoveSubMode = studioViewModel::resetMoveSubMode,
+                onResetStroke = studioViewModel::resetSelectedLayerStroke,
+                onResetShadow = studioViewModel::resetSelectedLayerShadow,
+                onResetSingleEffectParam = { fxId, slot, key ->
+                    if (selectedLayer != null) {
+                        studioViewModel.resetSingleEffectParameter(selectedLayer.id, fxId, slot, key)
+                    }
+                },
                 onToggleKeyframe = { studioViewModel.toggleKeyframeAtPlayhead() },
                 onUpdateBezierHandles = studioViewModel::updateBezierHandlesForActiveSegment,
                 onSelectEffectForInspection = studioViewModel::selectEffectForInspection,
@@ -299,12 +417,14 @@ private fun AuthenticatedStudioShell(
                 onExtractAudioFromVideo = { studioViewModel.extractAudioFromSelectedVideo(context) },
                 onAddLayer = studioViewModel::addLayer,
                 onAddShapeKind = studioViewModel::addShapeLayerWithKind,
+                onAddAdjustmentLayer = studioViewModel::addAdjustmentLayer,
                 onCopyLayer = studioViewModel::copySelectedLayer,
                 onPasteLayer = studioViewModel::pasteClipboardLayer,
                 onCopyEffects = studioViewModel::copySelectedLayerEffects,
                 onPasteEffects = studioViewModel::pasteEffectsToSelectedLayer,
                 onDuplicateLayer = studioViewModel::duplicateSelectedLayer,
                 onMoveLayerZOrder = studioViewModel::moveLayerZOrder,
+                onMoveLayerToIndex = studioViewModel::moveLayerToIndex,
                 onRenameLayer = studioViewModel::renameLayer,
                 onToggleSoloLayer = studioViewModel::toggleSoloLayer,
                 onGroupIntoNullRig = studioViewModel::groupVisibleLayersIntoNullRig,
@@ -335,11 +455,25 @@ private fun AuthenticatedStudioShell(
                 onImportCustomFont = { uri -> studioViewModel.importCustomFont(context, uri) },
                 onMoveLayerTimeRange = studioViewModel::moveLayerTimeRange,
                 onAutoDetectBassBeats = { sens -> studioViewModel.autoDetectNotableBassBeats(context, sens) },
+                onBakeBeatsToKeyframes = studioViewModel::bakeBeatsToPropertyKeyframes,
                 onClearAllBeatMarkers = studioViewModel::clearAllBeatMarkers,
                 onBindAudioToProperty = studioViewModel::bindAudioReactorToSelectedProperty,
                 onUpdateShapeKind = studioViewModel::updateLayerShapeKind,
                 onUpdateBlendMode = studioViewModel::updateLayerBlendMode,
-                onUpdateBorderShadow = studioViewModel::updateLayerBorderAndShadow,
+                onUpdateBorderShadow = { id, sEn, sW, sHex, sPos, shEn, shBlur, shHex, shX, shY ->
+                    studioViewModel.updateLayerBorderAndShadow(
+                        layerId = id,
+                        strokeEnabled = sEn,
+                        strokeWidth = sW,
+                        strokeColorHex = sHex,
+                        shadowEnabled = shEn,
+                        shadowBlur = shBlur,
+                        shadowColorHex = shHex,
+                        strokePosition = sPos,
+                        shadowOffsetX = shX,
+                        shadowOffsetY = shY
+                    )
+                },
                 onUpdate3DPrimitive = { id, prim -> studioViewModel.update3DPrimitive(id, prim) },
                 onUpdateEffectNode = { updated ->
                     if (selectedLayer != null) {
@@ -358,7 +492,37 @@ private fun AuthenticatedStudioShell(
                 },
                 onUpdateProjectSettings = studioViewModel::updateProjectTimingAndResolution,
                 onViewportGesture = studioViewModel::updateCanvasViewportGesture,
-                onResetViewport = studioViewModel::resetCanvasViewport
+                onResetViewport = studioViewModel::resetCanvasViewport,
+                onSetAddFabExpanded = studioViewModel::setAddFabExpanded,
+                onToggleGroupExpanded = studioViewModel::toggleGroupExpanded,
+                installedAePlugins = installedAePlugins,
+                pluginHostRepository = studioViewModel.pluginHostRepository,
+                onOpenAePlugin = { plugin -> studioViewModel.openFloatingPlugin(plugin) },
+                onCloseFloatingPlugin = studioViewModel::closeFloatingPlugin,
+                onStatusMessage = studioViewModel::postTransientBanner,
+                rotoStrokes = rotoStrokes,
+                rotoModelState = rotoModelState,
+                onAddMask = studioViewModel::addLayerMask,
+                onSelectMask = studioViewModel::selectLayerMask,
+                onSetPenMaskEditMode = studioViewModel::setPenMaskEditMode,
+                onAddPenMaskVertex = studioViewModel::addPenMaskVertex,
+                onUpdateMask = studioViewModel::updateLayerMask,
+                onRemoveMask = studioViewModel::removeLayerMask,
+                onActivateRotoBrush = studioViewModel::activateRotoBrushTool,
+                onDismissRotoDownloadDialog = studioViewModel::dismissRotoDownloadDialog,
+                onConfirmDownloadRotoModels = studioViewModel::confirmDownloadRotoModels,
+                onSetRotoTargetMode = studioViewModel::setRotoTargetMode,
+                onSetRotoBrushRadiusDp = studioViewModel::setRotoBrushRadiusDp,
+                onAddRotoBrushStroke = studioViewModel::addRotoBrushStroke,
+                onRunAutoRoto = studioViewModel::runAutoRotoAtPlayhead,
+                onUndoRotoStroke = studioViewModel::undoRotoBrushStroke,
+                onRedoRotoStroke = studioViewModel::redoRotoBrushStroke,
+                onClearRotoStrokes = studioViewModel::clearRotoBrushStrokes,
+                onPropagateRoto = studioViewModel::propagateRotoAcrossLayer,
+                onCancelRotoPropagation = studioViewModel::cancelRotoPropagation,
+                onRelinkMissingMedia = { layerId, uri ->
+                    studioViewModel.relinkMissingLayerMedia(context, layerId, uri)
+                }
             )
         }
         StudioDestination.EFFECTS_BROWSER -> {
@@ -376,7 +540,7 @@ private fun AuthenticatedStudioShell(
                 onPluginSubcategoryChange = studioViewModel::setSelectedPluginCategoryFilter,
                 onOpenPluginManager = { studioViewModel.navigateTo(StudioDestination.PLUGIN_MANAGER) },
                 onImportPluginPackUri = { uri ->
-                    studioViewModel.importPluginPackFromUri(context, uri, navigateToManager = false)
+                    studioViewModel.importUniversalFile(context, uri)
                 },
                 onAddEffect = studioViewModel::addEffectToSelectedLayer,
                 onUpdateEffectNode = { updated ->
@@ -445,6 +609,7 @@ private fun AuthenticatedStudioShell(
                 onSelectProperty = studioViewModel::selectProperty,
                 onBindAudioToProperty = studioViewModel::bindAudioReactorToSelectedProperty,
                 onRegenerateBeats = studioViewModel::updateProjectBpmAndRegenerateBeats,
+                onBakeBeatsToKeyframes = studioViewModel::bakeBeatsToPropertyKeyframes,
                 onToggleLiveMic = studioViewModel::toggleLiveMicrophone,
                 onBack = { studioViewModel.navigateTo(StudioDestination.EDITOR) }
             )
@@ -456,6 +621,7 @@ private fun AuthenticatedStudioShell(
                 onOrbitCamera = studioViewModel::orbit3DCamera,
                 onAdd3DLayer = { studioViewModel.addLayer(LayerType.MODEL_3D, "") },
                 onSelectPrimitive = studioViewModel::update3DPrimitive,
+                onUpdateLayer3DRotation = studioViewModel::updateLayerPropertyByTarget,
                 onBack = { studioViewModel.navigateTo(StudioDestination.EDITOR) }
             )
         }
@@ -463,10 +629,76 @@ private fun AuthenticatedStudioShell(
             ExportPipelineScreen(
                 project = wsState.activeProject,
                 exportState = wsState.exportState,
+                preferences = preferences,
+                onUpdatePreferences = studioViewModel::updateStudioPreferences,
                 onUpdateExportConfig = studioViewModel::updateExportConfiguration,
                 onStartExport = studioViewModel::runHardwareMp4Export,
+                onExportProjectXml = studioViewModel::exportProjectXmlToUri,
+                onImportProjectXml = studioViewModel::importUniversalFile,
                 onBack = { studioViewModel.navigateTo(StudioDestination.EDITOR) }
             )
         }
+    }
+
+    val pendingPasswordUri by studioViewModel.pendingPasswordArchiveUri.collectAsStateWithLifecycle()
+    if (pendingPasswordUri != null) {
+        var passwordInput by remember { mutableStateOf("") }
+        var passwordVisible by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { studioViewModel.pendingPasswordArchiveUri.value = null },
+            title = {
+                Text(
+                    text = "Password Protected Archive",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "This AE plugin archive is encrypted. Enter the password to decrypt and install automatically:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (passwordVisible) "Hide password" else "Show password"
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("archive_password_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val uri = pendingPasswordUri ?: return@Button
+                        studioViewModel.importPluginWithPassword(context, uri, passwordInput)
+                    },
+                    modifier = Modifier.testTag("submit_archive_password_button")
+                ) {
+                    Text("Import")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { studioViewModel.pendingPasswordArchiveUri.value = null },
+                    modifier = Modifier.testTag("cancel_archive_password_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

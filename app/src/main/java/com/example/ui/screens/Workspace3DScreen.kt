@@ -39,6 +39,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +52,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.LayerType
 import com.example.data.model.Primitive3DType
+import com.example.data.model.PropertyTarget
+import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
 import com.example.ui.components.AmActionTileButton
 import com.example.ui.components.AmPrimaryCtaButton
@@ -70,12 +76,17 @@ fun Workspace3DScreen(
     onOrbitCamera: (yawDelta: Float, pitchDelta: Float, zoomFactor: Float) -> Unit,
     onAdd3DLayer: () -> Unit,
     onSelectPrimitive: (String, Primitive3DType, String) -> Unit,
+    onUpdateLayer3DRotation: (String, PropertyTarget, Float) -> Unit = { _, _, _ -> },
     onBack: () -> Unit
 ) {
     val project = state.activeProject
     val active3DLayer = project.layers.firstOrNull {
         it.id == state.selectedLayerId && it.type == LayerType.MODEL_3D
     } ?: project.layers.firstOrNull { it.type == LayerType.MODEL_3D }
+    val rotatableLayer = active3DLayer
+        ?: project.layers.firstOrNull { it.id == state.selectedLayerId && it.type != LayerType.AUDIO }
+        ?: project.layers.lastOrNull { it.type != LayerType.AUDIO }
+    var activeRotAxis by remember { mutableStateOf(PropertyTarget.ROTATION_Y) }
 
     val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null && active3DLayer != null) {
@@ -129,6 +140,10 @@ fun Workspace3DScreen(
                 GlPreviewCanvas(
                     project = project,
                     playheadMs = state.playheadMs,
+                    isPlaying = state.isPlaying,
+                    previewQuality = state.previewQuality,
+                    isLooping = state.isLoopPlayback,
+                    projectRevision = state.projectRevision,
                     audioSnapshot = audioSpectrum,
                     canvasZoom = 1f,
                     canvasPanX = 0f,
@@ -228,6 +243,63 @@ fun Workspace3DScreen(
                             text = "No 3D layer",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
+                        )
+                    }
+
+                    if (rotatableLayer != null) {
+                        val rotEval = AnimationEvaluator.evaluateProperty(
+                            rotatableLayer.propertyFor(activeRotAxis),
+                            state.playheadMs,
+                            audioSpectrum
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf(
+                                PropertyTarget.ROTATION_X,
+                                PropertyTarget.ROTATION_Y,
+                                PropertyTarget.ROTATION_Z
+                            ).forEach { axis ->
+                                AmSegmentChip(
+                                    label = axis.label,
+                                    selected = activeRotAxis == axis,
+                                    compact = true,
+                                    onClick = { activeRotAxis = axis },
+                                    testTag = "ws3d_axis_${axis.name}"
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            listOf(-360f, -180f, -90f, 0f, 90f, 180f, 360f).forEach { deg ->
+                                AmSegmentChip(
+                                    label = "${deg.toInt()}°",
+                                    selected = kotlin.math.abs(rotEval - deg) < 0.5f,
+                                    compact = true,
+                                    onClick = {
+                                        onUpdateLayer3DRotation(rotatableLayer.id, activeRotAxis, deg)
+                                    },
+                                    testTag = "ws3d_deg_${deg.toInt()}"
+                                )
+                            }
+                        }
+
+                        AmTickWheelScrubber(
+                            value = rotEval,
+                            minValue = -360f,
+                            maxValue = 360f,
+                            unit = "°",
+                            label = activeRotAxis.label,
+                            unbounded = true,
+                            onValueChange = { deg ->
+                                onUpdateLayer3DRotation(rotatableLayer.id, activeRotAxis, deg)
+                            },
+                            onReset = {
+                                onUpdateLayer3DRotation(rotatableLayer.id, activeRotAxis, 0f)
+                            },
+                            testTag = "ws3d_rotation_scrubber"
                         )
                     }
 

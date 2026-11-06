@@ -85,6 +85,8 @@ object EffectThumbnailPreviewer {
         synchronized(basePixelsCache) { basePixelsCache.evictAll() }
     }
 
+    fun clearCache() = clearThumbnails()
+
     suspend fun generateLowResEffectThumbnail(
         context: Context?,
         selectedLayer: Layer?,
@@ -96,21 +98,31 @@ object EffectThumbnailPreviewer {
         val cacheKey = "$sig|${effect.id}"
         synchronized(thumbCache) { thumbCache.get(cacheKey) }?.let { return@withContext it }
 
+        while (UiOptimizationEngine.shouldPauseHeavyThumbnails()) {
+            kotlinx.coroutines.delay(48L)
+        }
+
         workerSemaphore.withPermit {
             synchronized(thumbCache) { thumbCache.get(cacheKey) }?.let { return@withContext it }
 
-            val basePixels = obtainBaseLayerPixels(context, selectedLayer, playheadMs, audio, sig)
-            val outPixels = IntArray(PIXEL_COUNT)
-            applyLowResEffectKernel(basePixels, outPixels, effect)
+            try {
+                val basePixels = obtainBaseLayerPixels(context, selectedLayer, playheadMs, audio, sig)
+                val outPixels = IntArray(PIXEL_COUNT)
+                applyLowResEffectKernel(basePixels, outPixels, effect)
 
-            // Compress directly into RGB_565 (2 bytes/px — 50% smaller RAM footprint, zero extra bitmap alloc!)
-            val compressed565 = Bitmap.createBitmap(THUMB_SIZE, THUMB_SIZE, Bitmap.Config.RGB_565)
-            compressed565.setPixels(outPixels, 0, THUMB_SIZE, 0, 0, THUMB_SIZE, THUMB_SIZE)
-            val outBmp = compressed565.asImageBitmap()
-            synchronized(thumbCache) {
-                thumbCache.put(cacheKey, outBmp)
+                // Compress directly into RGB_565 (2 bytes/px — 50% smaller RAM footprint, zero extra bitmap alloc!)
+                val compressed565 = Bitmap.createBitmap(THUMB_SIZE, THUMB_SIZE, Bitmap.Config.RGB_565)
+                compressed565.setPixels(outPixels, 0, THUMB_SIZE, 0, 0, THUMB_SIZE, THUMB_SIZE)
+                val outBmp = compressed565.asImageBitmap()
+                synchronized(thumbCache) {
+                    thumbCache.put(cacheKey, outBmp)
+                }
+                outBmp
+            } catch (_: Throwable) {
+                // Fallback 56x56 blank swatch on OOM or decoding failure
+                val blank = Bitmap.createBitmap(THUMB_SIZE, THUMB_SIZE, Bitmap.Config.RGB_565)
+                blank.asImageBitmap()
             }
-            outBmp
         }
     }
 
@@ -235,6 +247,11 @@ object EffectThumbnailPreviewer {
                     stroke.color = Color.WHITE
                     stroke.strokeWidth = 1.4f
                     c.drawCircle(0f, 0f, r * 0.4f, stroke)
+                }
+                LayerType.DRAWING -> {
+                    val drawBmp = KeyflowTextAndBorderRenderer.rasterizeDrawingLayerBitmap(layer, 0f, 100f, 128)
+                    c.drawBitmap(drawBmp, null, RectF(-s * 0.42f, -s * 0.42f, s * 0.42f, s * 0.42f), fill)
+                    drawBmp.recycle()
                 }
                 else -> {
                     val r = s * 0.30f

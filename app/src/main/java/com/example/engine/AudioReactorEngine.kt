@@ -183,12 +183,15 @@ class AudioReactorEngine {
             it.visible && it.type == LayerType.VIDEO && it.mediaUri.isNotBlank() && !it.audioMuted
         }
 
+        val editSpanMs = project.effectiveEditDurationMs()
         if (context != null && audioSourceLayer != null) {
+            val layerSpanMs = (audioSourceLayer.endTimeMs - audioSourceLayer.startTimeMs).coerceAtLeast(500L)
+            val spd = audioSourceLayer.speedMultiplier.coerceIn(0.10f, 8.0f)
+            val maxSourceDecodeMs = (layerSpanMs * spd).toLong().coerceIn(500L, 1_800_000L)
             val decodedBassHops = decodeLowPassBassEnvelope(
                 context = context,
                 mediaUri = audioSourceLayer.mediaUri,
-                maxDurationMs = ((audioSourceLayer.endTimeMs - audioSourceLayer.startTimeMs) *
-                    audioSourceLayer.speedMultiplier.coerceIn(0.25f, 3.0f)).toLong().coerceIn(500L, 60_000L),
+                maxDurationMs = maxSourceDecodeMs,
                 startOffsetMs = audioSourceLayer.sourceOffsetMs,
                 hopDurationMs = 20L
             )
@@ -197,12 +200,11 @@ class AudioReactorEngine {
                     hopEnergies = decodedBassHops,
                     hopDurationMs = 20L,
                     sensitivity = safeSens,
-                    minCooldownMs = 300L
+                    minCooldownMs = 260L
                 )
-                val spd = audioSourceLayer.speedMultiplier.coerceIn(0.25f, 3.0f)
                 val mapped = rawPeaks.mapNotNull { marker ->
                     val compMs = audioSourceLayer.startTimeMs + (marker.timeMs / spd).toLong()
-                    if (compMs in audioSourceLayer.startTimeMs..min(project.durationMs, audioSourceLayer.endTimeMs)) {
+                    if (compMs in audioSourceLayer.startTimeMs..audioSourceLayer.endTimeMs) {
                         marker.copy(timeMs = compMs)
                     } else null
                 }
@@ -221,13 +223,13 @@ class AudioReactorEngine {
                 hopEnergies = wf.toFloatArray(),
                 hopDurationMs = hopMs,
                 sensitivity = safeSens,
-                minCooldownMs = 320L
-            ).map { it.copy(timeMs = (audioSourceLayer.startTimeMs + it.timeMs).coerceAtMost(project.durationMs)) }
+                minCooldownMs = 280L
+            ).map { it.copy(timeMs = (audioSourceLayer.startTimeMs + it.timeMs).coerceAtMost(audioSourceLayer.endTimeMs)) }
             if (peaks.isNotEmpty()) return@withContext peaks
         }
 
-        // Clean composition fallback (no media imported yet): sparse downbeat/kick accents only (never spam!)
-        generateSparseDownbeatMarkers(project.durationMs, project.bpm, safeSens)
+        // Clean composition fallback (no media imported yet): sparse downbeat/kick accents across edit span
+        generateSparseDownbeatMarkers(editSpanMs, project.bpm, safeSens)
     }
 
     private fun generateSparseDownbeatMarkers(
@@ -323,8 +325,8 @@ class AudioReactorEngine {
             var samplesPerHop = ((sampleRate * hopDurationMs) / 1000L).toInt().coerceAtLeast(64)
             var hopAccumSq = 0.0
             var hopSampleCounter = 0
-            val hops = ArrayList<Float>(1024)
-            val maxHops = (maxDurationMs / hopDurationMs).toInt().coerceIn(25, 3000)
+            val hops = ArrayList<Float>(4096)
+            val maxHops = (maxDurationMs / hopDurationMs).toInt().coerceIn(25, 90_000)
 
             val info = MediaCodec.BufferInfo()
             var inputDone = false
@@ -610,8 +612,9 @@ class AudioReactorEngine {
             }
 
             val safeSens = sensitivity.coerceIn(0.10f, 0.95f)
-            val absFloor = max(0.035f, globalMax * (0.34f - safeSens * 0.16f))
-            val prominenceRatio = (2.15f - safeSens * 0.72f).coerceIn(1.38f, 2.30f)
+            // Use adaptive local-section peak so quiet intro/bridge kicks still register alongside loud chorus drops!
+            val sectionWindow = ((4_000L / hopDurationMs.coerceAtLeast(10L)).toInt()).coerceIn(20, 240)
+            val prominenceRatio = (2.10f - safeSens * 0.72f).coerceIn(1.34f, 2.25f)
             val halfWindow = ((500L / hopDurationMs.coerceAtLeast(10L)).toInt()).coerceIn(4, 32)
             val minHopGap = (minCooldownMs / hopDurationMs.coerceAtLeast(1L)).toInt().coerceAtLeast(2)
 
@@ -620,12 +623,22 @@ class AudioReactorEngine {
 
             for (i in 1 until n - 1) {
                 val cur = hopEnergies[i]
+                val secStart = max(0, i - sectionWindow)
+                val secEnd = min(n - 1, i + sectionWindow)
+                var sectionMax = 0f
+                var s = secStart
+                while (s <= secEnd) {
+                    if (hopEnergies[s] > sectionMax) sectionMax = hopEnergies[s]
+                    s += 2
+                }
+                val refMax = max(sectionMax, globalMax * 0.35f)
+                val absFloor = max(0.030f, refMax * (0.32f - safeSens * 0.16f))
                 if (cur < absFloor) continue
                 // Strict local peak with non-trivial attack rise
                 if (cur < hopEnergies[i - 1] || cur < hopEnergies[i + 1]) continue
                 val prevMin = min(hopEnergies[i - 1], hopEnergies[max(0, i - 2)])
                 val onsetRise = cur - prevMin
-                if (onsetRise < globalMax * 0.08f) continue
+                if (onsetRise < refMax * 0.075f) continue
 
                 val wStart = max(0, i - halfWindow)
                 val wEnd = min(n - 1, i + halfWindow)
@@ -636,7 +649,7 @@ class AudioReactorEngine {
                 val localMean = (localSum / (wEnd - wStart + 1).toFloat()).coerceAtLeast(0.001f)
                 if (cur < localMean * prominenceRatio) continue
 
-                val strength = (cur / globalMax).coerceIn(0.45f, 1.0f)
+                val strength = (cur / refMax.coerceAtLeast(0.05f)).coerceIn(0.45f, 1.0f)
                 val timeMs = i * hopDurationMs
 
                 if (i - lastAcceptedHop >= minHopGap) {

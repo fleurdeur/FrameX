@@ -25,7 +25,10 @@ data class EffectParamSpec(
     val maxVal: Float,
     val unit: String = "",
     val fineStep: Float = 0.01f
-)
+) {
+    val min: Float get() = minVal
+    val max: Float get() = maxVal
+}
 
 /**
  * ShaderMode mapping for real-time OpenGL ES 2.0 multipass fragment pipelines:
@@ -54,15 +57,43 @@ data class EffectDefinition(
     val defaultMix: Float = 100f,
     val defaultTintHex: String = "#FFFFFF",
     val colorLabel: String = "Tint Color",
-    val summary: String
+    val summary: String,
+    val isTextOnly: Boolean = id in EffectsCatalog.TEXT_ONLY_EFFECT_IDS,
+    val defaultFeather: Float = 0f
 ) {
+    val paramSpecs: List<EffectParamSpec>
+        get() = paramSpecs()
+
     fun toNode(customIntensity: Float = defaultIntensity): EffectNode {
         val plugin = PluginPackManager.findPluginEffect(id)
-        val cParams = if (plugin != null) {
-            plugin.parameters
-                .filter { it.type != PluginParamType.COLOR }
-                .associate { p -> p.key to AnimatableProperty(p.defaultFloat) }
-        } else emptyMap()
+        val cParams = when {
+            plugin != null -> {
+                plugin.parameters
+                    .filter { it.type != PluginParamType.COLOR }
+                    .associate { p -> p.key to AnimatableProperty(p.defaultFloat) }
+            }
+            id == "Keyflow_Text_Animator" -> {
+                mapOf(
+                    "kf_unit_mode" to AnimatableProperty(0f),    // 0 = Characters, 1 = Words, 2 = Lines
+                    "kf_range_start" to AnimatableProperty(0f),  // 0..100 %
+                    "kf_range_end" to AnimatableProperty(65f),   // 0..100 %
+                    "kf_phase" to AnimatableProperty(0f),        // -100..100 %
+                    "kf_smooth" to AnimatableProperty(35f),      // 0..100 %
+                    "kf_offset_x" to AnimatableProperty(0f),     // unbounded px
+                    "kf_offset_y" to AnimatableProperty(-48f),   // unbounded px
+                    "kf_scale" to AnimatableProperty(72f),       // 0..300 %
+                    "kf_rotation" to AnimatableProperty(-12f),   // -360..360 deg
+                    "kf_opacity" to AnimatableProperty(15f),     // 0..100 %
+                    "kf_tracking" to AnimatableProperty(4f)      // -60..120 px
+                )
+            }
+            id == "Text_Transform" -> {
+                mapOf(
+                    "kf_unit_mode" to AnimatableProperty(0f)     // 0 = Characters, 1 = Words, 2 = Lines
+                )
+            }
+            else -> emptyMap()
+        }
         val cColors = if (plugin != null) {
             plugin.parameters
                 .filter { it.type == PluginParamType.COLOR }
@@ -78,12 +109,14 @@ data class EffectDefinition(
             frequencyParam = defaultFrequency,
             angleParam = defaultAngle,
             mixParam = defaultMix,
+            feather = defaultFeather,
             tintColorHex = defaultTintHex,
             primaryProp = AnimatableProperty(customIntensity),
             secondaryProp = AnimatableProperty(defaultSecondary),
             frequencyProp = AnimatableProperty(defaultFrequency),
             angleProp = AnimatableProperty(defaultAngle),
             mixProp = AnimatableProperty(defaultMix),
+            featherProp = AnimatableProperty(defaultFeather),
             customParams = cParams,
             customColors = cColors
         )
@@ -95,6 +128,15 @@ data class EffectDefinition(
      * all 100% keyframeable with controllable Bezier curves!
      */
     fun paramSpecs(): List<EffectParamSpec> {
+        val base = rawParamSpecs()
+        return if (base.any { it.slot == EffectParamSlot.FEATHER }) {
+            base
+        } else {
+            base + EffectParamSpec(EffectParamSlot.FEATHER, "Feather", 0f, 100f, "%", 0.5f)
+        }
+    }
+
+    private fun rawParamSpecs(): List<EffectParamSpec> {
         PluginPackManager.findPluginEffect(id)?.let { plugin ->
             val numeric = plugin.parameters.filter { it.type != PluginParamType.COLOR }
             val slots = listOf(
@@ -214,6 +256,15 @@ data class EffectDefinition(
 
 object EffectsCatalog {
 
+    val TEXT_ONLY_EFFECT_IDS: Set<String> = setOf(
+        "Text_Transform",
+        "Keyflow_Text_Animator",
+        "Text_Spacing"
+    )
+
+    fun isTextOnlyEffect(effectId: String): Boolean =
+        TEXT_ONLY_EFFECT_IDS.any { it.equals(effectId, ignoreCase = true) }
+
     @Volatile
     private var pluginDefsCache: List<EffectDefinition>? = null
 
@@ -259,10 +310,11 @@ object EffectsCatalog {
         )
         addAll(desktop)
 
-        // 2. Alight Motion Staples (now including authentic Text Transform + Text Spacing!) - 20 Effects
+        // 2. Alight Motion & KeyFlow Staples (including authentic Text Animator + Text Transform + Text Spacing)
         val alightStaples = listOf(
-            EffectDefinition("Text_Transform", "Text Transform", EffectCategory.ALIGHT_STAPLES, 11, 0f, 100f, 0f, -42f, 100f, "#FFFFFF", "Highlight Tint", "Alight Motion per-character Start/End/Phase/Angle/Scale/Alpha range animator"),
-            EffectDefinition("Text_Spacing", "Text Spacing & Tracking", EffectCategory.ALIGHT_STAPLES, 11, 0f, 100f, 18f, 0f, 100f, "#FFFFFF", "Text Tint", "Dynamic letter tracking & line spacing expander"),
+            EffectDefinition("Keyflow_Text_Animator", "Text Animator (KeyFlow)", EffectCategory.ALIGHT_STAPLES, 11, 0f, 65f, 0f, 0f, 100f, "#FFFFFF", "Highlight Tint", "KeyFlow range selector (Char/Word/Line) with Position, Scale, Rotation, Opacity & Tracking", isTextOnly = true),
+            EffectDefinition("Text_Transform", "Text Transform", EffectCategory.ALIGHT_STAPLES, 11, 0f, 65f, 0f, -36f, 100f, "#FFFFFF", "Highlight Tint", "Per-character Start/End/Phase range transform with Position, Scale, Rotation & Alpha", isTextOnly = true),
+            EffectDefinition("Text_Spacing", "Text Spacing & Tracking", EffectCategory.ALIGHT_STAPLES, 11, 0f, 100f, 18f, 0f, 100f, "#FFFFFF", "Text Tint", "Dynamic letter tracking & line skew range expander", isTextOnly = true),
             EffectDefinition("Tiles", "Tiles (Seamless Mirror)", EffectCategory.ALIGHT_STAPLES, 5, 1.35f, 0.50f, 0f, 0f, 100f, "#FFFFFF", "Tint Color", "Crop, Offset, Phase & Mirror seamless grid"),
             EffectDefinition("Oscillate", "Oscillate", EffectCategory.ALIGHT_STAPLES, 10, 45f, 0.50f, 2.0f, 45f, 100f, "#FFFFFF", "Tint Color", "Angle, Frequency (Hz), Magnitude (px) & Sine/Triangle Phase"),
             EffectDefinition("Swing", "Swing Pendulum", EffectCategory.ALIGHT_STAPLES, 10, -24f, 24f, 1.5f, 0f, 100f, "#FFFFFF", "Tint Color", "Frequency, Angle 1, Angle 2 & Phase rotational rocker"),
@@ -418,6 +470,10 @@ object EffectsCatalog {
         return allEffects.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: allEffects.first()
     }
 
+    fun findByIdOrNull(id: String): EffectDefinition? {
+        return allEffects.firstOrNull { it.id.equals(id, ignoreCase = true) }
+    }
+
     fun filter(category: EffectCategory?, query: String): List<EffectDefinition> {
         val q = query.trim().lowercase()
         return allEffects.filter { def ->
@@ -434,12 +490,12 @@ object EffectsCatalog {
      * Exact Per-Effect Alight Motion Property Tables!
      */
     internal fun customSpecsForEffect(id: String): List<EffectParamSpec>? = when (id) {
-        "Text_Transform" -> listOf(
+        "Keyflow_Text_Animator", "Text_Transform" -> listOf(
             EffectParamSpec(EffectParamSlot.PRIMARY, "Start", 0f, 100f, "%", 0.5f),
             EffectParamSpec(EffectParamSlot.SECONDARY, "End", 0f, 100f, "%", 0.5f),
             EffectParamSpec(EffectParamSlot.FREQUENCY, "Phase", -100f, 100f, "%", 0.5f),
-            EffectParamSpec(EffectParamSlot.ANGLE, "Offset / Angle", -180f, 180f, "°", 1f),
-            EffectParamSpec(EffectParamSlot.MIX, "Scale & Alpha", 0f, 100f, "%", 1f)
+            EffectParamSpec(EffectParamSlot.ANGLE, "Anchor Offset", -180f, 180f, "px", 1f),
+            EffectParamSpec(EffectParamSlot.MIX, "Animator Mix", 0f, 100f, "%", 1f)
         )
         "Text_Spacing" -> listOf(
             EffectParamSpec(EffectParamSlot.PRIMARY, "Start Range", 0f, 100f, "%", 0.5f),
@@ -574,29 +630,63 @@ object EffectsCatalog {
             EffectParamSpec(EffectParamSlot.ANGLE, "Tilt Kick", -45f, 45f, "°", 1f),
             EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f)
         )
+        "S_Vignette", "Vignette_Cinema" -> listOf(
+            EffectParamSpec(EffectParamSlot.PRIMARY, "Darkness", -1.5f, 1.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.SECONDARY, "Radius", 0.15f, 2.0f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.FREQUENCY, "Softness", 0f, 1.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.ANGLE, "Anamorphic", -90f, 90f, "°", 1f),
+            EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f)
+        )
+        "Hue_Shift" -> listOf(
+            EffectParamSpec(EffectParamSlot.PRIMARY, "Saturation Boost", -1.0f, 1.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.SECONDARY, "Gamma", 0.2f, 2.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.FREQUENCY, "Lightness", -0.6f, 0.6f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.ANGLE, "Hue Shift", -180f, 180f, "°", 1f),
+            EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f)
+        )
+        "Saturation_Vibrance" -> listOf(
+            EffectParamSpec(EffectParamSlot.PRIMARY, "Saturation", -1.0f, 2.0f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.SECONDARY, "Contrast Gamma", 0.3f, 2.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.FREQUENCY, "Luma Lift", -0.5f, 0.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.ANGLE, "Tint Shift", -180f, 180f, "°", 1f),
+            EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f)
+        )
+        "Posterize_Levels" -> listOf(
+            EffectParamSpec(EffectParamSlot.PRIMARY, "Quantize Strength", 0f, 1.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.SECONDARY, "Contrast", 0.4f, 2.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.FREQUENCY, "Steps Bias", -0.5f, 0.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.ANGLE, "Hue Tint", -180f, 180f, "°", 1f),
+            EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f)
+        )
+        "Invert" -> listOf(
+            EffectParamSpec(EffectParamSlot.PRIMARY, "Invert Amount", 0f, 1.0f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.SECONDARY, "Gamma", 0.2f, 2.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.FREQUENCY, "Luma Offset", -0.5f, 0.5f, "", 0.01f),
+            EffectParamSpec(EffectParamSlot.ANGLE, "Hue Rotate", -180f, 180f, "°", 1f),
+            EffectParamSpec(EffectParamSlot.MIX, "Mix", 0f, 100f, "%", 1f)
+        )
         else -> null
     }
 
     /**
-     * Maps human-friendly Alight Motion parameter units (px, EV, %, Hz) into normalized
+     * Maps human-friendly Alight Motion / KeyFlow parameter units (px, EV, %, Hz, deg) into normalized
      * GPU shader uniforms while preserving direct `[0..1.5]` behavior for standard effects.
      */
     fun normalizeForShader(effectId: String, eval: EvaluatedEffectParams): EvaluatedEffectParams {
         return when (effectId) {
             "Oscillate" -> eval.copy(
-                primary = (eval.primary / 85f).coerceIn(0f, 2.5f),
+                primary = (eval.primary / 85f).coerceIn(0f, 3.0f),
                 frequency = (eval.frequency / 4f).coerceIn(0.02f, 4f)
             )
             "Swing" -> eval.copy(
-                primary = ((abs(eval.primary) + abs(eval.secondary)) / 70f).coerceIn(0f, 2.0f),
-                secondary = 0.5f,
-                frequency = (eval.frequency / 3f).coerceIn(0.05f, 4f)
+                primary = (eval.primary / 90f).coerceIn(-1.5f, 1.5f),
+                secondary = (eval.secondary / 90f).coerceIn(-1.5f, 1.5f),
+                frequency = eval.frequency.coerceIn(0.05f, 10f)
             )
             "Wave_Warp", "Ripple_Pond" -> eval.copy(
                 secondary = (eval.secondary / 35f).coerceIn(0.08f, 1.8f)
             )
             "Exposure_Gamma" -> eval.copy(
-                // Keep primary as EV (-2..+2), secondary as Gamma (0.1..4), frequency as Offset (-0.8..0.8)
                 primary = eval.primary.coerceIn(-2.0f, 2.0f),
                 secondary = eval.secondary.coerceIn(0.10f, 4.0f),
                 frequency = eval.frequency.coerceIn(-0.9f, 0.9f)
@@ -606,7 +696,7 @@ object EffectsCatalog {
                 secondary = (eval.secondary / 100f).coerceIn(0.005f, 0.65f),
                 frequency = (eval.frequency / 100f).coerceIn(0f, 1f)
             )
-            "Text_Transform", "Wipe_Transition", "Radial_Clock_Wipe", "Venetian_Blinds", "Text_Spacing" -> eval.copy(
+            "Keyflow_Text_Animator", "Text_Transform", "Wipe_Transition", "Radial_Clock_Wipe", "Venetian_Blinds", "Text_Spacing" -> eval.copy(
                 primary = (eval.primary / 100f).coerceIn(0f, 1f),
                 secondary = (eval.secondary / 100f).coerceIn(0f, 1f),
                 frequency = (eval.frequency / 100f).coerceIn(-1f, 1f)

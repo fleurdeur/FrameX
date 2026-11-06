@@ -1,0 +1,573 @@
+<?xml version='1.0' encoding='UTF-8' ?><!--
+Created by Alight Motion (http://alightmotion.com)
+Exported: 2026-11-03 08:33 AM
+5.0.273.1028417 (1028417)
+e3844be (Mar 6, 2026 5:44:40 PM)
+-->
+<scene title="New Project 25" width="1080" height="1080" exportWidth="1080" exportHeight="1080" precompose="dynamicResolution" bgcolor="#ffffffff" totalTime="11091" fps="60" modifiedTime="1793665997951" amver="1028417" ffver="106" am="com.alightcreative.motion/5.0.273.1028417" amplatform="android" retime="freeze" retimeAdaptFPS="false">
+  <bookmark t="775" />
+  <bookmark t="8" />
+  <bookmark t="1225" />
+  <bookmark t="1675" />
+  <bookmark t="2275" />
+  <bookmark t="3158" />
+  <bookmark t="4075" />
+  <bookmark t="4875" />
+  <bookmark t="5941" />
+  <bookmark t="6875" />
+  <bookmark t="7341" />
+  <bookmark t="2741" />
+  <shape id="9999113078" label="Rectangle 1" startTime="1416" endTime="2282" fillType="color" mediaFillMode="fill" parent="9999113075" s=".rect">
+    <transform>
+      <location value="938.209961,-15.620687,0.000000" />
+      <scale value="4.823529,4.823529" />
+    </transform>
+    <property name="size" type="vec2" value="136.143036,374.888245" />
+  </shape>
+  <shape id="9999113075" label="HTzKSoUbAAAFVbP.jpg" startTime="0" endTime="2282" fillType="media" fillImage="content://media/external/images/media/1000016715" mediaFillMode="fill" parent="9999113076" s=".rect">
+    <transform>
+      <scale value="1.097561,1.097561" />
+    </transform>
+    <property name="size" type="vec2" value="492.000000,540.000000" />
+  </shape>
+  <nullobj id="9999113076" label="Null 1" startTime="0" endTime="2282" mediaFillMode="fill" parent="9999113077" type="perspective">
+    <transform>
+      <location>
+        <kf t="0.339614" v="0.000000,0.000000,0.000000" e="cubicBezier 0.0 0.66 0.22 1.0" />
+        <kf t="0.003506" v="0.000000,-674.695313,0.000000" />
+        <kf t="0.536810" v="0.000000,0.000000,0.000000" />
+        <kf t="0.734005" v="0.000000,0.000000,0.000000" e="cubicBezier 0.0 0.0 0.0 1.0" />
+      </location>
+      <scale>
+        <kf t="0.339614" v="1.000000,1.000000" e="cubicBezier 0.0 0.6640664 0.21716455 1.0" />
+        <kf t="0.003506" v="2.360000,2.360000" />
+        <kf t="0.536810" v="1.500000,1.500000" e="cubicBezier 0.0 0.0 0.0 1.0" />
+        <kf t="0.734005" v="1.020000,1.020000" e="cubicBezier 0.0 0.0 0.0 1.0" />
+      </scale>
+    </transform>
+  </nullobj>
+  <nullobj id="9999113077" label="Null 2" startTime="1416" endTime="2282" mediaFillMode="fill" type="perspective">
+    <transform>
+      <location>
+        <kf t="0.010393" v="540.000000,540.000000,0.000000" />
+        <kf t="0.683603" v="-25.000000,540.000000,0.000000" e="cubicBezier 0.6137259 0.0 0.21742961 1.0" />
+      </location>
+    </transform>
+  </nullobj>
+  <text id="9999113083" label="not Copy 3" startTime="1416" endTime="2282" fillType="color" mediaFillMode="fill" parent="9999113077" size="18.000000" font="imported?name=FiraMonoNerdFont-Regular.ttf" wrapWidth="512" align="left">
+    <transform>
+      <location>
+        <kf t="-0.009238" v="2732.734863,-147.034790,0.000000" />
+        <kf t="0.683603" v="2808.963379,412.219910,0.000000" e="cyclic 1.0 1.0 0.6430947 1.0 0.0" />
+      </location>
+      <scale value="7.209633,7.209633" />
+      <rotation>
+        <kf t="0.663972" v="0.000000" e="cyclic 1.0 0.0 0.5 1.0 0.0" />
+        <kf t="-0.009238" v="6.585366" />
+      </rotation>
+    </transform>
+    <fillColor value="#ff000000" />
+    <effect id="com.alightcreative.effects.gaussianblur" locallyApplied="true">
+      <property name="strength" type="float" value="0.145000" />
+    </effect>
+    <content>im</content>
+  </text>
+  <text id="9999113084" label="not Copy 2" startTime="1416" endTime="2282" fillType="color" mediaFillMode="fill" parent="9999113077" size="18.000000" font="imported?name=FiraMonoNerdFont-Regular.ttf" wrapWidth="512" align="left">
+    <transform>
+      <location>
+        <kf t="0.683603" v="2410.837402,59.668335,0.000000" e="cyclic 1.0 1.0 0.6430947 1.0 0.0" />
+        <kf t="0.317552" v="2404.510742,-711.282104,0.000000" />
+      </location>
+      <scale value="7.415096,7.415096" />
+      <rotation>
+        <kf t="1.000000" v="0.000000" e="cyclic 1.0 0.0 1.0 1.0 0.0" />
+        <kf t="0.317552" v="-6.585358" />
+      </rotation>
+    </transform>
+    <fillColor value="#ff000000" />
+    <effect id="com.alightcreative.effects.gaussianblur" locallyApplied="true">
+      <property name="strength" type="float" value="0.145000" />
+    </effect>
+    <content>not</content>
+  </text>
+  <text id="9999113079" startTime="1416" endTime="2282" fillType="color" mediaFillMode="fill" parent="9999113077" size="18.000000" font="imported?name=iOS 26.4 (Unicode 17).ttf" wrapWidth="1028" align="center">
+    <transform>
+      <location value="801.296387,-439.760132,0.000000" />
+      <scale value="0.487354,0.487354" />
+    </transform>
+    <fillColor value="#ff000000" />
+    <content>Draco Malfoid: Born in Twitter, surfaced and became a phenomenon with people making fanfics over her distinct physical characteristics. </content>
+  </text>
+  <text id="9999113080" startTime="1416" endTime="2282" fillType="color" mediaFillMode="fill" parent="9999113077" size="18.000000" font="imported?name=FiraMonoNerdFont-Regular.ttf" wrapWidth="512" align="left">
+    <transform>
+      <location>
+        <kf t="0.703233" v="1544.659912,265.258850,0.000000" e="cyclic 1.0 1.0 0.6430947 1.0 0.0" />
+        <kf t="0.317552" v="1541.385986,-133.861694,0.000000" />
+      </location>
+      <scale value="3.838792,3.838792" />
+      <rotation>
+        <kf t="1.000000" v="0.000000" e="cyclic 1.0 0.0 0.5 1.0 0.0" />
+        <kf t="0.317552" v="-6.585358" />
+      </rotation>
+    </transform>
+    <fillColor value="#ff000000" />
+    <content>not</content>
+  </text>
+  <text id="9999113082" label="not Copy" startTime="1416" endTime="2282" fillType="color" mediaFillMode="fill" parent="9999113077" size="18.000000" font="imported?name=FiraMonoNerdFont-Regular.ttf" wrapWidth="512" align="left">
+    <transform>
+      <location>
+        <kf t="-0.009238" v="1711.307373,158.248840,0.000000" />
+        <kf t="0.683603" v="1750.770752,447.774841,0.000000" e="cyclic 1.0 1.0 0.6430947 1.0 0.0" />
+      </location>
+      <scale value="3.732422,3.732422" />
+      <rotation>
+        <kf t="0.663972" v="0.000000" e="cyclic 1.0 0.0 0.5 1.0 0.0" />
+        <kf t="-0.009238" v="6.585366" />
+      </rotation>
+    </transform>
+    <fillColor value="#ff000000" />
+    <content>im</content>
+  </text>
+  <text id="9999113086" label="BABY Copy" startTime="1000" endTime="2132" fillType="color" mediaFillMode="fill" parent="9999113076" size="18.000000" font="imported?name=LEMONMILK-Regular.ttf" wrapWidth="512" align="center">
+    <transform>
+      <location value="0.000000,101.551453,0.000000" />
+      <scale value="1.744792,1.744792" />
+    </transform>
+    <fillColor value="#ff000000" />
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.596290" v="1.000000" e="cubicBezier 0.0 0.0 0.58 1.0" />
+        <kf t="0.000000" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="offset" type="vec2" value="0.000000,-20.000000" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <content>BABY</content>
+  </text>
+  <text id="9999113085" startTime="583" endTime="1682" fillType="color" mediaFillMode="fill" parent="9999113076" size="18.000000" font="imported?name=LEMONMILK-Regular.ttf" wrapWidth="512" align="center">
+    <transform>
+      <location value="0.000000,14.163269,0.000000" />
+      <scale value="1.744792,1.744792" />
+    </transform>
+    <fillColor value="#ff000000" />
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.584167" v="1.000000" e="cubicBezier 0.0 0.0 0.58 1.0" />
+        <kf t="0.022748" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="offset" type="vec2" value="0.000000,-20.000000" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <content>MAYBE</content>
+  </text>
+  <shape id="9999113087" label="Rectangle 2" startTime="2266" endTime="3149" fillType="color" mediaFillMode="fill" s=".rect">
+    <transform>
+      <location value="540.000000,540.000000,0.000000" />
+      <scale value="5.520000,5.520000" />
+    </transform>
+    <fillColor value="#ff211c1c" />
+    <property name="size" type="vec2" value="100.000000,100.000000" />
+  </shape>
+  <shape id="9999113088" label="HTzKSoUbAAAFVbP.jpg" startTime="2266" endTime="3149" fillType="media" fillImage="content://media/external/images/media/1000016715" mediaFillMode="fill" parent="9999113092" s=".rect">
+    <transform>
+      <location value="-199.611145,-228.500000,0.000000" />
+      <scale value="0.376852,0.376852" />
+    </transform>
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <property name="size" type="vec2" value="492.000000,540.000000" />
+  </shape>
+  <shape id="9999113089" label="HTzKSoUbAAAFVbP.jpg Copy" startTime="2266" endTime="3149" fillType="media" fillImage="content://media/external/images/media/1000016715" mediaFillMode="fill" parent="9999113092" s=".rect">
+    <transform>
+      <location>
+        <kf t="0.254813" v="182.122009,-228.500000,0.000000" e="cubicBezier 1.0 0.0 1.0 1.0" />
+      </location>
+      <scale value="0.376852,0.376852" />
+    </transform>
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <effect id="com.alightcreative.effects.fade" locallyApplied="true">
+      <property name="inTime" type="float" value="0.600000" />
+      <property name="outTime" type="float" value="0.000000" />
+    </effect>
+    <property name="size" type="vec2" value="492.000000,540.000000" />
+  </shape>
+  <shape id="9999113090" label="HTzKSoUbAAAFVbP.jpg Copy 2" startTime="2266" endTime="3149" fillType="media" fillImage="content://media/external/images/media/1000016715" mediaFillMode="fill" parent="9999113092" s=".rect">
+    <transform>
+      <location>
+        <kf t="0.463194" v="182.122009,187.936462,0.000000" e="cubicBezier 0.0 0.0 0.0 1.0" />
+      </location>
+      <scale value="0.376852,0.376852" />
+    </transform>
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <effect id="com.alightcreative.effects.fade" locallyApplied="true">
+      <property name="inTime" type="float" value="0.800000" />
+      <property name="outTime" type="float" value="0.000000" />
+    </effect>
+    <property name="size" type="vec2" value="492.000000,540.000000" />
+  </shape>
+  <shape id="9999113091" label="HTzKSoUbAAAFVbP.jpg Copy 3" startTime="2266" endTime="3149" fillType="media" fillImage="content://media/external/images/media/1000016715" mediaFillMode="fill" parent="9999113092" s=".rect">
+    <transform>
+      <location value="-199.614746,187.936462,0.000000" />
+      <scale value="0.376852,0.376852" />
+    </transform>
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <effect id="com.alightcreative.effects.fade" locallyApplied="true">
+      <property name="inTime" type="float" value="1.000000" />
+      <property name="outTime" type="float" value="0.000000" />
+    </effect>
+    <property name="size" type="vec2" value="492.000000,540.000000" />
+  </shape>
+  <nullobj id="9999113092" label="Null 3" startTime="2266" endTime="3149" mediaFillMode="fill" type="perspective">
+    <transform>
+      <location value="540.000000,540.000000,0.000000" />
+      <scale>
+        <kf t="0.537939" v="1.000000,1.000000" />
+        <kf t="0.010193" v="1.000000,1.000000" />
+        <kf t="1.010193" v="0.840000,0.840000" e="cubicBezier 0.0 0.52655816 0.17373163 1.0" />
+      </scale>
+      <rotation>
+        <kf t="0.746319" v="0.000000" e="cubicBezier 0.51090765 0.0 0.21931797 1.0" />
+        <kf t="0.010193" v="-90.000000" />
+      </rotation>
+    </transform>
+  </nullobj>
+  <text id="9999113093" startTime="2266" endTime="3149" fillType="color" mediaFillMode="fill" parent="9999113092" size="18.000000" font="imported?name=American Captain.ttf" wrapWidth="512" align="center">
+    <transform>
+      <location value="-30.129421,55.036682,0.000000" />
+      <scale value="3.900613,3.900613" />
+    </transform>
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.594753" v="1.000000" e="cubicBezier 0.0 0.0 0.58 1.0" />
+        <kf t="0.023160" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="offset" type="vec2" value="0.000000,-20.000000" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <path-stroke direction="centered" enabled="false" end-size="1.500000">
+      <color value="#ffffffff" />
+      <size value="1.000000" />
+    </path-stroke>
+    <content>LISTEN</content>
+  </text>
+  <text id="9999113094" label="LISTEN Copy" startTime="2266" endTime="3149" fillType="color" mediaFillMode="fill" parent="9999113092" size="18.000000" font="imported?name=Birds of Paradise ╕ PERSONAL USE ONLY.ttf" wrapWidth="512" align="center">
+    <transform>
+      <location value="-46.767464,13.975513,0.000000" />
+      <scale value="1.724609,1.724609" />
+    </transform>
+    <fillColor value="#ffff4444" />
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.594753" v="1.000000" e="cubicBezier 0.0 0.0 0.58 1.0" />
+        <kf t="0.023160" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="offset" type="vec2" value="0.000000,-20.000000" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <path-stroke direction="centered" enabled="false" end-size="1.500000">
+      <color value="#ffffffff" />
+      <size value="1.000000" />
+    </path-stroke>
+    <content>LISTEN</content>
+  </text>
+  <text id="9999113095" label="LISTEN Copy 2" startTime="2266" endTime="3149" fillType="color" blending="overlay" mediaFillMode="fill" parent="9999113092" size="18.000000" font="imported?name=American Captain.ttf" wrapWidth="512" align="center">
+    <transform>
+      <location value="-30.129421,55.036682,0.000000" />
+      <scale value="3.900613,3.900613" />
+      <opacity value="0.810547" />
+    </transform>
+    <effect id="com.alightcreative.effects.parenthelper" locallyApplied="true">
+      <property name="scaleMode" type="int" value="0" />
+      <property name="rotateMode" type="int" value="1" />
+      <property name="scaleWeight" type="float" value="1.000000" />
+      <property name="rotateWeight" type="float" value="1.000000" />
+      <property name="autoRotate" type="int" value="0" />
+      <property name="radiusAdjust" type="float" value="0.000000" />
+    </effect>
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.594753" v="1.000000" e="cubicBezier 0.0 0.0 0.58 1.0" />
+        <kf t="0.023160" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="offset" type="vec2" value="0.000000,-20.000000" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <path-stroke direction="centered" enabled="false" end-size="1.500000">
+      <color value="#ffffffff" />
+      <size value="1.000000" />
+    </path-stroke>
+    <content>LISTEN</content>
+  </text>
+  <text id="9999113096" startTime="3150" endTime="4082" fillType="color" mediaFillMode="fill" parent="9999113098" size="18.000000" font="imported?name=IMPACTED.ttf" wrapWidth="512" align="left">
+    <transform>
+      <location value="365.104065,32.481689,0.000000" />
+      <scale value="3.322265,3.322265" />
+    </transform>
+    <fillColor value="#ff000000" />
+    <content>Listening,</content>
+  </text>
+  <text id="9999113097" label="Listening, Copy" startTime="3150" endTime="4082" fillType="color" mediaFillMode="fill" parent="9999113098" size="18.000000" font="imported?name=IMPACTED.ttf" wrapWidth="512" align="left">
+    <transform>
+      <location value="914.572144,45.971191,0.000000" />
+      <scale value="3.322265,3.322265" />
+    </transform>
+    <fillColor value="#ff970000" />
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.594753" v="1.000000" e="cubicBezier 0.0 0.0 0.58 1.0" />
+        <kf t="0.023160" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <content>yeah! </content>
+  </text>
+  <nullobj id="9999113098" label="Null 4" startTime="3050" endTime="4082" mediaFillMode="fill" type="perspective">
+    <transform>
+      <location>
+        <kf t="0.000000" v="875.286316,540.000000,0.000000" />
+        <kf t="0.993217" v="251.254517,540.000000,0.000000" e="cubicBezier 0.0 0.7048597 0.24009028 1.0" />
+      </location>
+      <scale>
+        <kf t="0.000000" v="1.000000,1.000000" />
+        <kf t="0.669574" v="1.620000,1.620000" e="cubicBezier 0.0 0.0 0.0 1.0" />
+      </scale>
+    </transform>
+  </nullobj>
+  <drawing id="9999113099" label="Drawing 1" startTime="3416" endTime="4065" fillType="intrinsic" mediaFillMode="fill" parent="9999113098">
+    <transform>
+      <location value="204.618210,0.000000,0.000000" />
+      <scale value="0.581395,0.581395" />
+    </transform>
+    <effect id="com.alightcreative.effects.drawing.progress" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.013867" v="0.000000" />
+        <kf t="0.989214" v="100.000000" e="bounce 2.0 0.0" />
+      </property>
+    </effect>
+    <stroke color="#ffff4444" width="24.000000" type="pen" points="-275.25,208.05,0.07;-274.25,208.05,0.07;-271.25,208.05,0.07;-267.25,208.05,0.07;-266.76,208.05,0.07;-261.26,208.05,0.07;-255.26,208.05,0.07;-248.27,208.05,0.07;-248.26,208.05,0.07;-239.28,208.05,0.07;-229.29,208.05,0.07;-219.30,208.05,0.07;-219.27,208.05,0.07;-206.31,209.04,0.07;-193.32,210.04,0.07;-180.33,211.04,0.07;-166.35,211.04,0.07;-153.36,212.04,0.07;-138.37,213.04,0.07;-138.01,213.07,0.07;-122.39,214.04,0.07;-106.40,214.04,0.07;-90.42,215.04,0.07;-89.65,215.04,0.07;-74.43,215.04,0.07;-59.44,215.04,0.07;-44.46,215.04,0.07;-28.47,214.04,0.07;-12.49,214.04,0.07;3.50,213.04,0.07;4.67,213.04,0.07;20.48,213.04,0.07;36.47,212.04,0.07;52.45,211.04,0.07;69.44,208.05,0.07;87.42,206.05,0.07;103.40,204.05,0.07;104.36,203.98,0.07;118.39,203.05,0.07;134.38,201.05,0.07;149.36,199.05,0.07;165.35,198.05,0.07;179.33,196.05,0.07;194.32,196.05,0.07;195.24,195.88,0.07;205.31,194.05,0.07;217.30,193.05,0.07;227.29,192.05,0.07;237.28,192.05,0.07;246.27,192.05,0.07;254.26,192.05,0.07;262.26,192.05,0.07;268.25,192.05,0.07;274.25,192.05,0.07;274.56,192.05,0.07;279.24,192.05,0.07;283.24,193.05,0.07;287.23,194.05,0.07;289.23,194.05,0.07;291.23,195.05,0.07;292.23,195.05,0.07;292.29,195.05,0.07;292.23,196.05,0.07;292.23,197.05,0.07;292.21,197.07,0.07;291.23,198.05,0.07;290.23,199.05,0.07;287.23,201.05,0.07;284.24,202.05,0.07;283.64,202.20,0.07;276.24,204.05,0.07;266.25,207.05,0.07;254.26,212.04,0.07;241.28,216.04,0.07;227.29,220.04,0.07;213.30,223.04,0.07;212.84,223.15,0.07;200.31,226.04,0.07;187.33,229.04,0.07;173.34,232.04,0.07;157.35,236.03,0.07;141.37,240.03,0.07;126.38,242.03,0.07;110.40,245.03,0.07;93.41,249.03,0.07;77.43,252.03,0.07;76.80,252.14,0.07;61.44,255.03,0.07;45.46,258.03,0.07;29.47,261.02,0.07;12.49,263.02,0.07;-3.50,266.02,0.07;-19.48,270.02,0.07;-35.47,272.02,0.07;-51.45,276.02,0.07;-66.44,279.02,0.07;-66.91,279.09,0.07;-84.42,282.02,0.07;-100.41,286.01,0.07;-115.39,290.01,0.07;-131.38,293.01,0.07;-146.36,296.01,0.07;-160.35,300.01,0.07;-161.26,300.29,0.07;-173.34,304.01,0.07;-186.33,307.01,0.07;-198.32,311.00,0.07;-209.31,314.00,0.07;-220.30,317.00,0.07;-228.29,319.00,0.07;-237.28,321.00,0.07;-243.27,323.00,0.07;-249.27,325.00,0.07;-249.54,325.06,0.07;-253.27,326.00,0.07;-256.26,327.00,0.07;-258.26,328.00,0.07;-258.26,328.05,0.07;-258.26,329.00,0.07;-259.26,329.00,0.07;-259.26,330.00,0.07;-258.66,330.00,0.07;-258.26,330.00,0.07;-257.26,330.00,0.07;-255.26,330.00,0.07;-251.27,330.00,0.07;-245.27,330.00,0.07;-236.28,330.00,0.07;-223.29,329.00,0.07;-210.01,327.10,0.07;-209.31,327.00,0.07;-193.32,326.00,0.07;-175.34,324.00,0.07;-157.35,322.00,0.07;-137.37,319.00,0.07;-116.39,317.00,0.07;-94.93,314.07,0.07;-94.41,314.00,0.07;-69.44,312.00,0.07;-45.46,309.00,0.07;-20.48,307.01,0.07;8.49,304.01,0.07;35.47,301.01,0.07;61.63,297.13,0.07;62.44,297.01,0.07;91.42,295.01,0.07;120.39,293.01,0.07;150.36,290.01,0.07;182.33,288.01,0.07;213.30,287.01,0.07;244.27,286.01,0.07;244.37,286.01,0.07;276.24,286.01,0.07;307.22,286.01,0.07;337.19,286.01,0.07;366.16,287.01,0.07;394.14,289.01,0.07;420.11,291.01,0.07;421.16,291.13,0.07;446.09,294.01,0.07;466.07,297.01,0.07;490.05,300.01,0.07" />
+  </drawing>
+  <shape id="9999113100" label="HTv8rEobUAEvy7S.jpg" startTime="4066" endTime="5932" fillType="media" fillImage="content://media/external/images/media/1000016716" mediaFillMode="fill" parent="9999113101" s=".rect">
+    <transform>
+      <scale value="1.028571,1.028571" />
+    </transform>
+    <property name="size" type="vec2" value="540.000000,525.000000" />
+  </shape>
+  <shape id="9999113103" label="HTv8rEobUAEvy7S.jpg Copy" startTime="4066" endTime="5932" fillType="media" fillImage="content://media/external/images/media/1000016716" mediaFillMode="fill" parent="9999113101" s=".rect">
+    <transform>
+      <location value="-1106.709106,-1246.865967,0.000000" />
+      <scale value="1.028571,1.028571" />
+    </transform>
+    <property name="size" type="vec2" value="540.000000,525.000000" />
+  </shape>
+  <shape id="9999113104" label="HTv8rEobUAEvy7S.jpg Copy 2" startTime="4066" endTime="5932" fillType="media" fillImage="content://media/external/images/media/1000016716" mediaFillMode="fill" parent="9999113101" s=".rect">
+    <transform>
+      <location value="1207.806030,-1202.117310,0.000000" />
+      <scale value="1.028571,1.028571" />
+    </transform>
+    <property name="size" type="vec2" value="540.000000,525.000000" />
+  </shape>
+  <shape id="9999113105" label="HTv8rEobUAEvy7S.jpg Copy 3" startTime="4066" endTime="5932" fillType="media" fillImage="content://media/external/images/media/1000016716" mediaFillMode="fill" parent="9999113101" s=".rect">
+    <transform>
+      <location value="-1093.634399,1279.017456,0.000000" />
+      <scale value="1.028571,1.028571" />
+    </transform>
+    <property name="size" type="vec2" value="540.000000,525.000000" />
+  </shape>
+  <shape id="9999113106" label="HTv8rEobUAEvy7S.jpg Copy 4" startTime="4066" endTime="5932" fillType="media" fillImage="content://media/external/images/media/1000016716" mediaFillMode="fill" parent="9999113101" s=".rect">
+    <transform>
+      <location value="1136.443481,1264.737793,0.000000" />
+      <scale value="1.028571,1.028571" />
+    </transform>
+    <property name="size" type="vec2" value="540.000000,525.000000" />
+  </shape>
+  <text id="9999113102" startTime="4066" endTime="5165" fillType="color" mediaFillMode="fill" parent="9999113101" size="18.000000" font="imported?name=LEMONMILK-Regular.ttf" wrapWidth="512" align="center">
+    <transform>
+      <location value="0.000000,40.226971,0.000000" />
+      <scale value="1.811875,1.811875" />
+    </transform>
+    <fillColor value="#ff000000" />
+    <effect id="com.alightcreative.effects.texttransform" locallyApplied="true">
+      <property name="start" type="float" value="0.000000" />
+      <property name="end" type="float">
+        <kf t="0.932666" v="1.000000" e="cubicBezier 0.0 0.0 0.18910381 1.0" />
+        <kf t="0.356688" v="0.000000" />
+      </property>
+      <property name="phase" type="float" value="0.000000" />
+      <property name="component" type="int" value="1" />
+      <property name="anchor" type="int" value="0" />
+      <property name="offset" type="vec2" value="0.000000,-20.000000" />
+      <property name="angle" type="float" value="0.000000" />
+      <property name="scale" type="float" value="0.000000" />
+      <property name="stretch" type="float" value="0.000000" />
+      <property name="alpha" type="float" value="1.000000" />
+      <property name="useFillColor" type="bool" value="false" />
+      <property name="fillColor" type="color" value="#ff00ff00" />
+      <property name="easeIn" type="float" value="0.000000" />
+      <property name="easeOut" type="float" value="0.000000" />
+      <property name="overlap" type="float" value="7.000000" />
+      <property name="shape" type="int" value="0" />
+      <property name="randomOrder" type="bool" value="false" />
+      <property name="seed" type="float" value="0.000000" />
+    </effect>
+    <content>MAYBE</content>
+  </text>
+  <nullobj id="9999113101" label="Null 5" startTime="4066" endTime="5932" mediaFillMode="fill" parent="9999113109" type="perspective">
+    <transform>
+      <scale>
+        <kf t="0.433548" v="1.000000,1.000000" e="cubicBezier 0.0 0.687544 0.11923349 1.0" />
+        <kf t="0.004823" v="2.300000,2.300000" />
+        <kf t="0.996249" v="0.280000,0.280000" e="cubicBezier 0.34935164 0.0 0.0 1.0" />
+      </scale>
+    </transform>
+  </nullobj>
+  <shape id="9999113074" label="snaptik_7684856912088681749_v3.mp4" startTime="0" endTime="11091" fillType="media" fillVideo="content://media/external/video/media/1000018881" outTime="11076" mediaFillMode="fill" s=".rect">
+    <transform>
+      <location value="842.913879,855.036011,0.000000" />
+      <scale value="0.391565,0.391565" />
+    </transform>
+    <property name="size" type="vec2" value="531.472961,530.667786" />
+  </shape>
+  <nullobj id="9999113109" label="Null 6" startTime="5166" endTime="5932" mediaFillMode="fill" type="perspective">
+    <transform>
+      <location value="540.000000,540.000000,0.000000" />
+      <scale>
+        <kf t="-0.010444" v="1.000000,1.000000" />
+        <kf t="0.990862" v="0.880000,0.880000" e="cubicBezier 0.0 0.0 0.0 1.0" />
+      </scale>
+    </transform>
+  </nullobj>
+</scene>

@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,8 +29,11 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesomeMotion
 import androidx.compose.material.icons.filled.Diamond
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.outlined.Diamond
 import androidx.compose.material3.Button
@@ -443,7 +447,10 @@ fun AmKeyframeCluster(
 }
 
 /**
- * Alight Motion's Horizontal Graduated Tick-Wheel Scrubber Pad!
+ * Clean Left-to-Right Studio Horizontal Slider (`left = min`, `right = max`):
+ * Replaces the confusing center-tick wheel with an unmistakable Left-to-Right track,
+ * KeyFlow Royal Blue progress fill, tappable exact value capsule, fine +/- nudge,
+ * dynamic unbounded expansion (beyond -1500 / +1500), and optional single-property reset.
  */
 @Composable
 fun AmTickWheelScrubber(
@@ -455,16 +462,86 @@ fun AmTickWheelScrubber(
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     fineStep: Float = 0f,
+    unbounded: Boolean = false,
+    onReset: (() -> Unit)? = null,
     testTag: String = "property_value_slider"
 ) {
     val currentValState by rememberUpdatedState(value)
     val currentOnValueChange by rememberUpdatedState(onValueChange)
-    var visualPhasePx by remember { mutableFloatStateOf(0f) }
-    val span = (maxValue - minValue).coerceAtLeast(0.01f)
-    val formattedVal = if (span <= 6f) {
-        String.format("%.2f", value)
-    } else {
-        String.format("%.1f", value)
+
+    val effectiveMin = remember(minValue, value, unbounded) {
+        if (unbounded && value < minValue) {
+            floor(value / 500f) * 500f - 500f
+        } else {
+            minOf(minValue, value)
+        }
+    }
+    val effectiveMax = remember(maxValue, value, unbounded) {
+        if (unbounded && value > maxValue) {
+            kotlin.math.ceil(value / 500f) * 500f + 500f
+        } else {
+            maxOf(maxValue, value)
+        }
+    }
+    val span = (effectiveMax - effectiveMin).coerceAtLeast(0.001f)
+    val formattedVal = remember(value, span) {
+        when {
+            abs(value) < 0.0005f -> "0"
+            span <= 6f -> String.format("%.2f", value)
+            else -> String.format("%.1f", value).trimEnd('0').trimEnd('.')
+        }
+    }
+
+    var showExactDialog by remember { mutableStateOf(false) }
+    var exactDraft by remember(value) { mutableStateOf(formattedVal) }
+
+    if (showExactDialog) {
+        AlertDialog(
+            onDismissRequest = { showExactDialog = false },
+            containerColor = SurfaceDark,
+            title = {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = exactDraft,
+                    onValueChange = { exactDraft = it },
+                    singleLine = true,
+                    label = {
+                        Text(
+                            if (unbounded) "Any value (unbounded)"
+                            else "${formatRulerTick(minValue, span / 5f)} .. ${formatRulerTick(maxValue, span / 5f)}"
+                        )
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        exactDraft.trim().toFloatOrNull()?.let { parsed ->
+                            val clamped = if (unbounded) parsed.coerceIn(-100_000f, 100_000f)
+                            else parsed.coerceIn(minValue, maxValue)
+                            currentOnValueChange(clamped)
+                        }
+                        showExactDialog = false
+                    }
+                ) {
+                    Text("Apply", color = KeyflowBlueBright, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExactDialog = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
     }
 
     Column(modifier = modifier) {
@@ -483,7 +560,7 @@ fun AmTickWheelScrubber(
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 if (fineStep > 0f) {
                     Box(
@@ -493,19 +570,34 @@ fun AmTickWheelScrubber(
                             .background(PanelDark)
                             .border(0.8.dp, OutlineSubtle, CircleShape)
                             .clickable {
-                                currentOnValueChange((currentValState - fineStep).coerceIn(minValue, maxValue))
+                                val raw = currentValState - fineStep
+                                currentOnValueChange(if (unbounded) raw else raw.coerceIn(minValue, maxValue))
                             },
                         contentAlignment = Alignment.Center
                     ) {
                         Text("−", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
                     }
                 }
-                Text(
-                    text = "$formattedVal$unit",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AmTealBright,
-                    fontWeight = FontWeight.Bold
-                )
+                Box(
+                    modifier = Modifier
+                        .height(21.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(KeyflowBlue.copy(alpha = 0.22f))
+                        .border(0.8.dp, KeyflowBlue.copy(alpha = 0.65f), RoundedCornerShape(7.dp))
+                        .clickable {
+                            exactDraft = formattedVal
+                            showExactDialog = true
+                        }
+                        .padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "$formattedVal$unit",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KeyflowBlueBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 if (fineStep > 0f) {
                     Box(
                         modifier = Modifier
@@ -514,84 +606,137 @@ fun AmTickWheelScrubber(
                             .background(PanelDark)
                             .border(0.8.dp, OutlineSubtle, CircleShape)
                             .clickable {
-                                currentOnValueChange((currentValState + fineStep).coerceIn(minValue, maxValue))
+                                val raw = currentValState + fineStep
+                                currentOnValueChange(if (unbounded) raw else raw.coerceIn(minValue, maxValue))
                             },
                         contentAlignment = Alignment.Center
                     ) {
                         Text("+", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.Bold)
                     }
                 }
+                if (onReset != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(PanelDark)
+                            .border(0.8.dp, OutlineSubtle, CircleShape)
+                            .clickable(onClick = onReset),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Reset $label",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(5.dp))
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .height(34.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(DeepBlack)
-                .border(1.dp, OutlineSubtle, RoundedCornerShape(10.dp))
-                .pointerInput(minValue, maxValue) {
-                    detectHorizontalDragGestures { change, dragAmount ->
-                        change.consume()
-                        visualPhasePx = (visualPhasePx + dragAmount) % 240f
-                        val sensitivity = span / 520f
-                        val next = (currentValState + dragAmount * sensitivity).coerceIn(minValue, maxValue)
-                        currentOnValueChange(next)
+                .background(KeyflowCardSurface)
+                .border(0.9.dp, KeyflowCardBorder, RoundedCornerShape(10.dp))
+                .pointerInput(effectiveMin, effectiveMax, unbounded) {
+                    detectTapGestures { offset ->
+                        val pad = 12.dp.toPx()
+                        val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                        val frac = ((offset.x - pad) / usableW).coerceIn(0f, 1f)
+                        val target = effectiveMin + frac * (effectiveMax - effectiveMin)
+                        currentOnValueChange(if (unbounded) target else target.coerceIn(minValue, maxValue))
                     }
+                }
+                .pointerInput(minValue, maxValue, unbounded) {
+                    var dragStartMin = effectiveMin
+                    var dragStartSpan = span
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            dragStartMin = effectiveMin
+                            dragStartSpan = (effectiveMax - effectiveMin).coerceAtLeast(0.001f)
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            val pad = 12.dp.toPx()
+                            val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                            if (unbounded) {
+                                // Smooth continuous Left-to-Right delta so dragging beyond -1500/+1500 never hits a wall!
+                                val delta = (dragAmount / usableW) * dragStartSpan
+                                currentOnValueChange((currentValState + delta).coerceIn(-100_000f, 100_000f))
+                            } else {
+                                val frac = ((change.position.x - pad) / usableW).coerceIn(0f, 1f)
+                                val next = (dragStartMin + frac * dragStartSpan).coerceIn(minValue, maxValue)
+                                currentOnValueChange(next)
+                            }
+                        }
+                    )
                 }
                 .testTag(testTag)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val w = size.width
-                val h = size.height
-                val spacing = 12f
-                val offsetMod = ((visualPhasePx % spacing) + spacing) % spacing
-                val totalTicks = (w / spacing).roundToInt() + 2
+                val pad = 12.dp.toPx()
+                val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                val cy = size.height * 0.5f
+                val trackH = 5.dp.toPx()
+                val norm = ((value - effectiveMin) / span).coerceIn(0f, 1f)
+                val thumbX = pad + usableW * norm
 
-                for (i in -1..totalTicks) {
-                    val x = i * spacing + offsetMod
-                    if (x < 0f || x > w) continue
-                    val distFromCenter = kotlin.math.abs(x - w * 0.5f) / (w * 0.5f).coerceAtLeast(1f)
-                    val alpha = (1f - distFromCenter * 0.72f).coerceIn(0.15f, 1f)
-                    val isMajor = ((i - (visualPhasePx / spacing).roundToInt()) % 5 == 0)
-                    val tickTop = if (isMajor) h * 0.20f else h * 0.36f
-                    val tickBot = if (isMajor) h * 0.80f else h * 0.64f
+                // Inactive track (Left to Right)
+                drawRoundRect(
+                    color = PanelElevated,
+                    topLeft = Offset(pad, cy - trackH * 0.5f),
+                    size = Size(usableW, trackH),
+                    cornerRadius = CornerRadius(trackH * 0.5f, trackH * 0.5f)
+                )
+
+                // Zero reference tick when range crosses 0
+                if (effectiveMin < 0f && effectiveMax > 0f) {
+                    val zeroX = pad + usableW * ((0f - effectiveMin) / span).coerceIn(0f, 1f)
                     drawLine(
-                        color = (if (isMajor) TextPrimary else TextSecondary).copy(alpha = alpha),
-                        start = Offset(x, tickTop),
-                        end = Offset(x, tickBot),
-                        strokeWidth = if (isMajor) 2.2f else 1.2f
+                        color = TextMuted.copy(alpha = 0.55f),
+                        start = Offset(zeroX, cy - 6.dp.toPx()),
+                        end = Offset(zeroX, cy + 6.dp.toPx()),
+                        strokeWidth = 1.4.dp.toPx()
                     )
                 }
 
-                drawRect(
-                    brush = Brush.horizontalGradient(
-                        0.0f to DeepBlack,
-                        0.16f to Color.Transparent,
-                        0.84f to Color.Transparent,
-                        1.0f to DeepBlack
+                // Active Left-to-Right KeyFlow Blue Fill
+                val fillW = (thumbX - pad).coerceAtLeast(0f)
+                if (fillW > 0.5f) {
+                    drawRoundRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(KeyflowBlue, KeyflowBlueBright),
+                            startX = pad,
+                            endX = thumbX
+                        ),
+                        topLeft = Offset(pad, cy - trackH * 0.5f),
+                        size = Size(fillW, trackH),
+                        cornerRadius = CornerRadius(trackH * 0.5f, trackH * 0.5f)
                     )
-                )
+                }
 
-                val norm = ((value - minValue) / span).coerceIn(0f, 1f)
-                drawLine(
-                    color = AmTeal.copy(alpha = 0.45f),
-                    start = Offset(0f, h - 2f),
-                    end = Offset(w * norm, h - 2f),
-                    strokeWidth = 3f
+                // Crisp circular thumb with Royal Blue halo
+                drawCircle(
+                    color = KeyflowBlue.copy(alpha = 0.28f),
+                    radius = 9.5.dp.toPx(),
+                    center = Offset(thumbX, cy)
                 )
-
-                val cx = w * 0.5f
-                drawLine(
-                    color = AmTealBright,
-                    start = Offset(cx, 3f),
-                    end = Offset(cx, h - 3f),
-                    strokeWidth = 2.8f
+                drawCircle(
+                    color = Color.White,
+                    radius = 6.2.dp.toPx(),
+                    center = Offset(thumbX, cy)
                 )
-                drawCircle(color = AmTealBright, radius = 3.2f, center = Offset(cx, 5f))
+                drawCircle(
+                    color = KeyflowBlue,
+                    radius = 3.2.dp.toPx(),
+                    center = Offset(thumbX, cy)
+                )
             }
         }
     }
@@ -657,14 +802,14 @@ fun AmRatioOutlineCard(
 
 enum class AmHomeTab(val label: String, val icon: ImageVector) {
     HOME("Home", Icons.Default.Home),
-    TEMPLATES("Templates", Icons.Default.AutoAwesomeMotion),
     PROJECTS("Projects", Icons.Default.Folder),
-    ELEMENTS("Elements", Icons.Default.Widgets)
+    PLUGINS("Plugins", Icons.Default.Extension),
+    DEPTH_MAP("Depth Map", Icons.Default.Layers)
 }
 
 /**
- * Alight Motion Home Screen Bottom Navigation Bar with balanced, cleanly proportioned
- * centered circular Teal '+' Create Project FAB!
+ * Studio Home Screen Bottom Navigation Bar with Home, Projects, centered '+' Create Project FAB,
+ * Plugins (CEP / ScriptUI / ExtendScript), and Depth Map (Depth Anything V2).
  */
 @Composable
 fun AmBottomNavigationBar(
@@ -674,30 +819,31 @@ fun AmBottomNavigationBar(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        color = SurfaceDark,
+        color = MaterialTheme.colorScheme.surface,
         tonalElevation = 8.dp,
         modifier = modifier
             .fillMaxWidth()
-            .border(0.6.dp, OutlineSubtle)
+            .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .height(64.dp)
-                .padding(horizontal = 10.dp),
+                .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             AmBottomNavItem(
                 tab = AmHomeTab.HOME,
                 selected = selectedTab == AmHomeTab.HOME,
                 onClick = { onSelectTab(AmHomeTab.HOME) }
             )
+
             AmBottomNavItem(
-                tab = AmHomeTab.TEMPLATES,
-                selected = selectedTab == AmHomeTab.TEMPLATES,
-                onClick = { onSelectTab(AmHomeTab.TEMPLATES) }
+                tab = AmHomeTab.PROJECTS,
+                selected = selectedTab == AmHomeTab.PROJECTS,
+                onClick = { onSelectTab(AmHomeTab.PROJECTS) }
             )
 
             Box(
@@ -705,7 +851,14 @@ fun AmBottomNavigationBar(
                     .size(48.dp)
                     .shadow(6.dp, CircleShape)
                     .clip(CircleShape)
-                    .background(Brush.linearGradient(colors = listOf(AmTealBright, AmTeal)))
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.secondary
+                            )
+                        )
+                    )
                     .clickable(onClick = onCreateProjectClick)
                     .testTag("new_project_fab"),
                 contentAlignment = Alignment.Center
@@ -713,20 +866,21 @@ fun AmBottomNavigationBar(
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = "New Project",
-                    tint = DeepBlack,
+                    tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(26.dp)
                 )
             }
 
             AmBottomNavItem(
-                tab = AmHomeTab.PROJECTS,
-                selected = selectedTab == AmHomeTab.PROJECTS,
-                onClick = { onSelectTab(AmHomeTab.PROJECTS) }
+                tab = AmHomeTab.PLUGINS,
+                selected = selectedTab == AmHomeTab.PLUGINS,
+                onClick = { onSelectTab(AmHomeTab.PLUGINS) }
             )
+
             AmBottomNavItem(
-                tab = AmHomeTab.ELEMENTS,
-                selected = selectedTab == AmHomeTab.ELEMENTS,
-                onClick = { onSelectTab(AmHomeTab.ELEMENTS) }
+                tab = AmHomeTab.DEPTH_MAP,
+                selected = selectedTab == AmHomeTab.DEPTH_MAP,
+                onClick = { onSelectTab(AmHomeTab.DEPTH_MAP) }
             )
         }
     }
@@ -751,14 +905,17 @@ private fun AmBottomNavItem(
         Box(
             modifier = Modifier
                 .clip(CircleShape)
-                .background(if (selected) AmTeal.copy(alpha = 0.16f) else Color.Transparent)
-                .padding(horizontal = 12.dp, vertical = 2.dp),
+                .background(
+                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    else Color.Transparent
+                )
+                .padding(horizontal = 10.dp, vertical = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = tab.icon,
                 contentDescription = tab.label,
-                tint = if (selected) AmTealBright else TextSecondary,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -766,19 +923,21 @@ private fun AmBottomNavItem(
         Text(
             text = tab.label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (selected) AmTealBright else TextSecondary,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
 
 /**
- * KeyFlow Signature Property Ruler Card (Screenshot 4):
- * - Sleek dark `#1A1C22` rounded card (`12.dp` radius)
- * - Left: Property label (`KeyflowBlue` when selected, crisp white when unselected, tappable to bind Keyframe/Curve rail)
- * - Right: Centered `KeyflowBlue` rounded value pill (`0.030`, `0`, `0.50`, tappable for exact numeric entry)
- *   directly above a numbered horizontal graduated tick-ruler scrubber!
+ * KeyFlow Signature Left-to-Right Property Slider Card (KeyFlow by Angkin Modern Style):
+ * - Sleek dark `#151923` rounded card (`12.dp` radius)
+ * - Top Row: Property label (`KeyflowBlueBright` when selected, crisp white when unselected, keyframe diamond badge)
+ *   + Tappable `KeyflowBlue` value capsule (opens exact numeric entry) + optional single-property Reset button!
+ * - Bottom Row: Unmistakable Left-to-Right (`min` -> `max`) horizontal slider track with glowing KeyFlow Blue fill,
+ *   zero-origin tick mark, and smooth unbounded expansion when `unbounded = true`.
  */
 @Composable
 fun KeyflowPropertyRulerCard(
@@ -793,15 +952,30 @@ fun KeyflowPropertyRulerCard(
     onSelect: () -> Unit = {},
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    unbounded: Boolean = false,
+    onReset: (() -> Unit)? = null,
     labelTestTag: String? = null,
     scrubberTestTag: String? = null
 ) {
     val currentValState by rememberUpdatedState(value)
     val currentOnSelect by rememberUpdatedState(onSelect)
     val currentOnValueChange by rememberUpdatedState(onValueChange)
-    val density = LocalDensity.current
 
-    val span = (maxValue - minValue).coerceAtLeast(0.001f)
+    val effectiveMin = remember(minValue, value, unbounded) {
+        if (unbounded && value < minValue) {
+            floor(value / 500f) * 500f - 500f
+        } else {
+            minOf(minValue, value)
+        }
+    }
+    val effectiveMax = remember(maxValue, value, unbounded) {
+        if (unbounded && value > maxValue) {
+            kotlin.math.ceil(value / 500f) * 500f + 500f
+        } else {
+            maxOf(maxValue, value)
+        }
+    }
+    val span = (effectiveMax - effectiveMin).coerceAtLeast(0.001f)
     val formattedCapsuleValue = remember(value, span, unit) {
         val base = when {
             abs(value) < 0.0005f -> "0"
@@ -810,10 +984,9 @@ fun KeyflowPropertyRulerCard(
             span <= 120f -> String.format("%.2f", value).trimEnd('0').trimEnd('.')
             else -> String.format("%.1f", value).trimEnd('0').trimEnd('.')
         }
-        if (unit.isEmpty() || unit == "%") base else "$base$unit"
+        if (unit.isEmpty()) base else "$base$unit"
     }
 
-    // Compute clean major tick step for the graduated ruler
     val majorStep = remember(span) {
         val raw = span / 10f
         val exp = floor(log10(raw.toDouble())).toInt()
@@ -826,15 +999,6 @@ fun KeyflowPropertyRulerCard(
             else -> 10f
         }
         (nice * mag).coerceAtLeast(0.01f)
-    }
-
-    val tickTextPaint = remember(density) {
-        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.argb(175, 168, 178, 196)
-            textSize = with(density) { 8.5.sp.toPx() }
-            textAlign = android.graphics.Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.NORMAL)
-        }
     }
 
     var showExactDialog by remember { mutableStateOf(false) }
@@ -857,7 +1021,12 @@ fun KeyflowPropertyRulerCard(
                     value = exactDraft,
                     onValueChange = { exactDraft = it },
                     singleLine = true,
-                    label = { Text("${formatRulerTick(minValue, majorStep)} .. ${formatRulerTick(maxValue, majorStep)}") },
+                    label = {
+                        Text(
+                            if (unbounded) "Any coordinate (unbounded, e.g. -3200 or 4800)"
+                            else "${formatRulerTick(minValue, majorStep)} .. ${formatRulerTick(maxValue, majorStep)}"
+                        )
+                    },
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -867,7 +1036,9 @@ fun KeyflowPropertyRulerCard(
                     onClick = {
                         exactDraft.trim().toFloatOrNull()?.let { parsed ->
                             currentOnSelect()
-                            currentOnValueChange(parsed.coerceIn(minValue, maxValue))
+                            val applied = if (unbounded) parsed.coerceIn(-100_000f, 100_000f)
+                            else parsed.coerceIn(minValue, maxValue)
+                            currentOnValueChange(applied)
                         }
                         showExactDialog = false
                     }
@@ -883,160 +1054,215 @@ fun KeyflowPropertyRulerCard(
         )
     }
 
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(KeyflowCardSurface)
             .border(
                 width = if (selected) 1.1.dp else 0.8.dp,
-                color = if (selected) KeyflowBlue.copy(alpha = 0.55f) else KeyflowCardBorder,
+                color = if (selected) KeyflowBlue.copy(alpha = 0.65f) else KeyflowCardBorder,
                 shape = RoundedCornerShape(12.dp)
             )
             .clickable { currentOnSelect() }
-            .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // Left: Property Label (KeyFlow Blue when selected, White when unselected)
+        // Top Header: Property Label + Keyframe Diamond + Value Capsule + Single-Property Reset
         Row(
-            modifier = Modifier
-                .weight(0.39f)
-                .then(if (labelTestTag != null) Modifier.testTag(labelTestTag) else Modifier),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                color = if (selected) KeyflowBlueBright else TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-            if (keyframeCount > 0) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (labelTestTag != null) Modifier.testTag(labelTestTag) else Modifier),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
                 Text(
-                    text = "◆",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (hasKeyframeAtPlayhead) KeyframeAmber else KeyflowBlueBright
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) KeyflowBlueBright else TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
-            }
-        }
-
-        // Right: Centered Blue Value Pill + Graduated Numbered Tick-Ruler Scrubber
-        Column(
-            modifier = Modifier
-                .weight(0.61f)
-                .fillMaxHeight()
-                .pointerInput(minValue, maxValue, majorStep) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { currentOnSelect() },
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            val pxPerMajor = 56.dp.toPx().coerceAtLeast(24f)
-                            // Dragging left increases value (pulls higher ruler numbers under center needle),
-                            // or dragging right increases value? Standard KeyFlow/AM ruler: dragging left advances
-                            // ruler numbers to the right, dragging right decreases; wait—let's make dragging RIGHT
-                            // increase value when moving thumb right OR let ruler scroll naturally with value!
-                            // Making dragAmount > 0 increase value feels intuitive for sliders while ruler ticks track `value`.
-                            val delta = (dragAmount / pxPerMajor) * majorStep
-                            val next = (currentValState + delta).coerceIn(minValue, maxValue)
-                            currentOnValueChange(next)
-                        }
+                if (keyframeCount > 0) {
+                    Text(
+                        text = "◆",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (hasKeyframeAtPlayhead) KeyframeAmber else KeyflowBlueBright
                     )
                 }
-                .then(if (scrubberTestTag != null) Modifier.testTag(scrubberTestTag) else Modifier),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            // KeyFlow Blue Value Capsule
-            Box(
-                modifier = Modifier
-                    .height(20.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(KeyflowBlue)
-                    .clickable {
-                        currentOnSelect()
-                        exactDraft = formattedCapsuleValue.removeSuffix(unit)
-                        showExactDialog = true
-                    }
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = formattedCapsuleValue,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF060912),
-                    maxLines = 1
-                )
             }
 
-            // Graduated Numbered Tick-Ruler Canvas
-            Canvas(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(30.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                val w = size.width
-                val h = size.height
-                val cx = w * 0.5f
-                val pxPerMajor = 56.dp.toPx().coerceAtLeast(28f)
-                val minorStep = majorStep / 10f
-                val pxPerMinor = pxPerMajor / 10f
-
-                val halfVisibleMinors = ((w * 0.5f) / pxPerMinor).toInt() + 2
-                val centerMinorIdx = (value / minorStep).roundToInt()
-
-                for (offsetIdx in -halfVisibleMinors..halfVisibleMinors) {
-                    val mIdx = centerMinorIdx + offsetIdx
-                    val tickVal = mIdx * minorStep
-                    if (tickVal < minValue - minorStep * 0.25f || tickVal > maxValue + minorStep * 0.25f) continue
-
-                    val x = cx + ((tickVal - value) / minorStep) * pxPerMinor
-                    if (x < 1f || x > w - 1f) continue
-
-                    val edgeFade = (1f - (abs(x - cx) / (w * 0.52f))).coerceIn(0.14f, 1f)
-                    val isMajor = (mIdx % 10 == 0)
-                    val isMid = (abs(mIdx % 10) == 5)
-
-                    val tickTop = when {
-                        isMajor -> h * 0.42f
-                        isMid -> h * 0.56f
-                        else -> h * 0.68f
-                    }
-                    val tickColor = when {
-                        isMajor -> Color(0xFFB8C2D4).copy(alpha = 0.85f * edgeFade)
-                        isMid -> Color(0xFF7D8799).copy(alpha = 0.72f * edgeFade)
-                        else -> Color(0xFF555E6E).copy(alpha = 0.58f * edgeFade)
-                    }
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(x, tickTop),
-                        end = Offset(x, h - 1.dp.toPx()),
-                        strokeWidth = if (isMajor) 1.35f else 1f
+                Box(
+                    modifier = Modifier
+                        .height(21.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (selected) KeyflowBlue else KeyflowBlue.copy(alpha = 0.24f))
+                        .border(
+                            width = 0.8.dp,
+                            color = if (selected) KeyflowBlueBright else KeyflowBlue.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .clickable {
+                            currentOnSelect()
+                            exactDraft = formattedCapsuleValue.removeSuffix(unit)
+                            showExactDialog = true
+                        }
+                        .padding(horizontal = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = formattedCapsuleValue,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (selected) Color(0xFF060912) else KeyflowBlueBright,
+                        maxLines = 1
                     )
+                }
 
-                    if (isMajor && abs(x - cx) > 6.dp.toPx()) {
-                        tickTextPaint.alpha = (195f * edgeFade).toInt().coerceIn(30, 215)
-                        drawContext.canvas.nativeCanvas.drawText(
-                            formatRulerTick(tickVal, majorStep),
-                            x,
-                            h * 0.33f,
-                            tickTextPaint
+                if (onReset != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(PanelDark)
+                            .border(0.8.dp, OutlineSubtle, CircleShape)
+                            .clickable {
+                                currentOnSelect()
+                                onReset()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Reset $label",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
+            }
+        }
 
-                // Crisp Center Vertical Needle pointing from capsule down through ticks
-                drawLine(
-                    color = if (selected) KeyflowBlueBright else Color.White.copy(alpha = 0.90f),
-                    start = Offset(cx, 1.dp.toPx()),
-                    end = Offset(cx, h),
-                    strokeWidth = 1.9.dp.toPx()
+        // Bottom Left-to-Right Slider Track (left = min, right = max)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .pointerInput(effectiveMin, effectiveMax, unbounded) {
+                    detectTapGestures { offset ->
+                        currentOnSelect()
+                        val pad = 10.dp.toPx()
+                        val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                        val frac = ((offset.x - pad) / usableW).coerceIn(0f, 1f)
+                        val target = effectiveMin + frac * (effectiveMax - effectiveMin)
+                        currentOnValueChange(if (unbounded) target else target.coerceIn(minValue, maxValue))
+                    }
+                }
+                .pointerInput(minValue, maxValue, unbounded) {
+                    var dragStartMin = effectiveMin
+                    var dragStartSpan = span
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            currentOnSelect()
+                            dragStartMin = effectiveMin
+                            dragStartSpan = (effectiveMax - effectiveMin).coerceAtLeast(0.001f)
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            val pad = 10.dp.toPx()
+                            val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                            if (unbounded) {
+                                val delta = (dragAmount / usableW) * dragStartSpan
+                                currentOnValueChange((currentValState + delta).coerceIn(-100_000f, 100_000f))
+                            } else {
+                                val frac = ((change.position.x - pad) / usableW).coerceIn(0f, 1f)
+                                val next = (dragStartMin + frac * dragStartSpan).coerceIn(minValue, maxValue)
+                                currentOnValueChange(next)
+                            }
+                        }
+                    )
+                }
+                .then(if (scrubberTestTag != null) Modifier.testTag(scrubberTestTag) else Modifier)
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val pad = 10.dp.toPx()
+                val usableW = (size.width - pad * 2f).coerceAtLeast(1f)
+                val cy = size.height * 0.5f
+                val trackH = 4.5.dp.toPx()
+                val norm = ((value - effectiveMin) / span).coerceIn(0f, 1f)
+                val thumbX = pad + usableW * norm
+
+                // Track background
+                drawRoundRect(
+                    color = PanelElevated,
+                    topLeft = Offset(pad, cy - trackH * 0.5f),
+                    size = Size(usableW, trackH),
+                    cornerRadius = CornerRadius(trackH * 0.5f, trackH * 0.5f)
+                )
+
+                // Subtle 25% / 50% / 75% guide ticks
+                for (q in 1..3) {
+                    val tx = pad + usableW * (q * 0.25f)
+                    drawCircle(
+                        color = OutlineSubtle.copy(alpha = 0.7f),
+                        radius = 1.3.dp.toPx(),
+                        center = Offset(tx, cy)
+                    )
+                }
+
+                // Zero tick when range spans negative to positive
+                if (effectiveMin < 0f && effectiveMax > 0f) {
+                    val zeroX = pad + usableW * ((0f - effectiveMin) / span).coerceIn(0f, 1f)
+                    drawLine(
+                        color = TextSecondary.copy(alpha = 0.65f),
+                        start = Offset(zeroX, cy - 5.dp.toPx()),
+                        end = Offset(zeroX, cy + 5.dp.toPx()),
+                        strokeWidth = 1.4.dp.toPx()
+                    )
+                }
+
+                // Left-to-Right Active Fill
+                val fillW = (thumbX - pad).coerceAtLeast(0f)
+                if (fillW > 0.5f) {
+                    drawRoundRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(KeyflowBlue, KeyflowBlueBright),
+                            startX = pad,
+                            endX = thumbX
+                        ),
+                        topLeft = Offset(pad, cy - trackH * 0.5f),
+                        size = Size(fillW, trackH),
+                        cornerRadius = CornerRadius(trackH * 0.5f, trackH * 0.5f)
+                    )
+                }
+
+                // Thumb
+                drawCircle(
+                    color = KeyflowBlue.copy(alpha = if (selected) 0.34f else 0.18f),
+                    radius = 8.5.dp.toPx(),
+                    center = Offset(thumbX, cy)
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 5.6.dp.toPx(),
+                    center = Offset(thumbX, cy)
+                )
+                drawCircle(
+                    color = KeyflowBlue,
+                    radius = 2.8.dp.toPx(),
+                    center = Offset(thumbX, cy)
                 )
             }
         }

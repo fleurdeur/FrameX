@@ -1,12 +1,11 @@
 <resources>
-    <string name="app_name">FramePollution</string>
+    <string name="app_name">Chronos</string>
     <string name="tagline_studio">Motion &amp; VFX</string>
     <string name="sign_in_google">Continue with Google</string>
     <string name="sign_out">Sign Out</string>
     <string name="new_project">New Project</string>
     <string name="create_project">Create</string>
     <string name="recent_projects">Projects</string>
-    <string name="template_gallery">Templates</string>
     <string name="effects_browser">Effects</string>
     <string name="graph_editor">Graph</string>
     <string name="audio_reactor">Audio</string>

@@ -8,9 +8,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 
 private val FramePollutionColorScheme = darkColorScheme(
-    primary = AmTeal,
-    onPrimary = DeepBlack,
-    primaryContainer = AmTealContainer,
+    primary = KeyflowBlue,
+    onPrimary = TextPrimary,
+    primaryContainer = KeyflowBlueDim,
     onPrimaryContainer = OnAmTealContainer,
     secondary = ElectricBlue,
     onSecondary = TextPrimary,

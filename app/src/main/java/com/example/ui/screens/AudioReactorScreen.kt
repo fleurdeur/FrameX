@@ -77,6 +77,11 @@ import com.example.ui.theme.PanelDark
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextSecondary
 
+import androidx.compose.material.icons.filled.Diamond
+import com.example.ui.theme.KeyflowBlue
+import com.example.ui.theme.KeyflowBlueBright
+import com.example.ui.theme.TextPrimary
+
 @Composable
 fun AudioReactorScreen(
     bpm: Int,
@@ -90,11 +95,13 @@ fun AudioReactorScreen(
     onSelectProperty: (PropertyTarget) -> Unit,
     onBindAudioToProperty: (AudioBand, Float) -> Unit,
     onRegenerateBeats: (bpm: Int, sensitivity: Float) -> Unit,
+    onBakeBeatsToKeyframes: (PropertyTarget, Float, Long) -> Unit = { _, _, _ -> },
     onToggleLiveMic: (Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     var localBpm by remember(bpm) { mutableIntStateOf(bpm) }
     var localSensitivity by remember(sensitivity) { mutableFloatStateOf(sensitivity) }
+    var pulseStrength by remember { mutableFloatStateOf(24f) }
     var micPermissionNote by remember { mutableStateOf<String?>(null) }
 
     val micPermLauncher = rememberLauncherForActivityResult(
@@ -247,11 +254,24 @@ fun AudioReactorScreen(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = "Beat Detection",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Beat Detection",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "${beatMarkers.size} beats",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = KeyflowBlueBright
+                        )
+                    }
                     AmTickWheelScrubber(
                         value = localBpm.toFloat(),
                         minValue = 60f,
@@ -259,6 +279,7 @@ fun AudioReactorScreen(
                         unit = " BPM",
                         label = "BPM",
                         onValueChange = { localBpm = it.toInt() },
+                        onReset = { localBpm = 128 },
                         testTag = "bpm_tick_scrubber"
                     )
                     AmTickWheelScrubber(
@@ -268,10 +289,11 @@ fun AudioReactorScreen(
                         unit = "%",
                         label = "Sensitivity",
                         onValueChange = { localSensitivity = (it / 100f).coerceIn(0.2f, 1f) },
+                        onReset = { localSensitivity = 0.65f },
                         testTag = "sensitivity_tick_scrubber"
                     )
                     AmPrimaryCtaButton(
-                        text = "Detect Beats",
+                        text = "Detect Beats Across Full Track",
                         icon = Icons.Default.Bolt,
                         onClick = { onRegenerateBeats(localBpm, localSensitivity) },
                         modifier = Modifier.fillMaxWidth(),
@@ -331,7 +353,27 @@ fun AudioReactorScreen(
                             unit = "x",
                             label = "Gain",
                             onValueChange = { onBindAudioToProperty(activeProp.audioReactorBand, it) },
+                            onReset = { onBindAudioToProperty(activeProp.audioReactorBand, 1.0f) },
                             testTag = "reactor_gain_scrubber"
+                        )
+
+                        AmTickWheelScrubber(
+                            value = pulseStrength,
+                            minValue = 4f,
+                            maxValue = 120f,
+                            unit = "",
+                            label = "Beat Pulse",
+                            onValueChange = { pulseStrength = it },
+                            onReset = { pulseStrength = 24f },
+                            testTag = "beat_pulse_strength_slider"
+                        )
+
+                        AmPrimaryCtaButton(
+                            text = "Bake Beat Keyframes (${selectedProperty.label})",
+                            icon = Icons.Default.Diamond,
+                            onClick = { onBakeBeatsToKeyframes(selectedProperty, pulseStrength, 160L) },
+                            modifier = Modifier.fillMaxWidth(),
+                            testTag = "bake_beat_keyframes_button"
                         )
                     }
                 }

@@ -1,0 +1,31 @@
+{
+  "targetEffectId": "com.alightcreative.effects.texttransform",
+  "targetDisplayName": "Text Transform",
+  "selectorMappings": {
+    "ADBE Text Percent Start": { "param": "start", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Percent End": { "param": "end", "scale": 1.0, "default": 100.0 },
+    "ADBE Text Percent Offset": { "param": "phase", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Index Start": { "param": "start", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Index End": { "param": "end", "scale": 1.0, "default": 100.0 },
+    "ADBE Text Index Offset": { "param": "phase", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Range Units": { "param": "mode", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Range Type2": { "param": "anchor", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Levels Max Ease": { "param": "easein", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Levels Min Ease": { "param": "easeout", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Selector Smoothness": { "param": "smooth", "scale": 0.01, "default": 1.0 },
+    "ADBE Text Randomize Order": { "param": "random", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Random Seed": { "param": "seed", "scale": 0.01, "default": 0.0 }
+  },
+  "animatorPropertyMappings": {
+    "ADBE Text Position 3D": { "paramX": "tx", "paramY": "ty", "paramZ": "tz", "default": [0.0, 0.0, 0.0] },
+    "ADBE Text Scale 3D": { "paramX": "sx", "paramY": "sy", "scale": 0.01, "offset": -1.0, "default": [100.0, 100.0, 100.0] },
+    "ADBE Text Rotation": { "param": "angle", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Rotation X": { "param": "rx", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Rotation Y": { "param": "ry", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Opacity": { "param": "alpha", "scale": 0.01, "offset": -1.0, "default": 100.0 },
+    "ADBE Text Tracking Amount": { "param": "tracking", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Fill Color": { "param": "fillcol", "enableParam": "overridefill", "default": "#ffffffff" },
+    "ADBE Text Skew": { "param": "skew", "scale": 1.0, "default": 0.0 },
+    "ADBE Text Line Spacing": { "param": "linespacing", "scale": 1.0, "default": 0.0 }
+  }
+}

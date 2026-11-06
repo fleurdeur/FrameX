@@ -130,12 +130,10 @@ class GlSequentialVideoSession(
                 videoHeight = rawH.coerceAtLeast(16)
             }
 
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: return false
-            val dec = MediaCodec.createDecoderByType(mime)
-            // Hint low-latency real-time priority when supported by vendor codec
-            runCatching { format.setInteger(MediaFormat.KEY_PRIORITY, 0) }
-            dec.configure(format, surf, null, 0)
-            dec.start()
+            val dec = UniversalCodecEngine.openCompatibleVideoDecoder(format, surf) ?: run {
+                release()
+                return false
+            }
             codec = dec
 
             android.opengl.Matrix.setIdentityM(stMatrix, 0)
@@ -238,7 +236,7 @@ class GlSequentialVideoSession(
     private fun awaitSurfaceFrameAndLatch(st: SurfaceTexture) {
         synchronized(frameSignalLock) {
             if (!frameArrived) {
-                runCatching { frameSignalLock.wait(28L) }
+                runCatching { frameSignalLock.wait(16L) }
             }
         }
         runCatching {
@@ -297,10 +295,32 @@ object SequentialVideoDecoder {
         sortedTimestampsMs: List<Long>,
         maxEdge: Int,
         cancelled: AtomicBoolean? = null,
-        preferRgb565: Boolean = true,
+        preferRgb565: Boolean = false,
+        onFrameDecoded: (bucketMs: Long, bitmap: Bitmap) -> Unit
+    ): Boolean = decodeChunkedTimestampsHardware(
+        context = context,
+        uriStr = uriStr,
+        timestampChunksMs = listOf(sortedTimestampsMs),
+        maxEdge = maxEdge,
+        cancelled = cancelled,
+        onFrameDecoded = onFrameDecoded
+    )
+
+    /**
+     * Decodes multiple sorted GOP chunks inside a SINGLE persistent EGL + MediaCodec session!
+     * Ideal for Reverse Video: pass chunks ordered from `[focusMs .. 0]` where each 1.5s chunk is
+     * sorted ascending `[chunkStart .. chunkEnd]`, giving instant reverse playback at the playhead
+     * with zero repeated codec/EGL teardown!
+     */
+    fun decodeChunkedTimestampsHardware(
+        context: Context,
+        uriStr: String,
+        timestampChunksMs: List<List<Long>>,
+        maxEdge: Int,
+        cancelled: AtomicBoolean? = null,
         onFrameDecoded: (bucketMs: Long, bitmap: Bitmap) -> Unit
     ): Boolean {
-        if (sortedTimestampsMs.isEmpty()) return true
+        if (timestampChunksMs.isEmpty() || timestampChunksMs.all { it.isEmpty() }) return true
         if (Build.FINGERPRINT.equals("robolectric", ignoreCase = true)) return false
         val doneLatch = CountDownLatch(1)
         var succeeded = false
@@ -310,7 +330,6 @@ object SequentialVideoDecoder {
             var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
             var session: GlSequentialVideoSession? = null
             var oesProgram = 0
-            var scratchArgb: Bitmap? = null
             try {
                 eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
                 if (eglDisplay == EGL14.EGL_NO_DISPLAY) return@Runnable
@@ -382,34 +401,32 @@ object SequentialVideoDecoder {
                 val matLoc = GLES20.glGetUniformLocation(oesProgram, "uTexMatrix")
                 val texLoc = GLES20.glGetUniformLocation(oesProgram, "uOesTex")
                 val readBuf = ByteBuffer.allocateDirect(dstW * dstH * 4).order(ByteOrder.nativeOrder())
-                val reusableArgb = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
-                scratchArgb = reusableArgb
 
                 var decodedCount = 0
-                for (tMs in sortedTimestampsMs) {
+                for (chunk in timestampChunksMs) {
                     if (cancelled?.get() == true) break
-                    if (session.advanceToFrameMs(tMs)) {
-                        GLES20.glViewport(0, 0, dstW, dstH)
-                        GLES20.glUseProgram(oesProgram)
-                        quadBuf.position(0)
-                        GLES20.glEnableVertexAttribArray(posLoc)
-                        GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
-                        quadBuf.position(2)
-                        GLES20.glEnableVertexAttribArray(uvLoc)
-                        GLES20.glVertexAttribPointer(uvLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
-                        GLES20.glUniformMatrix4fv(matLoc, 1, false, session.stMatrix, 0)
-                        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, session.oesTexId)
-                        GLES20.glUniform1i(texLoc, 0)
-                        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                    for (tMs in chunk) {
+                        if (cancelled?.get() == true) break
+                        if (session.advanceToFrameMs(tMs)) {
+                            GLES20.glViewport(0, 0, dstW, dstH)
+                            GLES20.glUseProgram(oesProgram)
+                            quadBuf.position(0)
+                            GLES20.glEnableVertexAttribArray(posLoc)
+                            GLES20.glVertexAttribPointer(posLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+                            quadBuf.position(2)
+                            GLES20.glEnableVertexAttribArray(uvLoc)
+                            GLES20.glVertexAttribPointer(uvLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuf)
+                            GLES20.glUniformMatrix4fv(matLoc, 1, false, session.stMatrix, 0)
+                            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, session.oesTexId)
+                            GLES20.glUniform1i(texLoc, 0)
+                            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-                        readBuf.position(0)
-                        GLES20.glReadPixels(0, 0, dstW, dstH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, readBuf)
-                        readBuf.position(0)
-                        reusableArgb.copyPixelsFromBuffer(readBuf)
-                        val targetCfg = if (preferRgb565) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
-                        val outBmp = reusableArgb.copy(targetCfg, false) ?: reusableArgb.copy(Bitmap.Config.ARGB_8888, false)
-                        if (outBmp != null) {
+                            readBuf.position(0)
+                            GLES20.glReadPixels(0, 0, dstW, dstH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, readBuf)
+                            readBuf.position(0)
+                            val outBmp = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
+                            outBmp.copyPixelsFromBuffer(readBuf)
                             onFrameDecoded(tMs, outBmp)
                             decodedCount++
                         }
@@ -419,7 +436,6 @@ object SequentialVideoDecoder {
             } catch (_: Throwable) {
                 succeeded = false
             } finally {
-                runCatching { scratchArgb?.recycle() }
                 runCatching { session?.release() }
                 if (oesProgram != 0) runCatching { GLES20.glDeleteProgram(oesProgram) }
                 if (eglDisplay != EGL14.EGL_NO_DISPLAY) {

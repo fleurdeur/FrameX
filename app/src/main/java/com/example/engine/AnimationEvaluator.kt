@@ -34,6 +34,7 @@ data class EvaluatedTransform(
     val pivotX: Float = 0f,
     val pivotY: Float = 0f,
     val scale: Float,
+    val scaleY: Float = scale,
     val rotX: Float,
     val rotY: Float,
     val rotZ: Float,
@@ -45,7 +46,8 @@ data class EvaluatedEffectParams(
     val secondary: Float,
     val frequency: Float,
     val angleDeg: Float,
-    val mixFraction: Float
+    val mixFraction: Float,
+    val featherFraction: Float = 0f
 )
 
 object AnimationEvaluator {
@@ -115,14 +117,15 @@ object AnimationEvaluator {
                     val a: Keyframe = kfs[i]
                     val b: Keyframe = kfs[i + 1]
                     if (timeMs in a.timeMs..b.timeMs) {
-                        if (a.holdStep && timeMs < b.timeMs) {
+                        if ((a.holdStep || b.rawEasing.startsWith("step", ignoreCase = true) || b.rawEasing.startsWith("hold", ignoreCase = true)) && timeMs < b.timeMs) {
                             result = a.value
                             break
                         }
                         val span = (b.timeMs - a.timeMs).coerceAtLeast(1L).toFloat()
                         val rawT = (timeMs - a.timeMs).toFloat() / span
-                        val easedT = evaluateCubicBezier(
-                            t = rawT,
+                        val easedT = evaluateSegmentEasing(
+                            rawT = rawT,
+                            rawEasingOnEnd = b.rawEasing,
                             x1 = a.outTangentX,
                             y1 = a.outTangentY,
                             x2 = b.inTangentX,
@@ -147,19 +150,109 @@ object AnimationEvaluator {
         timeMs: Long,
         audio: AudioSpectrumSnapshot = AudioSpectrumSnapshot()
     ): EvaluatedEffectParams {
-        val nodeAudioMod = audio.levelFor(effect.audioBoundBand) * effect.audioSensitivity * 0.65f
-        val p1 = (evaluateProperty(effect.primaryProp, timeMs, audio) + nodeAudioMod).coerceIn(0f, 3f)
-        val p2 = evaluateProperty(effect.secondaryProp, timeMs, audio).coerceIn(0f, 2f)
-        val p3 = evaluateProperty(effect.frequencyProp, timeMs, audio).coerceIn(0f, 4f)
-        val p4 = evaluateProperty(effect.angleProp, timeMs, audio).coerceIn(-720f, 720f)
+        val def = EffectsCatalog.findByIdOrNull(effect.effectId)
+        val p1Spec = def?.paramSpecs?.firstOrNull { it.slot == com.example.data.model.EffectParamSlot.PRIMARY }
+        val p2Spec = def?.paramSpecs?.firstOrNull { it.slot == com.example.data.model.EffectParamSlot.SECONDARY }
+        val p3Spec = def?.paramSpecs?.firstOrNull { it.slot == com.example.data.model.EffectParamSlot.FREQUENCY }
+        val p4Spec = def?.paramSpecs?.firstOrNull { it.slot == com.example.data.model.EffectParamSlot.ANGLE }
+
+        val p1Span = ((p1Spec?.max ?: 3f) - (p1Spec?.min ?: 0f)).coerceAtLeast(0.1f)
+        val nodeAudioMod = audio.levelFor(effect.audioBoundBand) * effect.audioSensitivity * (if (p1Span > 10f) p1Span * 0.35f else 0.65f)
+
+        val rawP1 = evaluateProperty(effect.primaryProp, timeMs, audio) + nodeAudioMod
+        val rawP2 = evaluateProperty(effect.secondaryProp, timeMs, audio)
+        val rawP3 = evaluateProperty(effect.frequencyProp, timeMs, audio)
+        val rawP4 = evaluateProperty(effect.angleProp, timeMs, audio)
+
+        val p1 = if (p1Spec != null) rawP1.coerceIn(p1Spec.min, p1Spec.max) else rawP1.coerceIn(-10000f, 10000f)
+        val p2 = if (p2Spec != null) rawP2.coerceIn(p2Spec.min, p2Spec.max) else rawP2.coerceIn(-10000f, 10000f)
+        val p3 = if (p3Spec != null) rawP3.coerceIn(p3Spec.min, p3Spec.max) else rawP3.coerceIn(-10000f, 10000f)
+        val p4 = if (p4Spec != null) rawP4.coerceIn(p4Spec.min, p4Spec.max) else rawP4.coerceIn(-3600f, 3600f)
         val p5 = (evaluateProperty(effect.mixProp, timeMs, audio) / 100f).coerceIn(0f, 1f)
+        val featherFrac = (evaluateProperty(effect.featherProp, timeMs, audio) / 100f).coerceIn(0f, 1f)
         return EvaluatedEffectParams(
             primary = p1,
             secondary = p2,
             frequency = p3,
             angleDeg = p4,
-            mixFraction = p5
+            mixFraction = p5,
+            featherFraction = featherFrac
         )
+    }
+
+    /**
+     * Evaluates Alight Motion 5.0 segment easing (`b.rawEasing` governs segment `a -> b`):
+     * - `cubicBezier x1 y1 x2 y2` (with unclamped y1/y2 for overshoot/anticipation)
+     * - `bounce a b`
+     * - `cyclic period amp phase decay ...`
+     * - `step` / `hold`
+     */
+    fun evaluateSegmentEasing(
+        rawT: Float,
+        rawEasingOnEnd: String,
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float
+    ): Float {
+        val t = rawT.coerceIn(0f, 1f)
+        if (t <= 0.0001f) return 0f
+        if (t >= 0.9999f) return 1f
+        val trimmed = rawEasingOnEnd.trim()
+        if (trimmed.isNotEmpty()) {
+            val parts = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val kind = parts.firstOrNull()?.lowercase().orEmpty()
+            when (kind) {
+                "cubicbezier" -> {
+                    val bx1 = parts.getOrNull(1)?.toFloatOrNull() ?: x1
+                    val by1 = parts.getOrNull(2)?.toFloatOrNull() ?: y1
+                    val bx2 = parts.getOrNull(3)?.toFloatOrNull() ?: x2
+                    val by2 = parts.getOrNull(4)?.toFloatOrNull() ?: y2
+                    return evaluateCubicBezier(t, bx1, by1, bx2, by2)
+                }
+                "bounce" -> {
+                    val elasticity = parts.getOrNull(1)?.toFloatOrNull() ?: 1.0f
+                    val gravity = parts.getOrNull(2)?.toFloatOrNull() ?: 0.0f
+                    return evaluateBounceEasing(t, elasticity, gravity)
+                }
+                "cyclic" -> {
+                    val cycles = parts.getOrNull(1)?.toFloatOrNull() ?: 1.0f
+                    val amp = parts.getOrNull(2)?.toFloatOrNull() ?: 0.5f
+                    val phase = parts.getOrNull(3)?.toFloatOrNull() ?: 0.0f
+                    val decay = parts.getOrNull(4)?.toFloatOrNull() ?: 0.0f
+                    val env = if (decay != 0f) exp(-abs(decay) * t) else 1f
+                    return t + sin((t * cycles.coerceAtLeast(0.1f) + phase) * 2f * PI.toFloat()) * amp * env * (1f - t)
+                }
+                "step", "hold" -> return 0f
+                "linear" -> return t
+            }
+        }
+        return evaluateCubicBezier(t, x1, y1, x2, y2)
+    }
+
+    fun evaluateBounceEasing(tRaw: Float, elasticity: Float = 1.0f, gravityMod: Float = 0.0f): Float {
+        val t = tRaw.coerceIn(0f, 1f)
+        // Standard Robert Penner / AM bounce curve modulated by elasticity parameter
+        val n1 = 7.5625f
+        val d1 = 2.75f
+        val baseBounce = when {
+            t < 1f / d1 -> n1 * t * t
+            t < 2f / d1 -> {
+                val tt = t - 1.5f / d1
+                n1 * tt * tt + 0.75f
+            }
+            t < 2.5f / d1 -> {
+                val tt = t - 2.25f / d1
+                n1 * tt * tt + 0.9375f
+            }
+            else -> {
+                val tt = t - 2.625f / d1
+                n1 * tt * tt + 0.984375f
+            }
+        }
+        val boost = ((elasticity - 1f) * 0.08f - gravityMod * 0.03f).coerceIn(-0.25f, 0.35f)
+        val dampedOsc = sin(t * PI.toFloat() * 3f) * (1f - t) * boost
+        return (baseBounce + dampedOsc).let { if (t >= 0.999f) 1f else it }
     }
 
     fun evaluatePluginUniformFloats(
@@ -252,11 +345,44 @@ object AnimationEvaluator {
                     val beatPhase = (timeSec * (bpm / 60f)) % 1f
                     (1f - beatPhase).pow(3f) * 28f
                 }
+                clean.startsWith("linear(") || clean.startsWith("ease(") ||
+                    clean.startsWith("easein(") || clean.startsWith("easeout(") -> {
+                    val fn = clean.substringBefore("(")
+                    val args = clean.substringAfter("(").substringBeforeLast(")").split(",")
+                        .map { resolveExprAtom(it.trim(), timeSec, baseVal) }
+                    val tVal = args.getOrElse(0) { timeSec }
+                    val tMin = args.getOrElse(1) { 0f }
+                    val tMax = args.getOrElse(2) { 1f }
+                    val v1 = args.getOrElse(3) { 0f }
+                    val v2 = args.getOrElse(4) { 100f }
+                    val norm = if (abs(tMax - tMin) > 1e-6f) ((tVal - tMin) / (tMax - tMin)).coerceIn(0f, 1f) else 0f
+                    val k = when (fn) {
+                        "ease" -> evaluateCubicBezier(norm, 0.42f, 0f, 0.58f, 1f)
+                        "easein" -> evaluateCubicBezier(norm, 0.42f, 0f, 1f, 1f)
+                        "easeout" -> evaluateCubicBezier(norm, 0f, 0f, 0.58f, 1f)
+                        else -> norm
+                    }
+                    (v1 + (v2 - v1) * k) - baseVal
+                }
+                clean.startsWith("clamp(") -> {
+                    val args = clean.removePrefix("clamp(").removeSuffix(")").split(",")
+                        .map { resolveExprAtom(it.trim(), timeSec, baseVal) }
+                    val v = args.getOrElse(0) { baseVal }
+                    val mn = args.getOrElse(1) { 0f }
+                    val mx = args.getOrElse(2) { 100f }
+                    v.coerceIn(mn, mx) - baseVal
+                }
                 else -> clean.toFloatOrNull()?.let { it - baseVal } ?: 0f
             }
         } catch (_: Exception) {
             0f
         }
+    }
+
+    private fun resolveExprAtom(token: String, timeSec: Float, baseVal: Float): Float = when (token) {
+        "time" -> timeSec
+        "value" -> baseVal
+        else -> token.toFloatOrNull() ?: 0f
     }
 
     /**
@@ -306,7 +432,14 @@ object AnimationEvaluator {
         } ?: return baseHierarchy
 
         val camTr = evaluateHierarchyTransform(activeCam, allLayers, timeMs, audio, emptySet())
-        val invZoom = (1f / camTr.scale.coerceAtLeast(0.05f)).coerceIn(0.05f, 12f)
+        // Camera Z-depth perspective zoom: negative posZ pushes camera closer (zooms in), positive posZ pulls back (zooms out)
+        val focalPx = 1000f
+        val relDepth = (focalPx + camTr.posZ - baseHierarchy.posZ).coerceAtLeast(80f)
+        val depthPerspective = (focalPx / relDepth).coerceIn(0.05f, 16f)
+        // Camera scale < 100% zooms IN (smaller viewport), OR > 100% if user scales camera up -> invert scale cleanly
+        val invScaleZoom = (1f / camTr.scale.coerceAtLeast(0.04f)).coerceIn(0.04f, 25f)
+        val combinedZoom = (invScaleZoom * depthPerspective).coerceIn(0.03f, 25f)
+
         val camRad = Math.toRadians((-camTr.rotZ).toDouble())
         val cosC = cos(camRad).toFloat()
         val sinC = sin(camRad).toFloat()
@@ -314,9 +447,12 @@ object AnimationEvaluator {
         val dy = baseHierarchy.posY - camTr.posY
 
         return baseHierarchy.copy(
-            posX = (dx * cosC - dy * sinC) * invZoom,
-            posY = (dx * sinC + dy * cosC) * invZoom,
-            scale = (baseHierarchy.scale * invZoom).coerceIn(0.02f, 12f),
+            posX = (dx * cosC - dy * sinC) * combinedZoom,
+            posY = (dx * sinC + dy * cosC) * combinedZoom,
+            posZ = 0f,
+            scale = (baseHierarchy.scale * combinedZoom).coerceIn(0.01f, 50f),
+            rotX = baseHierarchy.rotX - camTr.rotX,
+            rotY = baseHierarchy.rotY - camTr.rotY,
             rotZ = baseHierarchy.rotZ - camTr.rotZ
         )
     }
@@ -328,17 +464,44 @@ object AnimationEvaluator {
         audio: AudioSpectrumSnapshot,
         visitedIds: Set<String>
     ): EvaluatedTransform {
+        val sx = (evaluateProperty(layer.scale, timeMs, audio) / 100f).coerceIn(0f, 50f)
+        val sy = if (layer.hasSeparateScaleY) {
+            (evaluateProperty(layer.scaleY, timeMs, audio) / 100f).coerceIn(0f, 50f)
+        } else {
+            sx
+        }
+        var localOpacity = (evaluateProperty(layer.opacity, timeMs, audio) / 100f).coerceIn(0f, 1f)
+        // Evaluate non-destructive Alight Motion .fade effect envelope if present on the layer
+        layer.effects.firstOrNull {
+            it.enabled && (it.effectId.equals("AM_Fade", ignoreCase = true) ||
+                it.effectId.endsWith(".fade", ignoreCase = true))
+        }?.let { fadeFx ->
+            val inSec = evaluateProperty(fadeFx.primaryProp, timeMs, audio).coerceAtLeast(0f)
+            val outSec = evaluateProperty(fadeFx.secondaryProp, timeMs, audio).coerceAtLeast(0f)
+            val inDurMs = (inSec * 1000f).toLong()
+            val outDurMs = (outSec * 1000f).toLong()
+            var fadeMult = 1f
+            if (inDurMs > 4L && timeMs < layer.startTimeMs + inDurMs) {
+                fadeMult *= ((timeMs - layer.startTimeMs).toFloat() / inDurMs.toFloat()).coerceIn(0f, 1f)
+            }
+            if (outDurMs > 4L && timeMs > layer.endTimeMs - outDurMs) {
+                fadeMult *= ((layer.endTimeMs - timeMs).toFloat() / outDurMs.toFloat()).coerceIn(0f, 1f)
+            }
+            localOpacity = (localOpacity * fadeMult).coerceIn(0f, 1f)
+        }
+
         val local = EvaluatedTransform(
             posX = evaluateProperty(layer.posX, timeMs, audio),
             posY = evaluateProperty(layer.posY, timeMs, audio),
             posZ = evaluateProperty(layer.posZ, timeMs, audio),
             pivotX = evaluateProperty(layer.pivotX, timeMs, audio),
             pivotY = evaluateProperty(layer.pivotY, timeMs, audio),
-            scale = (evaluateProperty(layer.scale, timeMs, audio) / 100f).coerceIn(0.02f, 8f),
+            scale = sx,
+            scaleY = sy,
             rotX = evaluateProperty(layer.rotationX, timeMs, audio),
             rotY = evaluateProperty(layer.rotationY, timeMs, audio),
             rotZ = evaluateProperty(layer.rotationZ, timeMs, audio),
-            opacity = (evaluateProperty(layer.opacity, timeMs, audio) / 100f).coerceIn(0f, 1f)
+            opacity = localOpacity
         )
 
         val pId = layer.parentId ?: return local
@@ -350,8 +513,34 @@ object AnimationEvaluator {
         val cosR = cos(rad).toFloat()
         val sinR = sin(rad).toFloat()
 
-        val rotatedX = (local.posX * cosR - local.posY * sinR) * parentWorld.scale
-        val rotatedY = (local.posX * sinR + local.posY * cosR) * parentWorld.scale
+        val scaledLocalX = local.posX * parentWorld.scale
+        val scaledLocalY = local.posY * parentWorld.scaleY
+        val rotatedX = scaledLocalX * cosR - scaledLocalY * sinR
+        val rotatedY = scaledLocalX * sinR + scaledLocalY * cosR
+
+        // Honor com.alightcreative.effects.parenthelper if attached to child layer
+        val parentHelper = layer.effects.firstOrNull {
+            it.enabled && it.effectId.endsWith("parenthelper", ignoreCase = true)
+        }
+        val effectiveParentScaleX: Float
+        val effectiveParentScaleY: Float
+        val effectiveParentRotZ: Float
+        if (parentHelper != null) {
+            val scaleMode = parentHelper.customParams["scaleMode"]?.let { evaluateProperty(it, timeMs, audio).toInt() } ?: 0
+            val rotateMode = parentHelper.customParams["rotateMode"]?.let { evaluateProperty(it, timeMs, audio).toInt() } ?: 0
+            val scaleWeight = parentHelper.customParams["scaleWeight"]?.let { evaluateProperty(it, timeMs, audio) } ?: 1f
+            val rotateWeight = parentHelper.customParams["rotateWeight"]?.let { evaluateProperty(it, timeMs, audio) } ?: 1f
+            effectiveParentScaleX = if (scaleMode == 1) 1f else (1f + (parentWorld.scale - 1f) * scaleWeight)
+            effectiveParentScaleY = if (scaleMode == 1) 1f else (1f + (parentWorld.scaleY - 1f) * scaleWeight)
+            effectiveParentRotZ = if (rotateMode == 1) 0f else (parentWorld.rotZ * rotateWeight)
+        } else {
+            effectiveParentScaleX = parentWorld.scale
+            effectiveParentScaleY = parentWorld.scaleY
+            effectiveParentRotZ = parentWorld.rotZ
+        }
+
+        // Null objects are invisible transform helpers — their own opacity does not hide child layers
+        val inheritedOpacity = if (parent.type == LayerType.NULL_OBJECT) 1f else parentWorld.opacity
 
         return EvaluatedTransform(
             posX = parentWorld.posX + rotatedX,
@@ -359,11 +548,12 @@ object AnimationEvaluator {
             posZ = parentWorld.posZ + local.posZ,
             pivotX = local.pivotX,
             pivotY = local.pivotY,
-            scale = (parentWorld.scale * local.scale).coerceIn(0.02f, 8f),
+            scale = (effectiveParentScaleX * local.scale).coerceIn(0f, 50f),
+            scaleY = (effectiveParentScaleY * local.scaleY).coerceIn(0f, 50f),
             rotX = parentWorld.rotX + local.rotX,
             rotY = parentWorld.rotY + local.rotY,
-            rotZ = parentWorld.rotZ + local.rotZ,
-            opacity = (parentWorld.opacity * local.opacity).coerceIn(0f, 1f)
+            rotZ = effectiveParentRotZ + local.rotZ,
+            opacity = (inheritedOpacity * local.opacity).coerceIn(0f, 1f)
         )
     }
 

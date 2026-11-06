@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -98,6 +102,30 @@ fun AmSpeedAndTimingPanel(
     val isVideo = selectedLayer.type == LayerType.VIDEO
     val isAudio = selectedLayer.type == LayerType.AUDIO
 
+    val context = LocalContext.current
+    val audioJsonImporterLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val jsonText = inputStream.bufferedReader().use { it.readText() }
+                    val json = org.json.JSONObject(jsonText)
+                    val presetName = json.optString("name", json.optString("preset", "Imported JSON"))
+                    val reverb = json.optDouble("reverbMix", json.optDouble("reverb", 0.0)).toFloat()
+                    val room = json.optDouble("roomSize", json.optDouble("room", 0.5)).toFloat()
+                    val bass = json.optDouble("bassBoost", json.optDouble("bass", 0.0)).toFloat()
+                    val echo = json.optDouble("echoMix", json.optDouble("echo", 0.0)).toFloat()
+                    val delay = json.optDouble("echoDelayMs", json.optDouble("delayMs", 240.0)).toFloat()
+                    val cutoff = json.optDouble("filterCutoff", json.optDouble("cutoff", 1.0)).toFloat()
+                    val pitch = json.optDouble("pitchSemitones", json.optDouble("pitch", 0.0)).toFloat()
+                    val speed = if (json.has("recommendedSpeed")) json.getDouble("recommendedSpeed").toFloat() else null
+                    onUpdateAudioEffects(presetName, reverb, room, bass, echo, delay, cutoff, pitch, speed)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -127,6 +155,7 @@ fun AmSpeedAndTimingPanel(
                 unit = "x",
                 label = "Speed",
                 onValueChange = onUpdateSpeed,
+                onReset = { onUpdateSpeed(1.0f) },
                 testTag = "speed_wheel_scrubber"
             )
         }
@@ -414,9 +443,12 @@ fun AmSpeedAndTimingPanel(
                         )
                     }
 
-                    if (hasCustomDsp) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "Reset",
+                            text = "Import JSON",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = AudioCyan,
@@ -424,11 +456,27 @@ fun AmSpeedAndTimingPanel(
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(AudioCyan.copy(alpha = 0.14f))
                                 .clickable {
-                                    onUpdateAudioEffects("Clean", 0f, 0.5f, 0f, 0f, 240f, 1.0f, 0f, null)
+                                    audioJsonImporterLauncher.launch(arrayOf("application/json", "*/*"))
                                 }
-                                .testTag("audio_dsp_reset_button")
+                                .testTag("import_audio_json_button")
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
+                        if (hasCustomDsp) {
+                            Text(
+                                text = "Reset",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = AudioCyan,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(AudioCyan.copy(alpha = 0.14f))
+                                    .clickable {
+                                        onUpdateAudioEffects("Clean", 0f, 0.5f, 0f, 0f, 240f, 1.0f, 0f, null)
+                                    }
+                                    .testTag("audio_dsp_reset_button")
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
 

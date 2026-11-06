@@ -2,11 +2,13 @@ package com.example.engine
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Camera
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -70,11 +72,25 @@ object PlaybackCacheEngine {
     @Volatile
     private var activeRevision: Long = 0L
 
+    @Volatile
+    private var fullPreRenderCompletedRev: Long = -1L
+
+    @Volatile
+    private var fullPreRenderQuality: PreviewQuality? = null
+
+    private val cachedLayerIdsByRev = ConcurrentHashMap<String, Boolean>()
+
     private val _preRenderState = MutableStateFlow(PreRenderUiState())
     val preRenderState: StateFlow<PreRenderUiState> = _preRenderState.asStateFlow()
 
+    fun isFullCompositionCached(projectRevision: Long, quality: PreviewQuality): Boolean =
+        fullPreRenderCompletedRev == projectRevision && fullPreRenderQuality == quality
+
+    fun isLayerOrGroupCached(projectRevision: Long, quality: PreviewQuality, layerId: String): Boolean =
+        cachedLayerIdsByRev["$projectRevision|${quality.name}|$layerId"] == true
+
     private fun createLru(sizeKb: Int): LruCache<String, Bitmap> {
-        return object : LruCache<String, Bitmap>(sizeKb.coerceIn(16 * 1024, 512 * 1024)) {
+        return object : LruCache<String, Bitmap>(sizeKb.coerceIn(16 * 1024, 2048 * 1024)) {
             override fun sizeOf(key: String, value: Bitmap): Int {
                 return (value.allocationByteCount / 1024).coerceAtLeast(1)
             }
@@ -82,7 +98,7 @@ object PlaybackCacheEngine {
     }
 
     fun configureCacheLimitMb(limitMb: Int) {
-        val targetKb = (limitMb.coerceIn(32, 512)) * 1024
+        val targetKb = (limitMb.coerceIn(32, 2048)) * 1024
         if (targetKb == maxCacheKb) return
         maxCacheKb = targetKb
         synchronized(this) {
@@ -131,12 +147,76 @@ object PlaybackCacheEngine {
         }
     }
 
+    fun getCachedLayerOrGroupFrame(
+        projectRevision: Long,
+        quality: PreviewQuality,
+        layerId: String,
+        timeMs: Long,
+        fps: Int
+    ): Bitmap? {
+        cacheLookups.incrementAndGet()
+        val bucketMs = quantizeFrameMs(timeMs, fps)
+        val key = buildLayerKey(projectRevision, quality, layerId, bucketMs)
+        val hit = synchronized(this) { frameCache.get(key) }
+        if (hit != null && !hit.isRecycled) {
+            cacheHits.incrementAndGet()
+            return hit
+        }
+        return null
+    }
+
+    fun putCachedLayerOrGroupFrame(
+        projectRevision: Long,
+        quality: PreviewQuality,
+        layerId: String,
+        bucketMs: Long,
+        bitmap: Bitmap
+    ) {
+        val key = buildLayerKey(projectRevision, quality, layerId, bucketMs)
+        synchronized(this) {
+            frameCache.put(key, bitmap)
+        }
+    }
+
+    /**
+     * Evicts cached composition frames far outside `[centerTimeMs - windowHalfMs .. centerTimeMs + windowHalfMs]`
+     * when RAM cache pressure exceeds 80% of [maxCacheKb], keeping playback fast on huge projects.
+     */
+    fun evictFramesOutsideWindow(
+        projectRevision: Long,
+        quality: PreviewQuality,
+        centerTimeMs: Long,
+        windowHalfMs: Long = 8_000L
+    ) {
+        val currentSizeKb = synchronized(this) { frameCache.size() }
+        if (currentSizeKb < (maxCacheKb * 4) / 5) return
+        val revQualKey = "$projectRevision|${quality.name}"
+        val set = cachedBucketsByRev[revQualKey] ?: return
+        val staleBuckets = synchronized(set) {
+            set.filter { b -> abs(b - centerTimeMs) > windowHalfMs }
+        }
+        if (staleBuckets.isEmpty()) return
+        synchronized(this) {
+            staleBuckets.forEach { b ->
+                frameCache.remove(buildKey(projectRevision, quality, b))
+            }
+        }
+        synchronized(set) {
+            set.removeAll(staleBuckets.toSet())
+        }
+        fullPreRenderCompletedRev = -1L
+    }
+
     fun notifyProjectEdited(newRevision: Long, quality: PreviewQuality, durationMs: Long, fps: Int) {
         activeRevision = newRevision
+        fullPreRenderCompletedRev = -1L
+        fullPreRenderQuality = null
         // Evict older revision bucket indexes to keep RAM tidy
         val prefix = "$newRevision|"
         val staleKeys = cachedBucketsByRev.keys.filter { !it.startsWith(prefix) }
         staleKeys.forEach { cachedBucketsByRev.remove(it) }
+        val staleLayerKeys = cachedLayerIdsByRev.keys.filter { !it.startsWith(prefix) }
+        staleLayerKeys.forEach { cachedLayerIdsByRev.remove(it) }
         _preRenderState.value = PreRenderUiState(
             isPreRendering = false,
             progress = 0f,
@@ -149,10 +229,13 @@ object PlaybackCacheEngine {
     }
 
     fun clearAll() {
+        fullPreRenderCompletedRev = -1L
+        fullPreRenderQuality = null
         synchronized(this) {
             frameCache.evictAll()
         }
         cachedBucketsByRev.clear()
+        cachedLayerIdsByRev.clear()
         cacheHits.set(0L)
         cacheLookups.set(0L)
         _preRenderState.value = PreRenderUiState(
@@ -194,23 +277,25 @@ object PlaybackCacheEngine {
         projectRevision: Long,
         quality: PreviewQuality,
         fpsCap: Int,
-        audioEngine: AudioReactorEngine
+        audioEngine: AudioReactorEngine,
+        scalePercent: Int = 100,
+        workerThreads: Int = 4
     ) = withContext(Dispatchers.Default) {
         activeRevision = projectRevision
         val renderFps = min(project.fps.coerceIn(12, 60), fpsCap.coerceIn(24, 60))
         val stepMs = (1000.0 / renderFps).roundToInt().coerceAtLeast(16).toLong()
-        val durMs = project.durationMs.coerceIn(200L, 60_000L)
+        val durMs = project.effectiveEditDurationMs().coerceIn(200L, 120_000L)
 
         val frameBuckets = ArrayList<Long>()
         var cursorMs = 0L
-        while (cursorMs <= durMs && frameBuckets.size < 900) {
+        while (cursorMs <= durMs && frameBuckets.size < 3600) {
             frameBuckets.add(quantizeFrameMs(cursorMs, renderFps))
             cursorMs += stepMs
         }
         val distinctBuckets = frameBuckets.distinct()
         val totalFrames = distinctBuckets.size.coerceAtLeast(1)
 
-        val (targetW, targetH) = computeTargetDimensions(project, quality)
+        val (targetW, targetH) = computeTargetDimensions(project, quality, scalePercent)
         val startWallMs = System.currentTimeMillis()
 
         _preRenderState.value = _preRenderState.value.copy(
@@ -270,7 +355,8 @@ object PlaybackCacheEngine {
                     targetW = targetW,
                     targetH = targetH,
                     audioEngine = audioEngine,
-                    startWallMs = startWallMs
+                    startWallMs = startWallMs,
+                    requestedWorkers = workerThreads
                 )
             }
         } finally {
@@ -278,6 +364,10 @@ object PlaybackCacheEngine {
             val spans = computeCachedSpans(projectRevision, quality, durMs, stepMs)
             val count = cachedCountFor(projectRevision, quality)
             val fpsRate = (count / elapsedSec).roundToInt().coerceAtLeast(1)
+            if (activeRevision == projectRevision && count >= (totalFrames * 9) / 10) {
+                fullPreRenderCompletedRev = projectRevision
+                fullPreRenderQuality = quality
+            }
             _preRenderState.value = PreRenderUiState(
                 isPreRendering = false,
                 progress = if (count >= totalFrames - 1) 1f else (count.toFloat() / totalFrames.coerceAtLeast(1)),
@@ -293,6 +383,145 @@ object PlaybackCacheEngine {
     }
 
     /**
+     * Pre-renders a single layer OR a `LayerType.GROUP` layer (including all recursive child layers
+     * parented under [targetLayerId] and the group's own effect stack) with transparent background
+     * into the bounded RAM cache so heavy individual layers/groups composite in 1 GPU draw call!
+     */
+    suspend fun preRenderLayerOrGroup(
+        context: Context?,
+        project: Project,
+        targetLayerId: String,
+        projectRevision: Long,
+        quality: PreviewQuality,
+        fpsCap: Int,
+        audioEngine: AudioReactorEngine,
+        scalePercent: Int = 100
+    ): Int = withContext(Dispatchers.Default) {
+        activeRevision = projectRevision
+        val rootLayer = project.layers.firstOrNull { it.id == targetLayerId } ?: return@withContext 0
+        val descendants = project.descendantLayerIdsOf(targetLayerId)
+        val includedIds = descendants + targetLayerId
+
+        // Keep ancestors (for world transform evaluation) as invisible `NULL_OBJECT` rigs, and keep included layers visible!
+        val isolatedLayers = project.layers.mapNotNull { lyr ->
+            if (lyr.id in includedIds) {
+                lyr.copy(visible = true)
+            } else {
+                // Keep non-rendering parent chain only if needed for world transform
+                lyr.copy(visible = false, effects = emptyList())
+            }
+        }
+        val spanStartMs = project.layers.filter { it.id in includedIds }.minOfOrNull { it.startTimeMs }?.coerceAtLeast(0L) ?: rootLayer.startTimeMs
+        val spanEndMs = project.layers.filter { it.id in includedIds }.maxOfOrNull { it.endTimeMs }?.coerceAtLeast(spanStartMs + 100L) ?: rootLayer.endTimeMs
+
+        val isolatedProject = project.copy(
+            backgroundColor = "TransparentAlpha",
+            layers = isolatedLayers,
+            durationMs = spanEndMs
+        )
+
+        val renderFps = min(project.fps.coerceIn(12, 60), fpsCap.coerceIn(24, 60))
+        val stepMs = (1000.0 / renderFps).roundToInt().coerceAtLeast(16).toLong()
+        val buckets = ArrayList<Long>()
+        var cursor = spanStartMs
+        while (cursor <= spanEndMs && buckets.size < 1800) {
+            buckets.add(quantizeFrameMs(cursor, renderFps))
+            cursor += stepMs
+        }
+        val distinctBuckets = buckets.distinct()
+        val totalFrames = distinctBuckets.size.coerceAtLeast(1)
+        val (targetW, targetH) = computeTargetDimensions(project, quality, scalePercent)
+        val startWallMs = System.currentTimeMillis()
+        var renderedFrames = 0
+
+        _preRenderState.value = _preRenderState.value.copy(
+            isPreRendering = true,
+            progress = 0.02f,
+            totalTargetFrames = totalFrames,
+            cacheRevision = projectRevision,
+            engineModeLabel = "Layer/Group Pre-Render (${rootLayer.name})"
+        )
+
+        try {
+            val gpuDone = if (context != null) {
+                OffscreenGlPreRenderEngine.preRenderOnGpu(
+                    context = context,
+                    project = isolatedProject,
+                    quality = quality,
+                    targetW = targetW,
+                    targetH = targetH,
+                    frameTimestampsMs = distinctBuckets,
+                    audioEngine = audioEngine,
+                    isAlreadyCached = { bMs ->
+                        getCachedLayerOrGroupFrame(projectRevision, quality, targetLayerId, bMs, renderFps) != null
+                    },
+                    isStillValid = { activeRevision == projectRevision },
+                    onFrameRendered = { idx, bMs, bmp ->
+                        putCachedLayerOrGroupFrame(projectRevision, quality, targetLayerId, bMs, bmp)
+                        renderedFrames = idx + 1
+                        if (idx % 6 == 0 || idx == totalFrames - 1) {
+                            _preRenderState.value = _preRenderState.value.copy(
+                                isPreRendering = true,
+                                progress = ((idx + 1).toFloat() / totalFrames.toFloat()).coerceIn(0f, 1f),
+                                cachedFramesCount = renderedFrames,
+                                totalTargetFrames = totalFrames,
+                                cacheRamUsedMb = getUsedRamMb(),
+                                engineModeLabel = "Layer/Group GPU Pre-Render (${rootLayer.name})"
+                            )
+                        }
+                    }
+                )
+            } else false
+
+            if (!gpuDone && activeRevision == projectRevision) {
+                val paintFill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                val paintStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+                val paintText = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+                val scratch = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                try {
+                    distinctBuckets.forEachIndexed { idx, bMs ->
+                        currentCoroutineContext().ensureActive()
+                        if (activeRevision != projectRevision) return@forEachIndexed
+                        val aud = audioEngine.sampleTimelineSpectrumPure(bMs, project.bpm, project.beatMarkers)
+                        val bmp = renderSinglePreviewFrame(
+                            context = context,
+                            project = isolatedProject,
+                            timeMs = bMs,
+                            audio = aud,
+                            w = targetW,
+                            h = targetH,
+                            paintFill = paintFill,
+                            paintStroke = paintStroke,
+                            paintText = paintText,
+                            scratchBmp = scratch
+                        )
+                        putCachedLayerOrGroupFrame(projectRevision, quality, targetLayerId, bMs, bmp)
+                        renderedFrames = idx + 1
+                    }
+                } finally {
+                    scratch.recycle()
+                }
+            }
+            if (activeRevision == projectRevision && renderedFrames > 0) {
+                cachedLayerIdsByRev["$projectRevision|${quality.name}|$targetLayerId"] = true
+            }
+        } finally {
+            val elapsedSec = ((System.currentTimeMillis() - startWallMs).coerceAtLeast(1L)) / 1000f
+            _preRenderState.value = _preRenderState.value.copy(
+                isPreRendering = false,
+                progress = 1f,
+                cachedFramesCount = renderedFrames,
+                totalTargetFrames = totalFrames,
+                cacheRamUsedMb = getUsedRamMb(),
+                cacheRevision = projectRevision,
+                engineModeLabel = "Pre-Rendered ${rootLayer.name}",
+                throughputFps = (renderedFrames / elapsedSec).roundToInt().coerceAtLeast(1)
+            )
+        }
+        renderedFrames
+    }
+
+    /**
      * Smart Idle Lookahead Auto-Cacher: quietly pre-renders a short window ahead of [playheadMs]
      * in the background when `autoCachePlaybackFrames` is enabled and heavy effects are present.
      */
@@ -304,12 +533,14 @@ object PlaybackCacheEngine {
         fpsCap: Int,
         startPlayheadMs: Long,
         windowDurationMs: Long = 2_500L,
-        audioEngine: AudioReactorEngine
+        audioEngine: AudioReactorEngine,
+        scalePercent: Int = 100
     ) = withContext(Dispatchers.Default) {
         if (activeRevision != projectRevision || project.layers.isEmpty()) return@withContext
         val renderFps = min(project.fps.coerceIn(12, 60), fpsCap.coerceIn(24, 60))
         val stepMs = (1000.0 / renderFps).roundToInt().coerceAtLeast(16).toLong()
-        val endMs = (startPlayheadMs + windowDurationMs).coerceAtMost(project.durationMs)
+        val editDur = project.effectiveEditDurationMs()
+        val endMs = (startPlayheadMs + windowDurationMs).coerceAtMost(editDur)
         val buckets = ArrayList<Long>()
         var t = startPlayheadMs.coerceAtLeast(0L)
         while (t <= endMs && buckets.size < 150) {
@@ -322,7 +553,7 @@ object PlaybackCacheEngine {
         val distinct = buckets.distinct()
         if (distinct.isEmpty()) return@withContext
 
-        val (targetW, targetH) = computeTargetDimensions(project, quality)
+        val (targetW, targetH) = computeTargetDimensions(project, quality, scalePercent)
         val gpuOk = if (context != null) {
             OffscreenGlPreRenderEngine.preRenderOnGpu(
                 context = context,
@@ -369,14 +600,19 @@ object PlaybackCacheEngine {
             }
         }
         if (activeRevision == projectRevision) {
-            refreshCacheTelemetry(projectRevision, quality, project.durationMs, renderFps)
+            refreshCacheTelemetry(projectRevision, quality, editDur, renderFps)
         }
     }
 
-    private fun computeTargetDimensions(project: Project, quality: PreviewQuality): Pair<Int, Int> {
+    private fun computeTargetDimensions(
+        project: Project,
+        quality: PreviewQuality,
+        scalePercent: Int = 100
+    ): Pair<Int, Int> {
         val aspect = (project.width.toFloat().coerceAtLeast(64f) / project.height.toFloat().coerceAtLeast(64f))
             .coerceIn(0.2f, 5f)
-        val maxEdge = quality.maxGlDimension.coerceIn(160, 720)
+        val scale = (scalePercent.coerceIn(35, 100) / 100f)
+        val maxEdge = (quality.maxGlDimension.coerceIn(160, 720) * scale).roundToInt().coerceIn(128, 720)
         return if (aspect >= 1f) {
             val w = (maxEdge / 2 * 2).coerceAtLeast(96)
             val h = ((maxEdge / aspect).toInt() / 2 * 2).coerceAtLeast(64)
@@ -400,12 +636,14 @@ object PlaybackCacheEngine {
         targetW: Int,
         targetH: Int,
         audioEngine: AudioReactorEngine,
-        startWallMs: Long
+        startWallMs: Long,
+        requestedWorkers: Int = 4
     ) = coroutineScope {
         val totalFrames = buckets.size.coerceAtLeast(1)
         val nextIndex = AtomicInteger(0)
         val completedCount = AtomicInteger(0)
-        val workerCount = Runtime.getRuntime().availableProcessors().coerceIn(2, 6).coerceAtMost(totalFrames)
+        val maxHw = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+        val workerCount = requestedWorkers.coerceIn(1, maxHw).coerceAtMost(totalFrames)
 
         val jobs = (0 until workerCount).map {
             launch(Dispatchers.Default) {
@@ -527,6 +765,9 @@ object PlaybackCacheEngine {
             project.backgroundColor.startsWith("#") -> {
                 canvas.drawColor(runCatching { Color.parseColor(project.backgroundColor) }.getOrDefault(Color.BLACK))
             }
+            project.backgroundColor == "TransparentAlpha" -> {
+                canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            }
             project.backgroundColor == "Transparent" -> {
                 canvas.drawColor(Color.rgb(28, 31, 38))
                 paintFill.color = Color.rgb(46, 51, 61)
@@ -554,9 +795,15 @@ object PlaybackCacheEngine {
             val layer = project.layers[i]
             if (!layer.visible || timeMs !in layer.startTimeMs..layer.endTimeMs) continue
             for (fx in layer.effects) {
-                if (fx.enabled) activeEffects.add(fx)
+                if (fx.enabled && !EffectsCatalog.isTextOnlyEffect(fx.effectId)) {
+                    activeEffects.add(fx)
+                }
             }
-            if (layer.type == LayerType.NULL_OBJECT || layer.type == LayerType.CAMERA || layer.type == LayerType.AUDIO) continue
+            if (layer.type == LayerType.NULL_OBJECT ||
+                layer.type == LayerType.GROUP ||
+                layer.type == LayerType.CAMERA ||
+                layer.type == LayerType.AUDIO
+            ) continue
 
             val tr = AnimationEvaluator.evaluateWorldTransform(
                 layer = layer,
@@ -570,11 +817,28 @@ object PlaybackCacheEngine {
 
             canvas.save()
             canvas.translate(w * 0.5f + tr.posX * scaleFactor, h * 0.5f + tr.posY * scaleFactor)
-            canvas.rotate(tr.rotZ, tr.pivotX * scaleFactor, tr.pivotY * scaleFactor)
+            val pivXScaled = tr.pivotX * scaleFactor
+            val pivYScaled = tr.pivotY * scaleFactor
+            if (abs(tr.rotX) > 0.05f || abs(tr.rotY) > 0.05f) {
+                val cam3d = Camera()
+                val mat3d = Matrix()
+                cam3d.save()
+                cam3d.setLocation(0f, 0f, -14f)
+                cam3d.rotateX(tr.rotX)
+                cam3d.rotateY(tr.rotY)
+                cam3d.rotateZ(-tr.rotZ)
+                cam3d.getMatrix(mat3d)
+                cam3d.restore()
+                mat3d.preTranslate(-pivXScaled, -pivYScaled)
+                mat3d.postTranslate(pivXScaled, pivYScaled)
+                canvas.concat(mat3d)
+            } else {
+                canvas.rotate(tr.rotZ, pivXScaled, pivYScaled)
+            }
             val depthZoom = (1f + tr.posZ / 900f).coerceIn(0.15f, 5f)
             val sx = tr.scale * depthZoom * (if (layer.flipX) -1f else 1f)
-            val sy = tr.scale * depthZoom * (if (layer.flipY) -1f else 1f)
-            canvas.scale(sx, sy, tr.pivotX * scaleFactor, tr.pivotY * scaleFactor)
+            val sy = tr.scaleY * depthZoom * (if (layer.flipY) -1f else 1f)
+            canvas.scale(sx, sy, pivXScaled, pivYScaled)
 
             paintFill.xfermode = when (layer.blendMode) {
                 "Screen", "Lighten" -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
@@ -583,10 +847,8 @@ object PlaybackCacheEngine {
                 else -> null
             }
 
-            val baseCol = runCatching { Color.parseColor(layer.colorHex) }.getOrDefault(Color.rgb(0, 210, 168))
+            val baseCol = runCatching { Color.parseColor(layer.colorHex) }.getOrDefault(Color.rgb(79, 124, 255))
             val col = Color.argb(alpha, Color.red(baseCol), Color.green(baseCol), Color.blue(baseCol))
-            val rawEndCol = runCatching { Color.parseColor(layer.gradientEndColorHex) }.getOrDefault(Color.rgb(0, 148, 255))
-            val endCol = Color.argb(alpha, Color.red(rawEndCol), Color.green(rawEndCol), Color.blue(rawEndCol))
 
             when (layer.type) {
                 LayerType.VIDEO, LayerType.IMAGE -> {
@@ -602,10 +864,36 @@ object PlaybackCacheEngine {
                         val compAspect = w.toFloat() / h.toFloat().coerceAtLeast(1f)
                         val hw = if (bmpAspect >= compAspect) w * 0.50f else (h * 0.50f * bmpAspect)
                         val hh = if (bmpAspect >= compAspect) (w * 0.50f / bmpAspect) else h * 0.50f
+                        val rect = RectF(-hw, -hh, hw, hh)
+                        if (layer.shadowEnabled) {
+                            val shCol = runCatching { Color.parseColor(layer.shadowColorHex) }.getOrDefault(Color.BLACK)
+                            paintFill.shader = null
+                            paintFill.color = shCol
+                            paintFill.setShadowLayer(
+                                (layer.shadowBlur * scaleFactor).coerceIn(1f, 32f),
+                                layer.shadowOffsetX * scaleFactor,
+                                layer.shadowOffsetY * scaleFactor,
+                                shCol
+                            )
+                            canvas.drawRect(rect, paintFill)
+                            paintFill.clearShadowLayer()
+                        }
                         paintFill.shader = null
                         paintFill.alpha = alpha
-                        canvas.drawBitmap(mediaBmp, null, RectF(-hw, -hh, hw, hh), paintFill)
+                        canvas.drawBitmap(mediaBmp, null, rect, paintFill)
                         paintFill.alpha = 255
+                        if (layer.strokeEnabled && layer.strokeWidth > 0.4f) {
+                            val sCol = runCatching { Color.parseColor(layer.strokeColorHex) }.getOrDefault(Color.WHITE)
+                            val sw = (layer.strokeWidth * scaleFactor * 1.5f).coerceIn(1.2f, 28f)
+                            val inset = when (layer.strokePosition.uppercase()) {
+                                "OUTSIDE" -> -sw * 0.5f
+                                "INSIDE" -> sw * 0.5f
+                                else -> 0f
+                            }
+                            paintStroke.color = Color.argb(alpha, Color.red(sCol), Color.green(sCol), Color.blue(sCol))
+                            paintStroke.strokeWidth = sw
+                            canvas.drawRect(RectF(-hw + inset, -hh + inset, hw - inset, hh - inset), paintStroke)
+                        }
                     } else if (layer.mediaUri.isBlank()) {
                         paintFill.shader = null
                         paintFill.color = col
@@ -614,29 +902,23 @@ object PlaybackCacheEngine {
                 }
 
                 LayerType.TEXT -> {
-                    val txt = layer.textContent.ifBlank { "Text" }
-                    paintText.color = col
-                    paintText.textSize = (min(w, h) * 0.10f).coerceAtLeast(14f)
-                    paintText.typeface = CustomFontRegistry.resolveTypeface(context, layer.fontFamilyName)
-                    val gradSpan = (paintText.measureText(txt) * 0.5f).coerceAtLeast(24f)
-                    paintText.shader = when (layer.fillMode) {
-                        "LINEAR_GRADIENT" -> {
-                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
-                            LinearGradient(
-                                -(cos(rad) * gradSpan).toFloat(),
-                                -(sin(rad) * gradSpan).toFloat(),
-                                (cos(rad) * gradSpan).toFloat(),
-                                (sin(rad) * gradSpan).toFloat(),
-                                col,
-                                endCol,
-                                Shader.TileMode.CLAMP
-                            )
-                        }
-                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, gradSpan, col, endCol, Shader.TileMode.CLAMP)
-                        else -> null
+                    if (context != null) {
+                        val anims = KeyflowTextAndBorderRenderer.evaluateTextAnimators(layer, timeMs, audio)
+                        val textBmp = KeyflowTextAndBorderRenderer.rasterizeTextLayerBitmap(context, layer, anims)
+                        val tAspect = textBmp.width.toFloat() / textBmp.height.toFloat().coerceAtLeast(1f)
+                        val hh = min(w, h) * 0.14f
+                        val hw = hh * tAspect.coerceIn(1f, 6f)
+                        paintFill.shader = null
+                        paintFill.alpha = alpha
+                        canvas.drawBitmap(textBmp, null, RectF(-hw, -hh, hw, hh), paintFill)
+                        paintFill.alpha = 255
+                        textBmp.recycle()
+                    } else {
+                        val txt = layer.textContent.ifBlank { "Text" }
+                        paintText.color = col
+                        paintText.textSize = (min(w, h) * 0.10f).coerceAtLeast(14f)
+                        canvas.drawText(txt, 0f, paintText.textSize * 0.35f, paintText)
                     }
-                    canvas.drawText(txt, 0f, paintText.textSize * 0.35f, paintText)
-                    paintText.shader = null
                 }
 
                 LayerType.MODEL_3D -> {
@@ -644,45 +926,32 @@ object PlaybackCacheEngine {
                     paintFill.shader = null
                     paintFill.color = col
                     canvas.drawRoundRect(RectF(-half, -half, half, half), half * 0.28f, half * 0.28f, paintFill)
-                    paintStroke.color = Color.argb(alpha, 0, 240, 200)
+                    paintStroke.color = Color.argb(alpha, 79, 124, 255)
                     paintStroke.strokeWidth = 2.2f
                     canvas.drawRoundRect(RectF(-half * 0.72f, -half * 0.72f, half * 0.72f, half * 0.72f), 8f, 8f, paintStroke)
                 }
 
-                else -> {
-                    val half = min(w, h) * 0.22f
-                    paintFill.color = col
-                    paintFill.shader = when (layer.fillMode) {
-                        "LINEAR_GRADIENT" -> {
-                            val rad = Math.toRadians(layer.gradientAngleDeg.toDouble())
-                            LinearGradient(
-                                -(cos(rad) * half).toFloat(),
-                                -(sin(rad) * half).toFloat(),
-                                (cos(rad) * half).toFloat(),
-                                (sin(rad) * half).toFloat(),
-                                col,
-                                endCol,
-                                Shader.TileMode.CLAMP
-                            )
-                        }
-                        "RADIAL_GRADIENT" -> RadialGradient(0f, 0f, half.coerceAtLeast(8f), col, endCol, Shader.TileMode.CLAMP)
-                        else -> null
-                    }
-                    when (layer.shapeKind) {
-                        "Circle" -> canvas.drawCircle(0f, 0f, half, paintFill)
-                        "Rectangle" -> canvas.drawRect(RectF(-half, -half * 0.75f, half, half * 0.75f), paintFill)
-                        "Star" -> canvas.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(5, half, half * 0.44f), paintFill)
-                        "Triangle" -> canvas.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(3, half, null), paintFill)
-                        "Hexagon" -> canvas.drawPath(FramePollutionGlRenderer.buildPolygonOrStarPath(6, half, null), paintFill)
-                        else -> canvas.drawRoundRect(RectF(-half, -half * 0.75f, half, half * 0.75f), 20f, 20f, paintFill)
-                    }
+                LayerType.DRAWING -> {
+                    val (startPct, endPct) = KeyflowTextAndBorderRenderer.evaluateDrawingProgressRange(layer, timeMs, audio)
+                    val drawBmp = KeyflowTextAndBorderRenderer.rasterizeDrawingLayerBitmap(layer, startPct, endPct, 384)
+                    KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(drawBmp, layer, timeMs, audio)
+                    val half = min(w, h) * 0.5f
                     paintFill.shader = null
-                    if (layer.strokeEnabled) {
-                        val sCol = runCatching { Color.parseColor(layer.strokeColorHex) }.getOrDefault(Color.WHITE)
-                        paintStroke.color = Color.argb(alpha, Color.red(sCol), Color.green(sCol), Color.blue(sCol))
-                        paintStroke.strokeWidth = (layer.strokeWidth * scaleFactor * 2f).coerceIn(1.5f, 18f)
-                        canvas.drawRoundRect(RectF(-half, -half * 0.75f, half, half * 0.75f), 20f, 20f, paintStroke)
-                    }
+                    paintFill.alpha = alpha
+                    canvas.drawBitmap(drawBmp, null, RectF(-half, -half, half, half), paintFill)
+                    paintFill.alpha = 255
+                    drawBmp.recycle()
+                }
+
+                else -> {
+                    val shapeBmp = KeyflowTextAndBorderRenderer.rasterizeShapeLayerBitmap(layer)
+                    KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(shapeBmp, layer, timeMs, audio)
+                    val half = min(w, h) * 0.22f
+                    paintFill.shader = null
+                    paintFill.alpha = alpha
+                    canvas.drawBitmap(shapeBmp, null, RectF(-half, -half, half, half), paintFill)
+                    paintFill.alpha = 255
+                    shapeBmp.recycle()
                 }
             }
             paintFill.shader = null
@@ -804,7 +1073,7 @@ object PlaybackCacheEngine {
     private fun computeTotalFrames(durationMs: Long, fps: Int): Int {
         val safeFps = fps.coerceIn(12, 60)
         val stepMs = (1000.0 / safeFps).roundToInt().coerceAtLeast(16).toLong()
-        return ((durationMs.coerceAtLeast(200L) / stepMs).toInt() + 1).coerceIn(1, 900)
+        return ((durationMs.coerceAtLeast(200L) / stepMs).toInt() + 1).coerceIn(1, 3600)
     }
 
     private fun cachedCountFor(revision: Long, quality: PreviewQuality): Int {
@@ -848,4 +1117,7 @@ object PlaybackCacheEngine {
 
     private fun buildKey(revision: Long, quality: PreviewQuality, bucketMs: Long): String =
         "pre|$revision|${quality.name}|$bucketMs"
+
+    private fun buildLayerKey(revision: Long, quality: PreviewQuality, layerId: String, bucketMs: Long): String =
+        "lyr|$revision|${quality.name}|$layerId|$bucketMs"
 }

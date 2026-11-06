@@ -81,10 +81,13 @@ import com.example.engine.MediaEngine
 import com.example.engine.PlaybackCacheEngine
 import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
+import com.example.ui.components.AmTickWheelScrubber
 import com.example.ui.theme.AmBgDark
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.ElectricBlue
+import com.example.ui.theme.KeyflowBlue
+import com.example.ui.theme.KeyflowBlueBright
 import com.example.ui.theme.NeonPink
 import com.example.ui.theme.OutlineSubtle
 import com.example.ui.theme.PanelDark
@@ -94,6 +97,7 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import kotlin.math.roundToInt
 
 @Composable
 fun AppSettingsScreen(
@@ -101,7 +105,9 @@ fun AppSettingsScreen(
     codecCapabilities: HardwareCodecCapabilities,
     installedSuitesCount: Int = 1,
     installedPluginEffectsCount: Int = 4,
+    installedAePluginsCount: Int = 0,
     onOpenPluginManager: () -> Unit = {},
+    onOpenAePlugins: () -> Unit = {},
     onImportPluginUri: (Uri) -> Unit = {},
     onUpdatePreferences: ((StudioPreferences) -> StudioPreferences) -> Unit,
     onApplyQualityNow: (PreviewQuality) -> Unit,
@@ -120,10 +126,11 @@ fun AppSettingsScreen(
     }
 
     var cacheRefreshTick by remember { mutableIntStateOf(0) }
-    val usedRamMb = remember(cacheRefreshTick, preferences.playbackCacheLimitMb) {
+    val effectiveLimitMb = preferences.effectiveRamCacheMb
+    val usedRamMb = remember(cacheRefreshTick, effectiveLimitMb) {
         PlaybackCacheEngine.getUsedRamMb() + MediaEngine.getUsedCacheMb()
     }
-    val ramProgress = (usedRamMb / preferences.playbackCacheLimitMb.coerceAtLeast(1).toFloat())
+    val ramProgress = (usedRamMb / effectiveLimitMb.coerceAtLeast(1).toFloat())
         .coerceIn(0f, 1f)
 
     Scaffold(
@@ -214,8 +221,8 @@ fun AppSettingsScreen(
                             Button(
                                 onClick = onOpenPluginManager,
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = AmTealBright,
-                                    contentColor = Color(0xFF041410)
+                                    containerColor = KeyflowBlue,
+                                    contentColor = Color.White
                                 ),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier
@@ -246,6 +253,26 @@ fun AppSettingsScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
+                        }
+                        OutlinedButton(
+                            onClick = onOpenAePlugins,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_open_ae_plugins_button")
+                        ) {
+                            Icon(
+                                Icons.Default.Extension,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Plugins (.zip / .zxp / .jsx / .jsxbin) • $installedAePluginsCount",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -280,7 +307,7 @@ fun AppSettingsScreen(
                         }
 
                         Text(
-                            text = "Cache",
+                            text = "RAM Cache Limit",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
@@ -291,14 +318,54 @@ fun AppSettingsScreen(
                             listOf(64, 128, 192, 256, 512).forEach { mb ->
                                 AmSegmentChip(
                                     label = "$mb MB",
-                                    selected = preferences.playbackCacheLimitMb == mb,
+                                    selected = !preferences.useCustomRamCache && preferences.playbackCacheLimitMb == mb,
                                     onClick = {
-                                        onUpdatePreferences { it.copy(playbackCacheLimitMb = mb) }
+                                        onUpdatePreferences {
+                                            it.copy(
+                                                useCustomRamCache = false,
+                                                playbackCacheLimitMb = mb
+                                            )
+                                        }
                                         cacheRefreshTick++
                                     },
                                     testTag = "settings_cache_limit_$mb"
                                 )
                             }
+                            AmSegmentChip(
+                                label = "Custom",
+                                selected = preferences.useCustomRamCache,
+                                onClick = {
+                                    onUpdatePreferences { it.copy(useCustomRamCache = true) }
+                                    cacheRefreshTick++
+                                },
+                                testTag = "settings_cache_limit_custom"
+                            )
+                        }
+
+                        if (preferences.useCustomRamCache) {
+                            AmTickWheelScrubber(
+                                value = preferences.customRamCacheMb.toFloat(),
+                                minValue = 32f,
+                                maxValue = 2048f,
+                                unit = " MB",
+                                label = "Custom RAM Cache",
+                                fineStep = 8f,
+                                onValueChange = { next ->
+                                    val mb = next.roundToInt().coerceIn(32, 2048)
+                                    onUpdatePreferences {
+                                        it.copy(
+                                            useCustomRamCache = true,
+                                            customRamCacheMb = mb
+                                        )
+                                    }
+                                    cacheRefreshTick++
+                                },
+                                onReset = {
+                                    onUpdatePreferences { it.copy(customRamCacheMb = 384) }
+                                    cacheRefreshTick++
+                                },
+                                testTag = "settings_custom_ram_slider"
+                            )
                         }
 
                         // Live RAM Cache Usage Meter + Clear Cache Button
@@ -320,21 +387,21 @@ fun AppSettingsScreen(
                                     Icon(
                                         imageVector = Icons.Default.Memory,
                                         contentDescription = null,
-                                        tint = RigGreen,
+                                        tint = KeyflowBlueBright,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "RAM",
+                                        text = if (preferences.useCustomRamCache) "RAM (Custom)" else "RAM",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = TextPrimary
                                     )
                                 }
                                 Text(
-                                    text = "${"%.1f".format(usedRamMb)} / ${preferences.playbackCacheLimitMb} MB",
+                                    text = "${"%.1f".format(usedRamMb)} / $effectiveLimitMb MB",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontFamily = FontFamily.Monospace,
-                                    color = AmTealBright
+                                    color = KeyflowBlueBright
                                 )
                             }
                             LinearProgressIndicator(
@@ -343,7 +410,7 @@ fun AppSettingsScreen(
                                     .fillMaxWidth()
                                     .height(6.dp)
                                     .clip(RoundedCornerShape(3.dp)),
-                                color = RigGreen,
+                                color = KeyflowBlue,
                                 trackColor = SurfaceDark
                             )
                             Button(
@@ -353,8 +420,8 @@ fun AppSettingsScreen(
                                     cacheRefreshTick++
                                 },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = AmTeal.copy(alpha = 0.18f),
-                                    contentColor = AmTealBright
+                                    containerColor = KeyflowBlue.copy(alpha = 0.22f),
+                                    contentColor = KeyflowBlueBright
                                 ),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier
@@ -376,7 +443,8 @@ fun AppSettingsScreen(
                         }
 
                         SettingsToggleRow(
-                            title = "Auto-Cache",
+                            title = "Auto-Cache Frames",
+                            subtitle = "Background frame warming while idle",
                             checked = preferences.autoCachePlaybackFrames,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(autoCachePlaybackFrames = enabled) }
@@ -385,13 +453,60 @@ fun AppSettingsScreen(
                         )
 
                         SettingsToggleRow(
-                            title = "Fast Scrub",
+                            title = "Keyframe-Only Fast Scrub",
+                            subtitle = "Off = Frame-exact forward & backward scrubbing",
                             checked = preferences.fastKeyframeScrub,
                             onCheckedChange = { enabled ->
                                 onUpdatePreferences { it.copy(fastKeyframeScrub = enabled) }
                             },
                             testTag = "settings_toggle_fast_scrub"
                         )
+
+                        Text(
+                            text = "Hardware Video Decoder Pool",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = TextPrimary
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(2, 4, 6, 8).forEach { pool ->
+                                AmSegmentChip(
+                                    label = "$pool Decoders",
+                                    selected = preferences.decoderPoolSize == pool,
+                                    onClick = { onUpdatePreferences { it.copy(decoderPoolSize = pool) } },
+                                    testTag = "settings_decoder_pool_$pool"
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = "Pre-Render Scale & Threads",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = TextPrimary
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(50, 75, 80, 100).forEach { pct ->
+                                AmSegmentChip(
+                                    label = "$pct%",
+                                    selected = preferences.preRenderScalePercent == pct,
+                                    onClick = { onUpdatePreferences { it.copy(preRenderScalePercent = pct) } },
+                                    testTag = "settings_prerender_scale_$pct"
+                                )
+                            }
+                            listOf(2, 4, 6, 8).forEach { threads ->
+                                AmSegmentChip(
+                                    label = "${threads}T",
+                                    selected = preferences.preRenderThreads == threads,
+                                    onClick = { onUpdatePreferences { it.copy(preRenderThreads = threads) } },
+                                    testTag = "settings_prerender_threads_$threads"
+                                )
+                            }
+                        }
 
                         Text(
                             text = "FPS Cap",
@@ -416,6 +531,16 @@ fun AppSettingsScreen(
                                 onUpdatePreferences { it.copy(showPerformanceHud = enabled) }
                             },
                             testTag = "settings_toggle_hud"
+                        )
+
+                        SettingsToggleRow(
+                            title = "Smooth UI Animations",
+                            subtitle = "Adaptive spring transitions & scroll-paused heavy previews",
+                            checked = preferences.smoothUiAnimations,
+                            onCheckedChange = { enabled ->
+                                onUpdatePreferences { it.copy(smoothUiAnimations = enabled) }
+                            },
+                            testTag = "settings_toggle_smooth_ui_animations"
                         )
                     }
                 }
@@ -511,6 +636,24 @@ fun AppSettingsScreen(
                             }
                         }
 
+                        if (preferences.exportBitrateProfile == BitrateProfile.CUSTOM) {
+                            AmTickWheelScrubber(
+                                value = preferences.customExportMbps.toFloat(),
+                                minValue = 1f,
+                                maxValue = 120f,
+                                unit = " Mbps",
+                                label = "Custom Export Bitrate",
+                                fineStep = 1f,
+                                onValueChange = { next ->
+                                    onUpdatePreferences {
+                                        it.copy(customExportMbps = next.roundToInt().coerceIn(1, 120))
+                                    }
+                                },
+                                onReset = { onUpdatePreferences { it.copy(customExportMbps = 24) } },
+                                testTag = "settings_custom_export_mbps_slider"
+                            )
+                        }
+
                         Text(
                             text = "GOP",
                             style = MaterialTheme.typography.labelLarge,
@@ -561,13 +704,23 @@ fun AppSettingsScreen(
                             testTag = "settings_toggle_default_loop"
                         )
 
+                        SettingsToggleRow(
+                            title = "Zero-Delay Audio Sync",
+                            subtitle = "Tight 45ms hardware buffer & exact frame audio seek",
+                            checked = preferences.lowLatencyAudioSync,
+                            onCheckedChange = { enabled ->
+                                onUpdatePreferences { it.copy(lowLatencyAudioSync = enabled) }
+                            },
+                            testTag = "settings_toggle_low_latency_audio"
+                        )
+
                         Text(
-                            text = "Sync",
+                            text = "Drift Re-Sync Threshold",
                             style = MaterialTheme.typography.labelLarge,
                             color = TextPrimary
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(100 to "100 ms", 160 to "160 ms", 260 to "260 ms").forEach { (ms, label) ->
+                            listOf(55 to "55 ms", 100 to "100 ms", 160 to "160 ms").forEach { (ms, label) ->
                                 AmSegmentChip(
                                     label = label,
                                     selected = preferences.audioSyncThresholdMs == ms,

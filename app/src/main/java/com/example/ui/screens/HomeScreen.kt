@@ -2,6 +2,9 @@
 
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Link
@@ -52,6 +56,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -89,6 +94,8 @@ import com.example.R
 import com.example.data.model.AspectRatioPreset
 import com.example.data.model.Project
 import com.example.data.preferences.StudioPreferences
+import com.example.depthengine.DepthEngine
+import com.example.scriptengine.InstalledPlugin
 import com.example.ui.components.AmActionTileButton
 import com.example.ui.components.AmBottomNavigationBar
 import com.example.ui.components.AmHomeTab
@@ -96,6 +103,7 @@ import com.example.ui.components.AmPrimaryCtaButton
 import com.example.ui.components.AmRatioOutlineCard
 import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
+import java.io.File
 import com.example.ui.theme.AmBgDark
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
@@ -107,7 +115,6 @@ import com.example.ui.theme.PanelDark
 import com.example.ui.theme.RigGreen
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextSecondary
-import com.example.viewmodel.StudioTemplates
 import com.example.viewmodel.UiState
 
 @Composable
@@ -127,136 +134,176 @@ fun HomeScreen(
     onDeleteProject: (String) -> Unit,
     onSignOut: () -> Unit,
     defaultPreferences: StudioPreferences = StudioPreferences(),
+    isImportingFile: Boolean = false,
+    importProgressFraction: Float = 0f,
+    importProgressLabel: String = "",
     onOpenSettings: () -> Unit = {},
-    onOpenPlugins: () -> Unit = {}
+    onOpenPlugins: () -> Unit = {},
+    onImportProjectXml: (Uri) -> Unit = {},
+    installedAePlugins: List<InstalledPlugin> = emptyList(),
+    onImportAePluginUri: (Uri) -> Unit = {},
+    onToggleAePluginEnabled: (String, Boolean) -> Unit = { _, _ -> },
+    onToggleAePluginShowInTimeline: (String, Boolean) -> Unit = { _, _ -> },
+    onToggleAePluginPinToAddMenu: (String, Boolean) -> Unit = { _, _ -> },
+    onToggleAePluginFileNetwork: (String, Boolean) -> Unit = { _, _ -> },
+    onUseAePlugin: (InstalledPlugin) -> Unit = {},
+    onRunAePluginProbe: (String) -> Unit = {},
+    onClearAePluginData: (String) -> Unit = {},
+    onUninstallAePlugin: (String) -> Unit = {},
+    depthEngine: DepthEngine? = null,
+    activeProjectId: String? = null,
+    onImportDepthIntoProjects: (File, List<String>, DepthImportMode) -> Unit = { _, _, _ -> },
+    onStatusMessage: (String) -> Unit = {}
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var activeTab by remember { mutableStateOf(AmHomeTab.HOME) }
-
-    Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
-        containerColor = AmBgDark,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Alight Motion Diamond Mark
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(PanelDark)
-                                .border(1.2.dp, AmTeal, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Canvas(modifier = Modifier.size(16.dp)) {
-                                val cx = size.width / 2f
-                                val cy = size.height / 2f
-                                val p = Path().apply {
-                                    moveTo(cx, 1f)
-                                    lineTo(size.width - 1f, cy)
-                                    lineTo(cx, size.height - 1f)
-                                    lineTo(1f, cy)
-                                    close()
-                                }
-                                drawPath(p, AmTealBright)
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = stringResource(id = R.string.app_name),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                },
-                actions = {
-                    AmSquareIconButton(
-                        icon = Icons.Default.Extension,
-                        contentDescription = stringResource(id = R.string.plugin_suites_title),
-                        tint = AmTealBright,
-                        onClick = onOpenPlugins,
-                        testTag = "home_plugins_button",
-                        modifier = Modifier.padding(end = 6.dp)
-                    )
-                    AmSquareIconButton(
-                        icon = Icons.Default.Settings,
-                        contentDescription = stringResource(id = R.string.settings_button_desc),
-                        onClick = onOpenSettings,
-                        testTag = "home_settings_button",
-                        modifier = Modifier.padding(end = 6.dp)
-                    )
-                    AmSquareIconButton(
-                        icon = Icons.AutoMirrored.Filled.Logout,
-                        contentDescription = stringResource(id = R.string.sign_out),
-                        onClick = onSignOut,
-                        testTag = "sign_out_button",
-                        modifier = Modifier.padding(end = 10.dp)
-                    )
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = SurfaceDark)
-            )
-        },
-        bottomBar = {
-            AmBottomNavigationBar(
-                selectedTab = activeTab,
-                onSelectTab = { activeTab = it },
-                onCreateProjectClick = { showCreateDialog = true }
-            )
+    val importUniversalLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onImportProjectXml(uri)
         }
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
+    }
+    val launchUniversalPicker = {
+        importUniversalLauncher.launch(arrayOf("*/*"))
+    }
+    val sharedBottomBar: @Composable () -> Unit = {
+        AmBottomNavigationBar(
+            selectedTab = activeTab,
+            onSelectTab = { activeTab = it },
+            onCreateProjectClick = { showCreateDialog = true }
+        )
+    }
+
+    if (activeTab == AmHomeTab.PLUGINS) {
+        AePluginsBrowserScreen(
+            installedPlugins = installedAePlugins,
+            onImportPluginUri = onImportAePluginUri,
+            onToggleEnabled = onToggleAePluginEnabled,
+            onToggleShowInTimeline = onToggleAePluginShowInTimeline,
+            onTogglePinToAddMenu = onToggleAePluginPinToAddMenu,
+            onToggleFileNetworkAllowed = onToggleAePluginFileNetwork,
+            onUsePlugin = onUseAePlugin,
+            onRunProbe = onRunAePluginProbe,
+            onClearData = onClearAePluginData,
+            onUninstallPlugin = onUninstallAePlugin,
+            onStatusMessage = onStatusMessage,
+            bottomBar = sharedBottomBar
+        )
+    } else if (activeTab == AmHomeTab.DEPTH_MAP && depthEngine != null) {
+        val knownProjects = (cloudProjectsState as? UiState.Success)?.data.orEmpty()
+        DepthMapScreen(
+            depthEngine = depthEngine,
+            projects = knownProjects,
+            activeProjectId = activeProjectId,
+            onImportDepthIntoProjects = onImportDepthIntoProjects,
+            onStatusMessage = onStatusMessage,
+            bottomBar = sharedBottomBar
+        )
+    } else {
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            containerColor = AmBgDark,
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(PanelDark)
+                                    .border(1.2.dp, AmTeal, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Canvas(modifier = Modifier.size(16.dp)) {
+                                    val cx = size.width / 2f
+                                    val cy = size.height / 2f
+                                    val p = Path().apply {
+                                        moveTo(cx, 1f)
+                                        lineTo(size.width - 1f, cy)
+                                        lineTo(cx, size.height - 1f)
+                                        lineTo(1f, cy)
+                                        close()
+                                    }
+                                    drawPath(p, AmTealBright)
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = stringResource(id = R.string.app_name),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    },
+                    actions = {
+                        AmSquareIconButton(
+                            icon = Icons.Default.Settings,
+                            contentDescription = stringResource(id = R.string.settings_button_desc),
+                            onClick = onOpenSettings,
+                            testTag = "home_settings_button",
+                            modifier = Modifier.padding(end = 6.dp)
+                        )
+                        AmSquareIconButton(
+                            icon = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = stringResource(id = R.string.sign_out),
+                            onClick = onSignOut,
+                            testTag = "sign_out_button",
+                            modifier = Modifier.padding(end = 10.dp)
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = SurfaceDark)
+                )
+            },
+            bottomBar = sharedBottomBar
+        ) { innerPadding ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            if (activeTab == AmHomeTab.HOME) {
-                item {
-                    AmStudioHeroBanner(onQuickCreate = { showCreateDialog = true })
-                }
-
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AmSectionHeader(
-                            title = stringResource(id = R.string.template_gallery),
-                            actionText = "See All",
-                            onAction = { activeTab = AmHomeTab.TEMPLATES }
-                        )
-                        TemplateGalleryRow(onLaunchTemplate = onOpenProject)
+            if (isImportingFile) {
+                item(key = "background_import_progress_card") {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = PanelDark,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, AmTeal.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                            .testTag("home_import_progress_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = importProgressLabel.ifBlank { "Scanning project & resolving media..." },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AmTealBright
+                            )
+                            LinearProgressIndicator(
+                                progress = { importProgressFraction.coerceIn(0.05f, 1f) },
+                                color = AmTealBright,
+                                trackColor = SurfaceDark,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                            )
+                        }
                     }
                 }
             }
 
-            if (activeTab == AmHomeTab.TEMPLATES) {
+            if (activeTab == AmHomeTab.HOME) {
                 item {
-                    Text(
-                        text = "Templates",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                val templates = listOf(
-                    StudioTemplates.neonSynthTemplate() to R.drawable.img_template_cyber,
-                    StudioTemplates.reelsPhonkTemplate() to R.drawable.img_studio_hero,
-                    StudioTemplates.particleCinemaTemplate() to R.drawable.img_template_particles
-                )
-                items(templates) { (proj, imgRes) ->
-                    AmFullWidthTemplateCard(
-                        project = proj,
-                        imageRes = imgRes,
-                        subtitle = "${proj.width}×${proj.height} • ${proj.fps}fps",
-                        onOpen = { onOpenProject(proj) }
-                    )
-                }
-            }
-
-            if (activeTab == AmHomeTab.ELEMENTS) {
-                item {
-                    AmReusableElementsShowcase(
-                        onSpawnRigProject = { showCreateDialog = true },
-                        onOpenPresetProject = { onOpenProject(StudioTemplates.neonSynthTemplate()) }
+                    AmStudioHeroBanner(
+                        onQuickCreate = { showCreateDialog = true },
+                        onImportXml = launchUniversalPicker
                     )
                 }
             }
@@ -282,11 +329,14 @@ fun HomeScreen(
                                 fontWeight = FontWeight.Bold
                             )
                         }
-                        AmSegmentChip(
-                            label = "+ New",
-                            selected = true,
-                            onClick = { showCreateDialog = true }
-                        )
+                        if (activeTab == AmHomeTab.PROJECTS) {
+                            AmSegmentChip(
+                                label = "Import File",
+                                selected = false,
+                                onClick = launchUniversalPicker,
+                                testTag = "projects_tab_import_xml_button"
+                            )
+                        }
                     }
                 }
 
@@ -336,6 +386,7 @@ fun HomeScreen(
                 }
             }
         }
+        }
     }
 
     if (showCreateDialog) {
@@ -350,36 +401,13 @@ fun HomeScreen(
     }
 }
 
-@Composable
-private fun AmSectionHeader(
-    title: String,
-    actionText: String,
-    onAction: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = actionText,
-            style = MaterialTheme.typography.labelMedium,
-            color = AmTeal,
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(onClick = onAction)
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        )
-    }
-}
+
 
 @Composable
-private fun AmStudioHeroBanner(onQuickCreate: () -> Unit) {
+private fun AmStudioHeroBanner(
+    onQuickCreate: () -> Unit,
+    onImportXml: () -> Unit
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -412,213 +440,63 @@ private fun AmStudioHeroBanner(onQuickCreate: () -> Unit) {
                 .padding(18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = stringResource(id = R.string.app_name),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            AmPrimaryCtaButton(
-                text = "New Project",
-                icon = Icons.Default.Add,
-                onClick = onQuickCreate,
-                testTag = "hero_create_project_button"
-            )
-        }
-    }
-}
-
-@Composable
-private fun TemplateGalleryRow(onLaunchTemplate: (Project) -> Unit) {
-    val templates = remember {
-        listOf(
-            StudioTemplates.neonSynthTemplate() to R.drawable.img_template_cyber,
-            StudioTemplates.reelsPhonkTemplate() to R.drawable.img_studio_hero,
-            StudioTemplates.particleCinemaTemplate() to R.drawable.img_template_particles
-        )
-    }
-
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(templates) { (proj, imgRes) ->
-            Card(
-                modifier = Modifier
-                    .width(228.dp)
-                    .clickable { onLaunchTemplate(proj) }
-                    .border(1.dp, OutlineSubtle, RoundedCornerShape(12.dp))
-                    .testTag("template_card_${proj.aspectRatioPreset}"),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark)
-            ) {
-                Column {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(106.dp)
-                    ) {
-                        Image(
-                            painter = painterResource(id = imgRes),
-                            contentDescription = proj.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(DeepBlack.copy(alpha = 0.86f))
-                                .border(0.8.dp, AmTeal.copy(alpha = 0.6f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = proj.aspectRatioPreset,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AmTealBright
-                            )
-                        }
-                    }
-                    Column(modifier = Modifier.padding(11.dp)) {
-                        Text(
-                            text = proj.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${proj.width}×${proj.height} • ${proj.fps}fps",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AmFullWidthTemplateCard(
-    project: Project,
-    imageRes: Int,
-    subtitle: String,
-    onOpen: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onOpen)
-            .border(1.dp, OutlineSubtle, RoundedCornerShape(14.dp)),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark)
-    ) {
-        Column {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(132.dp)
-            ) {
-                Image(
-                    painter = painterResource(id = imageRes),
-                    contentDescription = project.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(id = R.string.app_name),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
                 )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(10.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(DeepBlack.copy(alpha = 0.85f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = project.aspectRatioPreset,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AmTealBright
-                    )
-                }
+                Text(
+                    text = "60fps GPU Compositor • .aep • .kfproject • .xml • .kfpack • .ffx",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AmTealBright
+                )
             }
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(project.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                AmPrimaryCtaButton(
+                    text = "New Project",
+                    icon = Icons.Default.Add,
+                    onClick = onQuickCreate,
+                    testTag = "hero_create_project_button"
+                )
+                Surface(
+                    onClick = onImportXml,
+                    shape = RoundedCornerShape(12.dp),
+                    color = PanelDark.copy(alpha = 0.92f),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .border(1.2.dp, AmTeal.copy(alpha = 0.72f), RoundedCornerShape(12.dp))
+                        .testTag("home_import_xml_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FileOpen,
+                            contentDescription = "Import Project or Pack",
+                            tint = AmTealBright,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Import File",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = AmTealBright
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.width(10.dp))
-                AmSegmentChip(label = "Open", selected = true, onClick = onOpen)
             }
         }
     }
 }
 
-@Composable
-private fun AmReusableElementsShowcase(
-    onSpawnRigProject: () -> Unit,
-    onOpenPresetProject: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = SurfaceDark,
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, OutlineSubtle, RoundedCornerShape(14.dp))
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                text = "Elements",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                AmActionTileButton(
-                    icon = Icons.Default.AccountTree,
-                    label = "Null Rig",
-                    accentColor = RigGreen,
-                    selected = true,
-                    onClick = onOpenPresetProject,
-                    modifier = Modifier.weight(1f)
-                )
-                AmActionTileButton(
-                    icon = Icons.Default.AutoFixHigh,
-                    label = "130+ FX",
-                    accentColor = AmTeal,
-                    selected = true,
-                    onClick = onOpenPresetProject,
-                    modifier = Modifier.weight(1f)
-                )
-                AmActionTileButton(
-                    icon = Icons.Default.GraphicEq,
-                    label = "Reactor",
-                    accentColor = NeonPink,
-                    selected = true,
-                    onClick = onOpenPresetProject,
-                    modifier = Modifier.weight(1f)
-                )
-                AmActionTileButton(
-                    icon = Icons.Default.ViewInAr,
-                    label = "3D Mesh",
-                    accentColor = ElectricBlue,
-                    selected = true,
-                    onClick = onSpawnRigProject,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
+
 
 @Composable
 private fun EmptyProjectsCard(onCreateClick: () -> Unit) {
@@ -987,7 +865,7 @@ private fun AmNewProjectScreenDialog(
                         val w = widthText.toIntOrNull() ?: 1920
                         val h = heightText.toIntOrNull() ?: 1080
                         val fps = fpsText.toIntOrNull() ?: 60
-                        val dur = durationSecText.toIntOrNull() ?: 10
+                        val dur = durationSecText.toIntOrNull() ?: 9
                         val bpm = bpmText.toIntOrNull() ?: 128
                         onConfirm(name, selectedPreset, w, h, fps, dur, bpm, selectedBg)
                     },

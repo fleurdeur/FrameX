@@ -1,0 +1,244 @@
+KEYEASE + EDITOR UPGRADE: AGENT INSTRUCTIONS (condensed v4)
+Paste this whole file to your coding agent. Built from KeyEase.zip, your Alight Motion export (New_Project_25.xml) and Textevo_2026_1_0.zip. Ambiguities are marked "Assumption".
+
+================================================================
+0. ROLE AND GLOBAL RULES
+================================================================
+- Role: senior Android dev (Kotlin, Jetpack Compose, Material3) with native C++ (NDK, JNI, ncnn).
+- The app already exists. Use the app's own engine (project model, timeline, renderer, effect registry, property editor, floating window). Extend it. Never build a parallel engine or rewrite it.
+- Architecture: ViewModel + StateFlow, state hoisting, coroutines, nothing blocking the main thread.
+- Theming: MaterialTheme.colorScheme only, no hardcoded colors.
+- Libraries: Compose, OkHttp (or Ktor), DataStore, kotlinx-serialization. Nothing else, except the engines in sections 2.7, 6 and 7 (2.7 may embed QuickJS).
+- Reuse existing editor logic. Do not redesign screens that are not mentioned.
+- Never drop data silently. If something cannot be handled, keep it and log it.
+- Output: code only, one file per block, filename on first line, no explanations. At most one assumption per ambiguity, as a code comment.
+
+================================================================
+1. KEYEASE: THE REFERENCE PLUGIN (an AE plugin, not your app)
+================================================================
+KeyEase is a normal After Effects CEP panel, shipped as .zip or .zxp. It is NOT part of the app. The app must run it unchanged, like any imported plugin. Do not modify KeyEase. Add no PC link, no localhost server, no LAN pairing, no token. Ignore the app-side/ folder in KeyEase.zip.
+
+- Package layout: CSXS/manifest.xml (bundle com.keyease.panel, host AEFT, type Panel, 260x470, MainPath ./client/index.html, ScriptPath ./host/index.jsx, CEF flags --enable-nodejs --mixed-context), client/index.html, client/main.js, client/style.css, shared/curve-editor.js, host/index.jsx.
+- How it works: panel UI calls window.__adobe_cep__.evalScript("KE.apply(x1,y1,x2,y2)"). The JSX applies the curve to selected keyframe pairs via the AE scripting API (app.project.activeItem, comp.selectedProperties, prop.selectedKeys, keyTime, keyValue, setTemporalEaseAtKey, setInterpolationTypeAtKey, KeyframeEase, beginUndoGroup) and returns ok:N or err:message.
+- The panel also uses Node fs, path, os for a ~/.keyease folder. In the app these resolve to the plugin sandbox (2.4), so nothing outside it is touched.
+- Curve = [x1,y1,x2,y2]. x clamped 0..1, y clamped -0.6..1.6.
+- AE math per selected pair, avg = (v2 - v1) / dt:
+  - Out ease of key 1: influence = clamp(x1*100, 0.1, 100), speed = (y1 / max(x1, .001)) * avg.
+  - In ease of key 2: influence = clamp((1-x2)*100, 0.1, 100), speed = ((1-y2) / max(1-x2, .001)) * avg.
+- Presets: Linear 0,0,1,1 | Ease .25,.1,.25,1 | In .42,0,1,1 | Out 0,0,.58,1 | InOut .42,0,.58,1 | Snappy .2,0,0,1 | Overshoot .34,1.56,.64,1 | BackIn .36,0,.66,-.56.
+
+================================================================
+2. PLUGIN HOST: RUN IMPORTED .zip, .zxp, .jsx, .jsxbin PLUGINS INSIDE THE APP
+================================================================
+Build ONE generic host, no plugin-specific code, on top of the app's own engine. Two plugin kinds:
+- CEP panels (KeyEase: HTML UI + JSX host script)
+- ScriptUI scripts (Text Evo 2: a .jsx or .jsxbin that draws its own UI)
+Both use the script engine (2.7). Everything runs inside the app: no PC, no localhost, no network bridge.
+Assumption: the CEP panel UI runs in an Android WebView, the JSX runs in a separate hidden JS context, both reach the app's project model through a Kotlin bridge. Full Adobe compatibility is impossible, so aim for a broad common subset that fails safely.
+
+2.1 IMPORT (.zip, .zxp, .jsx, .jsxbin)
+- .zxp is a zip with a META-INF signature. Treat both the same: unzip to files/plugins/<bundleId>/<version>/ with path-traversal protection and limits on size and file count. The signature cannot be verified against Adobe: show "Signed (not verified)" or "Unsigned", never block on it.
+- Find CSXS/manifest.xml, searching up to 2 folder levels deep (zips often have a wrapper folder). Parse ExtensionManifest versions 5 to 7: bundle id, name, version, every Extension (a bundle can hold several, each becomes its own panel), host list (AEFT and version range), MainPath, ScriptPath, CEF flags, UI type (Panel, Modeless, ModalDialog, Custom or headless), menu name, geometry (size, min, max), icons. Keep unknown fields in rawAttributes.
+- ScriptUI packages (no manifest): if no CSXS/manifest.xml is found, look up to 2 folder levels deep for .jsx and .jsxbin files and treat the package as kind = SCRIPTUI. Also accept a bare .jsx or .jsxbin picked directly. Text Evo 2 is exactly this: Textevo_2026_1_0.zip holds one wrapper folder (Textevo_2026.1.0/) with textevo.jsxbin and README.txt. Each top-level script becomes one panel named after its file (e.g. textevo.jsxbin). Use the first README title line as display name and show the README in a Details sheet. Adobe installs these into a ScriptUI Panels folder, so the host runs the script as a panel (2.7).
+- Mark a package Unsupported, with the reason, and keep it, only if it has no AEFT host, or only native binaries (.aex), or only .jsxbin files whose header the loader does not recognize (2.7). A .jsxbin is NOT Unsupported by itself. Never delete a package silently.
+
+2.2 PANEL RUNTIME (WebView, CEP plugins)
+- Load MainPath through WebViewAssetLoader from the plugin folder, no file access outside it. Each plugin gets its own origin so localStorage and cookies are separate. Use manifest geometry as starting size, but make it resizable and touch friendly (map touch to mouse events, set viewport).
+- Inject window.__adobe_cep__ before any page script: evalScript(code, cb), getHostEnvironment() (AEFT, version, locale, online state, skin info built from MaterialTheme), getSystemPath, addEventListener, dispatchEvent (CSEvent), openURLInDefaultBrowser, closeExtension, requestOpenExtension, resizeContent, getScaleFactor, registerKeyEventsInterest, setWindowTitle, getNetworkPreferences, getCurrentApiVersion, invokeSync. Plugins usually bundle their own CSInterface.js, which then works on top. Also provide window.cep.fs (read, write, stat, readdir, open and save dialogs through the system file picker) and window.cep.util.
+- For --enable-nodejs plugins, provide a require with an allowlist: fs (sync, callback and promise basics; watch becomes polling), path, os (homedir and tmpdir map into the sandbox), crypto subset (randomBytes, createHash). child_process, net and raw sockets are unavailable and throw a clear error.
+
+2.3 EXTENDSCRIPT HOST (JSX)
+- evalScript(code) runs in a headless JS context per plugin session, bound to the app's existing project model (no second model). Evaluate ScriptPath once when the panel loads. Handle #target, #targetengine, #strict, #include (relative to plugin folder). Return values become strings the way ExtendScript does; an exception returns "EvalScript error." with the message. Serialize all calls in one queue with a 5 s timeout.
+- ExtendScript globals: $ (global, os, fileName, writeln, evalFile, version), File and Folder (mapped to the sandbox), alert, confirm, prompt (native dialogs), app.beginUndoGroup / endUndoGroup (one undo step in the editor). ScriptUI is covered in 2.7.
+- AE DOM subset in Kotlin as a thin adapter over the app's project model: app.project, activeItem (CompItem), layers (add shape, text, solid, null), selectedLayers, selectedProperties, Property (value, setValue, setValueAtTime, numKeys, selectedKeys, keyTime, keyValue, expression, expressionEnabled, property(matchName), propertyGroup), KeyframeEase, KeyframeInterpolationType, PropertyType, TextDocument, effects by match name through the registry in 4.5 (native or generic effect). Time is seconds in the DOM and milliseconds in the project (section 4).
+- Ease conversion is the inverse of section 1. When a plugin calls setTemporalEaseAtKey, store the segment as a cubic bezier: x1 = outInfluence/100, y1 = outSpeed * x1 / avg, x2 = 1 - inInfluence/100, y2 = 1 - inSpeed * (1 - x2) / avg, avg = (v2 - v1) / dt. keyInTemporalEase and keyOutTemporalEase return the equivalent from the stored cubic, so read-after-write is stable. Keep the raw easing string (4.4).
+- For any unimplemented API, do not crash: throw a JS error named KE_UNSUPPORTED with the API name (e.g. Layer.addProperty("ADBE ...")) and log it to the compatibility report (2.5).
+
+2.4 SANDBOX AND DATA
+- Each plugin gets files/plugin-data/<bundleId>/ as its home. The virtual fs, File and Folder can only see that folder and the plugin folder (read only). A plugin cannot see another plugin's data or any app file. Add a storage quota and a Clear data action.
+- Network is off by default. When a plugin first needs it (e.g. license check), ask the user once and remember the answer per plugin.
+
+2.5 COMPATIBILITY REPORT
+- Record every unsupported API, Node module, ScriptUI control or property, expression function and effect match name at runtime. Show a chip on the plugin card: Works, Partial (n issues) or Unsupported, with a copyable list of missing items grouped by area (DOM, ScriptUI, expressions, effects, file and network, jsxbin). Never drop plugin data.
+- Probe mode: a card action "Run probe" loads the plugin, opens its panel, records every missing item it hits, and exports the list as a text file. Compiled .jsxbin cannot be read to see what it uses, so this runtime list is the only reliable source and the work queue for extending the engine.
+
+2.6 ACCEPTANCE TEST
+- Original KeyEase imports unmodified as both .zip and .zxp, panel opens at about 260x470 inside the app.
+- With 2+ keyframes selected on the app timeline, tapping a preset (e.g. Overshoot .34,1.56,.64,1) applies that cubic bezier to every selected segment, panel shows "Applied to N segment(s)", all 8 presets match section 1 within rounding. Undo reverts it in one step.
+- Text Evo 2 (Textevo_2026_1_0.zip) imports, opens without crashing the app, and anything missing shows in its compatibility report (full test in 2.8).
+
+2.7 SCRIPT ENGINE (:script-engine)
+Goal: run ExtendScript for both plugin kinds, including compiled .jsxbin, ScriptUI and AE text animators. It is a thin layer on the app's own engine: it adds a JS runtime and adapters only. Text animation, effects, rendering, properties and floating windows are the app's existing ones. Assumption: keep the hidden WebView JS context from section 2; switch to embedded QuickJS (JNI) if synchronous Kotlin calls or ES3 behavior prove unreliable, and document the choice. Run off the main thread, one queue per plugin.
+
+What the Text Evo 2 files show (README and file header; the code is compiled):
+- It is a ScriptUI panel, not CEP: README step 2 installs textevo.jsxbin via File > Scripts > Install ScriptUI Panel, step 3 opens it from the Window menu. The file starts with header @JSXBIN@ES@2.0@, Adobe's compiled ExtendScript format.
+- It needs the preference "Allow Scripts to Write Files and Access Network", and asks for a folder for settings and presets (Documents if you cancel).
+- A Textevo is an effect linked to a text animator on a text layer, created and removed only by its own buttons. It animates per letter, word or line: position, scale, rotation, opacity, blur. It stacks several per layer, works on all selected text layers, offers 2D and 3D, sets anchor point grouping, and adds layer markers (delay from markers).
+- Its presets manager opens as a floating window (or a separate dockable panel, "textevo presets.jsxbin"). Presets can contain effects; effects not installed are skipped with a message listing them.
+
+A. JSXBIN loader
+- Detect header @JSXBIN@ES@<version>@ and parse the body into a syntax tree. Run it by translating the tree to JS IN MEMORY and evaluating it in the plugin's context. Implement from the publicly documented format and test against textevo.jsxbin as fixture.
+- Unknown header or version: mark that file Unsupported (jsxbin version x) with a clear message, never crash.
+- Rules: never write decompiled or translated source to disk, logs, the compatibility report or the UI. If the plugin has a license or activation check, run it unchanged, never patch or skip it. Use only plugins the user has the right to use. Assumption: running a compiled script the user installed is what After Effects does, but the user must check the plugin's license terms for this app.
+
+B. ExtendScript runtime additions
+- Pass the panel object as this, so the idiom thisObj instanceof Panel ? thisObj : new Window("palette", ...) works. The result is the app's floating window (C).
+- Globals and objects: $.global, $.sleep, $.writeln, $.evalFile, $.stack, $.error, $.gc, $.os, $.version; app.version, app.language, app.isoLanguage, app.settings (haveSetting, getSetting, saveSetting, stored in plugin sandbox), app.preferences (getPrefAsLong, savePrefAsLong; return 1 for Pref_SCRIPTING_FILE_NETWORK_SECURITY in "Main Pref Section" when the user allowed file and network access for this plugin), app.executeCommand (log and report unsupported ids), app.scheduleTask and app.cancelTask, system.osName, Folder.myDocuments, Folder.userData, Folder.temp, Folder.selectDialog and File.openDialog / saveDialog (system picker mapped into the sandbox; on cancel return null cleanly, since Text Evo then falls back to Documents), File read, write, open, close, exists, copy, remove, Folder getFiles, create, localize(), toSource(), a JSON polyfill (ExtendScript is ES3), BridgeTalk (stub, reported), Socket and system.callSystem (unsupported, reported).
+- "Allow Scripts to Write Files and Access Network" becomes a per-plugin permission on the plugin card. It only unlocks the sandbox folder (2.4) and the one-time network question, never other app files.
+
+C. ScriptUI = the app's custom floating UI
+- ScriptUI windows render in the app's existing floating window (draggable, resizable, over the timeline; same one as 8.4), drawn with Compose and MaterialTheme.colorScheme. Mapping: palette and docked Panel open in the floating window (bottom sheet when Show in timeline is off); dialog opens as a modal floating window; Window.alert, confirm, prompt use native dialogs.
+- Controls: Group and Panel (orientation, alignChildren, alignment, margins, spacing, preferredSize, minimumSize, maximumSize), TabbedPanel and Tab, StaticText, EditText (multiline, readonly), Button, IconButton, Checkbox, RadioButton, DropDownList, ListBox (single and multiselect, columns), Slider, Scrollbar, Progressbar, Image, Divider. Properties: text, value, enabled, visible, selection, items, helpTip, size, location, bounds, active, window, parent, children, type, justify, characters, graphics.
+- Methods and events: add, remove, show, hide, close, center, layout(true/false), notify, addEventListener, onClick, onChange, onChanging, onShow, onClose, onResizing, onResize, find, Window.find, ScriptUI.newImage, ScriptUI.environment.
+- Keep the ScriptUI tree as state, send diffs to Kotlin, send input back to JS as events. Run auto layout (alignChildren, margins) in Kotlin.
+- Custom drawing: many panels draw their own controls: graphics.onDraw, ScriptUIGraphics (newPen, newBrush, drawString, rectPath, ellipsePath, fillPath, strokePath, measureString, font) and ScriptUI.newFont on a Compose Canvas. Report any missing graphics call.
+- Touch: tap = click, long press = helpTip, drag for sliders and scrollbars, on-screen keyboard for EditText. A floating palette opened by a plugin appears as its own floating window; Text Evo's presets manager opens that way.
+
+D. AE text animators and effects, on the app's own text engine
+- Alight Motion text layers already have the native per-character effect com.alightcreative.effects.texttransform (4.5). Use it as the target. Map the AE text animator model onto it through the effect registry; do not build a second text animation system.
+- Text DOM by match name: ADBE Text Properties, ADBE Text Document (TextDocument: text, fontSize, fillColor, font, justification, tracking, leading), ADBE Text Animators, ADBE Text Animator, ADBE Text Selectors, ADBE Text Selector (range selector: start, end, offset, units, based on = characters/words/lines, mode, amount, shape, ease high, ease low, smoothness, randomize order, random seed), ADBE Text Animator Properties and the properties position, anchor point, scale, rotation, opacity, fill color, blur. Assumption: these are the standard match names; verify each against the AE scripting reference and log any that fail.
+- Mapping table (a data file, not code): selector start/end/offset -> texttransform start/end/phase; based on -> component; shape -> shape; ease high/low -> easeIn/easeOut; randomize order and seed -> randomOrder and seed; animator position/anchor/scale/rotation/opacity -> offset/anchor/scale/angle/alpha; 3D properties -> z where the renderer has it. Anything unmatched stays as a generic property (4.5) and is reported.
+- Text layer APIs: layer.property("ADBE Text Properties"), TextLayer.sourceText.value and setValue(TextDocument), animators add/remove/rename/reorder, keyframes on animator properties, anchor point grouping (ADBE Text More Options), layer.addMarker and the marker property (MarkerValue: comment, duration, label), layer.selected, comp.selectedLayers, layer.effect and addProperty for effects (Slider, Checkbox, Dropdown, Color and Layer controls), pseudo effects, layer.applyPreset(File) for .ffx presets (Assumption: .ffx parsing optional in v1; if unsupported, report the preset and skip it, as Text Evo does for effects it cannot find).
+- Expressions: a Textevo links an effect to an animator, so expect expressions on animator properties and selectors. Add a small evaluator to the property expression field: time, value, index, thisComp, thisLayer, thisProperty, effect("name")("param"), comp(), layer(), linear, ease, easeIn, easeOut, clamp, random, seedRandom, wiggle, Math functions, and for text selectors textIndex, textTotal, selectorValue. Evaluate per frame and per character. An unsupported function reports an expression error and the property keeps its last static value.
+- Effects the app does not know become generic effects (4.5) and appear in the report; never dropped. Third-party effects get a pass-through renderer.
+
+2.8 TEXT EVO 2 ACCEPTANCE
+Use the exact file Textevo_2026_1_0.zip. Grade each step Works, Partial or Unsupported in the compatibility report. None may crash the app.
+- Imports as a ScriptUI package; card shows name, README and a Run probe action.
+- textevo.jsxbin loads (header @JSXBIN@ES@2.0@ recognized) and its panel opens from the FAB, in the app's floating window.
+- First launch: the settings and presets folder question appears through the sandbox picker; cancel falls back to the sandbox Documents folder.
+- With a text layer selected, Add creates one Textevo (a text animator plus its linked effect) that renders in the preview through texttransform. Remove deletes both together.
+- Letter, word and line modes, and at least position, scale, rotation and opacity, animate correctly.
+- Delay from markers adds layer markers and uses them.
+- Presets open in a floating window; a preset with a missing third-party effect is skipped with a message listing it.
+- Whatever fails is listed by Run probe, grouped by area.
+
+================================================================
+3. EDITOR FIXES
+================================================================
+Investigate the existing code first, then fix:
+- Playhead: follows time exactly (ms is the source of truth), stays in sync when scrubbing, playing and seeking, never jumps or lags behind the ruler. Clamp to 0..totalTime.
+- Shorten the length a little: reduce the default new-clip / timeline length by about 10-15%. Assumption: this means the default timeline or clip length. Make it one named constant.
+- Duration flickering to 0: find where duration is recomputed or re-emitted. Likely causes: StateFlow initial value 0 emitted before load, duration derived from frame counts rounding to 0, or the player being recreated. Fix with one source of truth: totalTime computed from the project (max endTime or scene totalTime), distinctUntilChanged(), never emit 0 while loading (nullable or Loading state), no player recreation on recomposition.
+
+================================================================
+4. ALIGHT MOTION (.xml) IMPORTER
+================================================================
+Goal: lossless import that looks identical to Alight Motion. Study New_Project_25.xml and implement a parser (XmlPullParser or kotlinx-compatible) into the app's own project model.
+
+4.1 Scene
+- <scene> attributes: title, width/height (1080x1080), exportWidth/exportHeight, bgcolor (#AARRGGBB), totalTime (11091, milliseconds), fps (60), precompose, retime, modifiedTime, amver, ffver. Use same aspect ratio, resolution, frame rate. Keep time in ms, convert to frames only for display/export (frame = round(ms * fps / 1000)). Do not round totalTime to whole frames.
+- <bookmark t="ms"/> (12 in this file, unsorted): import all as timeline markers, sorted, deduplicated.
+
+4.2 Layer elements
+- Found: shape (13), text (13), nullobj (6), drawing (1). Unknown element names: keep generically as raw layers, do not crash.
+- Common attributes: id, label (optional), startTime/endTime (ms, layer in/out), parent (id of another layer; a child can appear before its parent, so resolve in two passes), fillType (color, media, intrinsic), mediaFillMode, blending (e.g. overlay), outTime (media trim), fillImage / fillVideo (content://media/... URIs), s=".rect" (shape type), type="perspective" (nulls), size, font (e.g. imported?name=FiraMonoNerdFont-Regular.ttf), wrapWidth, align.
+- Children: <transform>, <fillColor value>, <color value>, <size value>, <opacity value>, <property name type value>, <effect id locallyApplied>, <content> (text), <stroke color width type points>.
+- File order = layer order. Preserve it.
+
+4.3 Transform and parenting
+- <transform> has location (x,y,z in scene pixels), scale (sx,sy, 1.0 = 100%), rotation (degrees). Each is a constant value="..." or a list of <kf>.
+- Scene space is 1080x1080, origin top-left, so a null at 540,540,0 is canvas center.
+- A child's transform is relative to its parent (e.g. Rectangle 1 at 938,-15 inside a scaled null). Compose the full chain: world = parent * translate * rotate * scale. Assumption: anchor is the layer center. Verify by overlaying your render on an Alight Motion export of the same project.
+- Nulls are invisible transform-only layers (type="perspective").
+- Imported fonts: resolve imported?name=...ttf against the user's imported fonts. If missing, fall back to a default font and keep the font name in the model so it can be relinked.
+
+4.4 Keyframes
+<kf t v e>:
+- t is normalized time within the layer: t = (time - startTime) / (endTime - startTime). Check: Null 1 has startTime 0, endTime 2282, kf t=0.339614 = 775 ms, exactly the first bookmark. t may be slightly below 0 or above 1 (e.g. -0.009238). Keep it, do not clamp.
+- kf entries are NOT sorted in the file. Sort by t after parsing.
+- v is a number, or x,y or x,y,z depending on the property.
+- e is the easing and lives on the LATER key of a pair, governing the segment arriving at it (check: scale goes 2.36 to 1.0 with e on the 1.0 key). The first key has no e.
+- Easing formats: cubicBezier x1 y1 x2 y2 (same model as KeyEase, y outside 0..1 possible), cyclic a b c d e, bounce a b. Parse name and float args. Implement cubicBezier exactly with Bezier.eval. Implement bounce and cyclic as well as you can, and ALWAYS keep the raw string so export and round trip stay lossless. Missing e = linear.
+- Keyframes can also sit inside effect properties: <property name="end" type="float"><kf .../></property>.
+
+4.5 Effects
+- Seen in this file: com.alightcreative.effects.gaussianblur (strength), .fade (inTime, outTime), .texttransform (start, end, phase, component, anchor, offset, angle, scale, stretch, alpha, useFillColor, fillColor, rotateMode, scaleMode, autoRotate, rotateWeight, scaleWeight, radiusAdjust, overlap, shape, randomOrder, seed, easeIn, easeOut), .drawing.progress (start, end 0..100, with a bounce easing), .parenthelper. Property types: float, int, bool, vec2, color.
+- Compatibility rule: keep a registry of known effect ids mapped to the app's native effects. For ANY unknown com.alightcreative.effects.* id, auto-create a generic effect from the XML: effect id as name, one editable control per <property> by type (float slider, int stepper, bool switch, vec2 pair, color picker), keyframes preserved. Render as pass-through if no renderer exists; never crash or drop values.
+
+4.6 Drawings and media
+- <stroke color width type="pen" points="x,y,pressure;x,y,pressure;..."/>: parse every point (hundreds possible). Keep pressure. Render as a pen path with width and color. drawing.progress animates the visible fraction.
+- Media: fillImage / fillVideo use content://media/... URIs from the original phone, which may not exist on the new device. Try to resolve; otherwise create a placeholder with the label (e.g. HTzKSoUbAAAFVbP.jpg) and ask the user to relink. Never delete the layer. Use size for media layer size and outTime for video trim.
+- Text: <content> is the string, plus size, fillColor, wrapWidth, align.
+
+4.7 Acceptance checklist (this file)
+- 1080x1080, 60 fps, total 11091 ms, white background.
+- 12 markers at 8, 775, 1225, 1675, 2275, 2741, 3158, 4075, 4875, 5941, 6875, 7341 ms.
+- 13 shapes, 13 text layers, 6 nulls, 1 drawing, correct parent links.
+- 20 effects with property values; 58 keyframes with correct values and easings.
+- Positions, scales, rotations match an Alight Motion render at several timestamps (e.g. 0, 775, 1416, 2266, 4066, 5166 ms).
+- Unknown fields stored in a rawAttributes map on every node so nothing is lost.
+
+================================================================
+5. MASK LAYER BUTTON: NEW UI
+================================================================
+- Mask section: bottom tool row: Rectangle, Ellipse, Pen.
+- Feather section: show only when a mask exists (hide or disable it first). Controls: feather amount, plus expansion and opacity if the existing model has them.
+- Roto section: first tap: if the roto model is not installed, show a download dialog (size, progress, cancel, retry, Wi-Fi hint). After download, open the roto tool.
+- Keep the bottom tool row consistent with existing editor styling, via MaterialTheme.
+
+================================================================
+6. ROTO ENGINE
+================================================================
+Approach: two lightweight, mobile-optimized models.
+- Mask: edge-AI variant of Segment Anything (SAM) or a MobileNet-based U-Net isolates the subject with minimal file size. Assumption: start with MobileSAM (or EdgeSAM) for prompted masks and a MobileNet U-Net as prompt-free fallback. Verify each model license before shipping.
+- Tracking: a dense optical flow model plus a Video Object Segmentation (VOS) model tracks pixel movement and glides the mask across frames.
+- Engine: separate module (:roto-engine) with its own interface, e.g. RotoEngine { load(models), segment(frame, prompt) -> mask, track(prevFrame, nextFrame, prevMask, state) -> mask, release() }. JNI + C++ with ncnn (Vulkan if available, CPU fallback). Assumption: ncnn, but ONNX Runtime Mobile is acceptable if a model does not convert; document the choice. Keep tracking state per clip. Run off the main thread, cap frame size for speed, reuse bitmaps and buffers.
+- Pipeline: segment a key frame, then propagate forward and backward with optical flow warping refined by the VOS model. Re-anchor by running the mask model again when confidence drops, when mask area jumps, or when the user paints a correction on a frame. Store the result per frame, compressed.
+- Model download on first use (mask model, flow and VOS model), stored in app files, checked by hash, resumable. One dialog shows total size, progress, cancel, retry, Wi-Fi hint.
+- Two buttons:
+  - Automatic background removal: segments the subject on the first frame of the clip range (user can tap to confirm or fix), tracks it across the whole range, produces an alpha mask layer.
+  - Brush tool: has a switch "Remove background / Remove object". User paints on the preview with a semi-transparent red brush (brush size, hardness, eraser). The painted area is the prompt for the mask model. Remove background keeps the painted subject; Remove object cuts the painted object out. A stroke on any frame re-anchors tracking from that frame. Show the red overlay on the preview, never in the export.
+- Result is stored as an editable mask or alpha layer in the project. Support undo and redo of strokes. Progress and cancel must work; cancel must leave the project unchanged.
+
+================================================================
+7. DEPTH MAP (new button at the bottom of the home page)
+================================================================
+Model: Depth Anything V2 (https://github.com/DepthAnything/Depth-Anything-V2). Assumption: this replaces the earlier bingykang reference. Per the repo, the Small model is Apache-2.0 and larger models are CC-BY-NC-4.0 (non-commercial); verify in the repo before shipping, show the license in the model picker, warn before downloading a non-commercial model. Convert models to a mobile runtime (ncnn or ONNX Runtime Mobile, decide and document).
+- First use: download prompt, then model picker: Small / Base / Large. User can download more than one later. Show size, status, license and delete per model. Remember last chosen model.
+- Own engine (:depth-engine) with clear interface (DepthEngine { load(size), estimate(frame) -> depth }), off the main thread, cached, downscaling for speed and memory.
+- Customizable properties with live preview: colormap/color, strength, invert, near/far clip, contrast/gamma, blur/smoothing, and others that make sense (opacity, normalize on/off). Add a before/after toggle.
+- Output: user can import or paste the depth map into projects, choosing which project(s) in a project selector (as a layer or an effect input).
+- Optimize: reuse bitmaps, tile if needed, release the model when leaving the screen, handle low-memory devices, no leaks, smooth UI during inference.
+
+================================================================
+8. PLUGINS: BROWSER, SWITCHES AND PROJECT BUTTONS
+================================================================
+App UI for the plugins in section 2: import, browse, switch on/off, use. There are no built-in plugins. Roto (6) and Depth map (7) are app features, not plugins.
+
+8.1 Plugin registry
+- PluginPackage(bundleId, name, version, kind (CEP or SCRIPTUI), extensions[], scripts[], installedAt, enabled, showInTimeline, fileNetworkAllowed, compat, rawAttributes), built from the parsed manifest in 2.1, or for a ScriptUI package from its script files. Unknown fields go to rawAttributes, never dropped.
+- PluginRepository (DataStore for state, app files for packages): list, import(uri), enable, setShowInTimeline, uninstall, clearData. Expose a StateFlow of PluginUiState(installed, busy, message) through a ViewModel.
+- A disabled plugin hides everywhere (timeline, FAB, effects list) but keeps its files, data and saved property values.
+
+8.2 Plugin browser (new bottom button on the home page)
+- Add a new button in the home page bottom bar, next to the existing ones, opening a Plugins screen. Settings gets no plugin layout, at most one row that opens this screen.
+- Screen has an Import action (system file picker, .zip, .zxp, .jsx or .jsxbin, via Storage Access Framework) with progress and errors, a list of imported plugins, and an empty state explaining how to import.
+
+8.3 Plugin card: enable and timeline switches
+- As soon as a plugin is added it appears as a card with icon, name, version, kind (CEP or ScriptUI), signature note, an Enabled switch, a Show in timeline switch, a file and network permission switch (2.7), plus Use, Run probe, Clear data, Uninstall (with confirmation).
+- Compute a status per plugin for the timeline UI (Shown, Hidden by you, Disabled, No panel UI, Unsupported) and show it as a chip next to the compatibility chip from 2.5. If the plugin has no panel UI (headless manifest, or a ScriptUI script that never opens a window), Show in timeline is disabled with the reason. Turning Enabled off also turns the timeline UI off.
+- Use: opens the plugin panel in the project picker, or directly if a project is already open.
+- Changes apply live to an open timeline, no restart. MaterialTheme.colorScheme only.
+
+8.4 Projects: FAB plugin buttons
+- In the projects screen, extend the FAB into an expandable menu (speed dial). Add one button per enabled plugin panel, with its icon and name, after the existing actions.
+- Tapping a plugin button opens the plugin UI in the app's floating window (draggable, resizable, over the timeline) when Show in timeline is on, otherwise in a bottom sheet. Same window that hosts ScriptUI (2.7 C). Next to it, show the properties of whatever the plugin created or selected (effects, layers, keyframes) in the same property editor used for imported effects (slider, stepper, switch, vec2 pair, color picker, keyframe button). Edits update the preview live and are saved into the project.
+- If no project is open, ask which project to use first. Keep FAB state in the ViewModel so it survives rotation.
+
+8.5 Rules
+- Plugins run off the main thread. A plugin that fails to load or crashes shows an error on its card and never affects the editor or other plugins.
+- Sandbox and network rules are those in 2.4.
+
+================================================================
+9. DONE WHEN
+================================================================
+- KeyEase, imported unmodified as .zip or .zxp, opens from the FAB and applies curves to the selected keyframes in the app, no PC, no network, no localhost (2.6).
+- Any other .zip, .zxp, .jsx or .jsxbin plugin imports without crashing, and its compatibility report lists what is missing.
+- Text Evo 2 loads on the script engine, uses the app's own engine and floating window, passes 2.8 with every gap listed in its report, and no decompiled source is stored or shown anywhere.
+- Plugins switch on/off on their card, timeline UI status is shown, and an enabled plugin appears in the projects FAB with its properties.
+- Playhead is stable, duration never flickers to 0.
+- Alight Motion import passes 4.7 with nothing dropped.
+- Mask, Roto and Depth Map flows work end to end, download on first use, with cancel and error states.
+- Roto uses the mask model plus optical flow and VOS tracking, and a brush stroke re-anchors the track.
+- No hardcoded colors, no main-thread blocking.

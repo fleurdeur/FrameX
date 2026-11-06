@@ -64,6 +64,7 @@ class FramePollutionGlRenderer(
     @Volatile var cameraPitchDeg: Float = 16f
     @Volatile var cameraDistance: Float = 4.2f
     @Volatile var show3DGridOverlay: Boolean = false
+    @Volatile var applyCameraInPreview: Boolean = true
 
     @Volatile var previewQuality: PreviewQuality = PreviewQuality.HALF
     @Volatile var previewFpsCap: Int = 60
@@ -91,6 +92,7 @@ class FramePollutionGlRenderer(
     private var quadPosLoc = -1
     private var quadUvLoc = -1
     private var quadFlipLoc = -1
+    private var quadAlphaLoc = -1
     private var quadTexLoc = -1
 
     private var chkPosLoc = -1
@@ -104,7 +106,7 @@ class FramePollutionGlRenderer(
     private var lyrCenterLoc = -1
     private var lyrHalfSizeLoc = -1
     private var lyrPivotLoc = -1
-    private var lyrRotLoc = -1
+    private var lyrRot3DLoc = -1
     private var lyrViewportLoc = -1
     private var lyrOpacityLoc = -1
     private var lyrTexLoc = -1
@@ -114,7 +116,7 @@ class FramePollutionGlRenderer(
     private var oesCenterLoc = -1
     private var oesHalfSizeLoc = -1
     private var oesPivotLoc = -1
-    private var oesRotLoc = -1
+    private var oesRot3DLoc = -1
     private var oesViewportLoc = -1
     private var oesOpacityLoc = -1
     private var oesTexMatLoc = -1
@@ -130,11 +132,13 @@ class FramePollutionGlRenderer(
     private var fxUvLoc = -1
     private var fxFlipLoc = -1
     private var fxModeLoc = -1
+    private var fxSubModeLoc = -1
     private var fxIntensityLoc = -1
     private var fxSecondaryLoc = -1
     private var fxFreqLoc = -1
     private var fxAngleLoc = -1
     private var fxMixLoc = -1
+    private var fxFeatherLoc = -1
     private var fxTintLoc = -1
     private var fxTimeLoc = -1
     private var fxResLoc = -1
@@ -161,6 +165,7 @@ class FramePollutionGlRenderer(
         val texelSizeLoc: Int,
         val resLoc: Int,
         val flipLoc: Int,
+        val featherLoc: Int = -1,
         val paramLocs: Map<String, Int>
     )
 
@@ -201,6 +206,8 @@ class FramePollutionGlRenderer(
     )
 
     private val layerTextures = HashMap<String, GpuLayerTexture>()
+    private val mediaShadowTextures = HashMap<String, GpuLayerTexture>()
+    private val mediaStrokeTextures = HashMap<String, GpuLayerTexture>()
     private val oesVideoSlots = HashMap<String, OesLayerSurfaceSlot>()
     val externalOesOverrides = HashMap<String, ExternalOesOverride>()
 
@@ -233,6 +240,8 @@ class FramePollutionGlRenderer(
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         releaseOesSlotsInternal()
         layerTextures.clear()
+        mediaShadowTextures.clear()
+        mediaStrokeTextures.clear()
         fboAllocW = 0
         fboAllocH = 0
         fboIds[0] = 0
@@ -261,6 +270,7 @@ class FramePollutionGlRenderer(
         quadPosLoc = GLES20.glGetAttribLocation(quadProgram, "aPosition")
         quadUvLoc = GLES20.glGetAttribLocation(quadProgram, "aTexCoord")
         quadFlipLoc = GLES20.glGetUniformLocation(quadProgram, "uFlipY")
+        quadAlphaLoc = GLES20.glGetUniformLocation(quadProgram, "uAlpha")
         quadTexLoc = GLES20.glGetUniformLocation(quadProgram, "uTexture")
 
         chkPosLoc = GLES20.glGetAttribLocation(checkerBgProgram, "aPosition")
@@ -274,7 +284,7 @@ class FramePollutionGlRenderer(
         lyrCenterLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uCenterPx")
         lyrHalfSizeLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uHalfSizePx")
         lyrPivotLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uPivotPx")
-        lyrRotLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uRotRad")
+        lyrRot3DLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uRotRad3D")
         lyrViewportLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uViewportPx")
         lyrOpacityLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uOpacity")
         lyrTexLoc = GLES20.glGetUniformLocation(layerQuadProgram, "uTexture")
@@ -284,7 +294,7 @@ class FramePollutionGlRenderer(
         oesCenterLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uCenterPx")
         oesHalfSizeLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uHalfSizePx")
         oesPivotLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uPivotPx")
-        oesRotLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uRotRad")
+        oesRot3DLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uRotRad3D")
         oesViewportLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uViewportPx")
         oesOpacityLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uOpacity")
         oesTexMatLoc = GLES20.glGetUniformLocation(oesLayerQuadProgram, "uTexMatrix")
@@ -300,11 +310,13 @@ class FramePollutionGlRenderer(
         fxUvLoc = GLES20.glGetAttribLocation(effectProgram, "aTexCoord")
         fxFlipLoc = GLES20.glGetUniformLocation(effectProgram, "uFlipY")
         fxModeLoc = GLES20.glGetUniformLocation(effectProgram, "uMode")
+        fxSubModeLoc = GLES20.glGetUniformLocation(effectProgram, "uSubMode")
         fxIntensityLoc = GLES20.glGetUniformLocation(effectProgram, "uIntensity")
         fxSecondaryLoc = GLES20.glGetUniformLocation(effectProgram, "uSecondary")
         fxFreqLoc = GLES20.glGetUniformLocation(effectProgram, "uFreq")
         fxAngleLoc = GLES20.glGetUniformLocation(effectProgram, "uAngle")
         fxMixLoc = GLES20.glGetUniformLocation(effectProgram, "uMix")
+        fxFeatherLoc = GLES20.glGetUniformLocation(effectProgram, "uFeather")
         fxTintLoc = GLES20.glGetUniformLocation(effectProgram, "uTint")
         fxTimeLoc = GLES20.glGetUniformLocation(effectProgram, "uTime")
         fxResLoc = GLES20.glGetUniformLocation(effectProgram, "uResolution")
@@ -322,20 +334,25 @@ class FramePollutionGlRenderer(
         val frameStartNano = System.nanoTime()
         val project = currentProject
         val quality = previewQuality
-        val durMs = project.durationMs.coerceAtLeast(100L)
-        val rawClockMs = if (isPlaying && playbackAnchorNano > 0L) {
-            val elapsedMs = ((frameStartNano - playbackAnchorNano) / 1_000_000L).coerceAtLeast(0L)
-            val wallEst = if (isLooping) {
-                (playbackAnchorMs + elapsedMs) % durMs
+        val editDurMs = project.effectiveEditDurationMs().coerceAtLeast(100L)
+        val useCamera = offscreenMode || applyCameraInPreview
+        val timeMs = if (isPlaying) {
+            if (StudioPlaybackClock.isPlaying()) {
+                StudioPlaybackClock.samplePlayheadMs(frameStartNano).coerceIn(0L, editDurMs)
+            } else if (playbackAnchorNano > 0L) {
+                val elapsedMs = ((frameStartNano - playbackAnchorNano) / 1_000_000L).coerceAtLeast(0L)
+                val wallEst = if (isLooping) {
+                    (playbackAnchorMs + elapsedMs) % editDurMs
+                } else {
+                    (playbackAnchorMs + elapsedMs).coerceAtMost(editDurMs)
+                }
+                wallEst.coerceIn(0L, editDurMs)
             } else {
-                (playbackAnchorMs + elapsedMs).coerceAtMost(durMs)
+                playheadMs.coerceAtLeast(0L)
             }
-            // Lock to hardware ExoPlayer Audio/Video Master Clock when an active media track is playing!
-            HardwareVideoPreviewEngine.queryMasterCompositionTimeMs(project, wallEst) ?: wallEst
         } else {
-            playheadMs.coerceIn(0L, durMs)
+            playheadMs.coerceAtLeast(0L)
         }
-        val timeMs = rawClockMs.coerceIn(0L, durMs)
 
         val aspect = (project.width.toFloat().coerceAtLeast(64f) / project.height.toFloat().coerceAtLeast(64f))
             .coerceIn(0.2f, 5f)
@@ -357,8 +374,9 @@ class FramePollutionGlRenderer(
         val vpX = (surfaceWidth - vpW) / 2
         val vpY = (surfaceHeight - vpH) / 2
 
-        // Fast-path 1-Draw-Call Pre-Rendered RAM Cache Blit!
-        if (usePlaybackCache) {
+        // Fast-path 1-Draw-Call Pre-Rendered RAM Cache Blit (ONLY when a full composition pre-render completed,
+        // preventing partial 2.5s auto-cache windows from flickering against live GPU + OES frames!)
+        if (usePlaybackCache && useCamera && PlaybackCacheEngine.isFullCompositionCached(projectRevision, quality)) {
             val effectiveFps = min(project.fps.coerceIn(12, 60), previewFpsCap.coerceIn(24, 60))
             val cachedBmp = PlaybackCacheEngine.getCachedFrame(
                 projectRevision = projectRevision,
@@ -368,9 +386,10 @@ class FramePollutionGlRenderer(
             )
             if (cachedBmp != null && !cachedBmp.isRecycled) {
                 uploadCachedPlaybackBitmap(cachedBmp)
+                GLES20.glDisable(GLES20.GL_BLEND)
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
                 GLES20.glViewport(0, 0, surfaceWidth, surfaceHeight)
-                GLES20.glClearColor(0.055f, 0.063f, 0.082f, 1f)
+                GLES20.glClearColor(0.035f, 0.043f, 0.059f, 1f)
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                 GLES20.glViewport(vpX, vpY, vpW, vpH)
                 drawQuadWithTexture(cachedPlaybackTexId, flipY = true)
@@ -381,18 +400,22 @@ class FramePollutionGlRenderer(
 
         val audio = audioSnapshot
 
+        // Composition-level effects: Camera/Null/3D layer effects (GROUP effects apply exclusively to their grouped descendants inside render2DLayerStackOnGpu!)
         val activeEffects = project.layers
             .asSequence()
-            .filter { it.visible && timeMs in it.startTimeMs..it.endTimeMs }
+            .filter { it.visible && timeMs in it.startTimeMs..it.endTimeMs && it.type != LayerType.GROUP }
             .flatMap { lyr ->
                 val is2DLayer = lyr.type != LayerType.MODEL_3D &&
                     lyr.type != LayerType.NULL_OBJECT &&
+                    lyr.type != LayerType.GROUP &&
                     lyr.type != LayerType.CAMERA &&
                     lyr.type != LayerType.AUDIO
                 lyr.effects.asSequence().filter { fx ->
                     fx.enabled &&
-                        !(lyr.type == LayerType.TEXT && (fx.effectId == "Text_Transform" || fx.effectId == "Text_Spacing")) &&
-                        !(is2DLayer && PluginPackManager.isPluginEffect(fx.effectId))
+                        !EffectsCatalog.isTextOnlyEffect(fx.effectId) &&
+                        !isNonShaderMetadataEffect(fx.effectId) &&
+                        !is2DLayer &&
+                        fx.effectId != "Copy_Background"
                 }
             }
             .toList()
@@ -421,10 +444,11 @@ class FramePollutionGlRenderer(
         GLES20.glViewport(0, 0, internalW, internalH)
         clearCompositionBackground(project.backgroundColor, internalW.toFloat(), internalH.toFloat())
 
-        render2DLayerStackOnGpu(project, timeMs, audio, quality, internalW.toFloat(), internalH.toFloat())
-        render3DLayers(project, timeMs, audio, aspect)
+        render2DLayerStackOnGpu(project, timeMs, audio, quality, internalW.toFloat(), internalH.toFloat(), useCamera)
+        render3DLayers(project, timeMs, audio, aspect, useCamera)
 
         // Multi-pass Ping-Pong Shader Pipeline (skips zero-mix effects & redundant clears)
+        GLES20.glDisable(GLES20.GL_BLEND)
         var readIndex = 0
         activeEffects.forEach { fx ->
             val evalFx = AnimationEvaluator.evaluateEffectNode(fx, timeMs, audio)
@@ -442,6 +466,7 @@ class FramePollutionGlRenderer(
                     h = internalH
                 )
             } else {
+                GLES20.glDisable(GLES20.GL_BLEND)
                 val writeIndex = 1 - readIndex
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
                 GLES20.glViewport(0, 0, internalW, internalH)
@@ -459,9 +484,10 @@ class FramePollutionGlRenderer(
         }
 
         // Final Output Pass to Screen Surface
+        GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glViewport(0, 0, surfaceWidth, surfaceHeight)
-        GLES20.glClearColor(0.055f, 0.063f, 0.082f, 1f)
+        GLES20.glClearColor(0.035f, 0.043f, 0.059f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
         GLES20.glViewport(vpX, vpY, vpW, vpH)
@@ -496,20 +522,22 @@ class FramePollutionGlRenderer(
         GLES20.glViewport(0, 0, w, h)
         clearCompositionBackground(project.backgroundColor, w.toFloat(), h.toFloat())
 
-        render2DLayerStackOnGpu(project, timeMs, audio, quality, w.toFloat(), h.toFloat())
-        render3DLayers(project, timeMs, audio, aspect)
+        render2DLayerStackOnGpu(project, timeMs, audio, quality, w.toFloat(), h.toFloat(), applyCamera = true)
+        render3DLayers(project, timeMs, audio, aspect, applyCamera = true)
 
+        GLES20.glDisable(GLES20.GL_BLEND)
         var readIndex = 0
         project.layers.forEach { layer ->
-            if (!layer.visible || timeMs !in layer.startTimeMs..layer.endTimeMs) return@forEach
+            if (!layer.visible || timeMs !in layer.startTimeMs..layer.endTimeMs || layer.type == LayerType.GROUP) return@forEach
             val is2DLayer = layer.type != LayerType.MODEL_3D &&
                 layer.type != LayerType.NULL_OBJECT &&
+                layer.type != LayerType.GROUP &&
                 layer.type != LayerType.CAMERA &&
                 layer.type != LayerType.AUDIO
+            if (is2DLayer) return@forEach
             layer.effects.forEach { fx ->
                 if (!fx.enabled) return@forEach
-                if (layer.type == LayerType.TEXT && (fx.effectId == "Text_Transform" || fx.effectId == "Text_Spacing")) return@forEach
-                if (is2DLayer && PluginPackManager.isPluginEffect(fx.effectId)) return@forEach
+                if (EffectsCatalog.isTextOnlyEffect(fx.effectId) || isNonShaderMetadataEffect(fx.effectId) || fx.effectId == "Copy_Background") return@forEach
                 val evalFx = AnimationEvaluator.evaluateEffectNode(fx, timeMs, audio)
                 if (evalFx.mixFraction > 0.002f) {
                     val pluginDef = PluginPackManager.findPluginEffect(fx.effectId)
@@ -524,6 +552,7 @@ class FramePollutionGlRenderer(
                             h = h
                         )
                     } else {
+                        GLES20.glDisable(GLES20.GL_BLEND)
                         val writeIndex = 1 - readIndex
                         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[writeIndex])
                         GLES20.glViewport(0, 0, w, h)
@@ -543,6 +572,7 @@ class FramePollutionGlRenderer(
         }
 
         // Blit into PBuffer (FBO 0) with flipY = true so glReadPixels row 0 = TOP of upright Android Bitmap!
+        GLES20.glDisable(GLES20.GL_BLEND)
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         GLES20.glViewport(0, 0, w, h)
         drawQuadWithTexture(fboTexIds[readIndex], flipY = true)
@@ -619,6 +649,7 @@ class FramePollutionGlRenderer(
 
     private fun clearCompositionBackground(bgMode: String, w: Float, h: Float) {
         when {
+            bgMode == "TransparentAlpha" -> GLES20.glClearColor(0f, 0f, 0f, 0f)
             bgMode == "White" -> GLES20.glClearColor(1f, 1f, 1f, 1f)
             bgMode == "Dark Gray" -> GLES20.glClearColor(0.11f, 0.125f, 0.155f, 1f)
             bgMode == "Light Gray" -> GLES20.glClearColor(0.82f, 0.84f, 0.87f, 1f)
@@ -635,7 +666,7 @@ class FramePollutionGlRenderer(
         }
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
-        if (bgMode == "Transparent" || show3DGridOverlay) {
+        if (bgMode == "Transparent" || (show3DGridOverlay && bgMode != "TransparentAlpha")) {
             GLES20.glUseProgram(checkerBgProgram)
             quadBuffer.position(0)
             GLES20.glEnableVertexAttribArray(chkPosLoc)
@@ -658,97 +689,213 @@ class FramePollutionGlRenderer(
         audio: AudioSpectrumSnapshot,
         quality: PreviewQuality,
         fboW: Float,
-        fboH: Float
+        fboH: Float,
+        applyCamera: Boolean
     ) {
         val projW = project.width.coerceAtLeast(1).toFloat()
         val scaleToFbo = fboW / projW
+        val effectiveFps = min(project.fps.coerceIn(12, 60), previewFpsCap.coerceIn(24, 60))
+
+        // Identify child layers covered by an active pre-rendered GROUP layer so they don't render twice
+        val skippedGroupDescendants = HashSet<String>()
+        if (usePlaybackCache && !offscreenMode) {
+            project.layers.forEach { lyr ->
+                if (lyr.visible &&
+                    lyr.type == LayerType.GROUP &&
+                    timeMs in lyr.startTimeMs..lyr.endTimeMs &&
+                    PlaybackCacheEngine.isLayerOrGroupCached(projectRevision, quality, lyr.id)
+                ) {
+                    val grpBmp = PlaybackCacheEngine.getCachedLayerOrGroupFrame(
+                        projectRevision = projectRevision,
+                        quality = quality,
+                        layerId = lyr.id,
+                        timeMs = timeMs,
+                        fps = effectiveFps
+                    )
+                    if (grpBmp != null && !grpBmp.isRecycled) {
+                        skippedGroupDescendants.addAll(project.descendantLayerIdsOf(lyr.id))
+                    }
+                }
+            }
+        }
 
         GLES20.glEnable(GLES20.GL_BLEND)
 
         project.layers.forEachIndexed { idx, layer ->
             if (!layer.visible || timeMs !in layer.startTimeMs..layer.endTimeMs) return@forEachIndexed
+            if (layer.id in skippedGroupDescendants) return@forEachIndexed
+
+            // Fast-path O(1) GPU blit for pre-rendered individual Layer or Group Layer!
+            if (usePlaybackCache && !offscreenMode && PlaybackCacheEngine.isLayerOrGroupCached(projectRevision, quality, layer.id)) {
+                val cachedLyrBmp = PlaybackCacheEngine.getCachedLayerOrGroupFrame(
+                    projectRevision = projectRevision,
+                    quality = quality,
+                    layerId = layer.id,
+                    timeMs = timeMs,
+                    fps = effectiveFps
+                )
+                if (cachedLyrBmp != null && !cachedLyrBmp.isRecycled) {
+                    uploadCachedPlaybackBitmap(cachedLyrBmp)
+                    GLES20.glEnable(GLES20.GL_BLEND)
+                    configureLayerBlendState(layer.blendMode, isMaskSource = false, maskedByBelow = false)
+                    drawQuadWithTexture(cachedPlaybackTexId, flipY = true, alpha = 1f)
+                    return@forEachIndexed
+                }
+            }
+
             if (layer.type == LayerType.MODEL_3D ||
                 layer.type == LayerType.NULL_OBJECT ||
+                layer.type == LayerType.GROUP ||
                 layer.type == LayerType.CAMERA ||
                 layer.type == LayerType.AUDIO
             ) return@forEachIndexed
 
-            val texEntry = prepareLayerGpuTexture(layer, timeMs, audio) ?: return@forEachIndexed
             val currTr = AnimationEvaluator.evaluateWorldTransform(
                 layer = layer,
                 allLayers = project.layers,
                 timeMs = timeMs,
                 audio = audio,
-                applyActiveCamera = true
+                applyActiveCamera = applyCamera
             )
             if (currTr.opacity <= 0.005f) return@forEachIndexed
 
-            // Configure GL blend mode (including Clipping Mask destination-in style when flagged)
-            val prevLayerIsMask = idx > 0 && project.layers[idx - 1].isClippingMask && project.layers[idx - 1].visible
-            val (baseHalfW, baseHalfH) = computeLayerBaseHalfSizeFbo(layer, texEntry.aspectWOverH, fboW, fboH)
+            val hasCopyBackground = layer.effects.any { it.enabled && it.effectId == "Copy_Background" }
+            val prevLayerIsMask = idx > 0 &&
+                project.layers[idx - 1].isClippingMask &&
+                project.layers[idx - 1].visible &&
+                timeMs in project.layers[idx - 1].startTimeMs..project.layers[idx - 1].endTimeMs
 
-            val layerPluginNodes = layer.effects.filter { fx ->
-                fx.enabled && PluginPackManager.isPluginEffect(fx.effectId)
+            val ownEffectNodes = layer.effects.filter { fx ->
+                fx.enabled &&
+                    !EffectsCatalog.isTextOnlyEffect(fx.effectId) &&
+                    !isNonShaderMetadataEffect(fx.effectId) &&
+                    fx.effectId != "Copy_Background"
             }
-            val pluginUsesMotionBlur = layerPluginNodes.any { fx ->
-                PluginPackManager.findPluginEffect(fx.effectId)?.usesNativeMotionBlur == true
-            }
-            val shouldMotionBlur = (layer.motionBlurEnabled || pluginUsesMotionBlur) && quality.shaderDetailLevel >= 1
+            val inheritedGroupEffects = collectActiveAncestorGroupEffects(layer, project.layers, timeMs)
+            val layerEffectNodes = if (inheritedGroupEffects.isEmpty()) ownEffectNodes else ownEffectNodes + inheritedGroupEffects
 
-            if (layerPluginNodes.isNotEmpty()) {
+            // Alight Motion `Copy Background` (`com.alightcreative.effects.lift`) Adjustment Layer:
+            // Samples the current underlying composite (`fboTexIds[0]`) instead of painting the raw shape fill,
+            // runs this layer's effect chain, and composites back with `currTr.opacity` and `layer.blendMode`!
+            if (hasCopyBackground) {
+                if (layerEffectNodes.isEmpty() && layer.blendMode == "Normal") return@forEachIndexed
                 val wInt = fboW.toInt().coerceAtLeast(16)
                 val hInt = fboH.toInt().coerceAtLeast(16)
                 ensurePluginLayerFramebuffers(wInt, hInt)
 
-                // Render isolated layer into pluginFboIds[0] with full composition padding so expandBounds glows/rays never clip!
+                GLES20.glDisable(GLES20.GL_BLEND)
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[0])
+                GLES20.glViewport(0, 0, wInt, hInt)
+                drawQuadWithTexture(fboTexIds[0], flipY = false, alpha = 1f)
+
+                val outIdx = if (layerEffectNodes.isNotEmpty()) {
+                    executeLayerEffectNodeChain(
+                        effectNodes = layerEffectNodes,
+                        initialBufIdx = 0,
+                        timeMs = timeMs,
+                        audio = audio,
+                        w = wInt,
+                        h = hInt,
+                        shaderDetailLevel = quality.shaderDetailLevel
+                    )
+                } else {
+                    0
+                }
+
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[0])
+                GLES20.glViewport(0, 0, wInt, hInt)
+                GLES20.glEnable(GLES20.GL_BLEND)
+                configureLayerBlendState(layer.blendMode, isMaskSource = false, maskedByBelow = prevLayerIsMask)
+                drawQuadWithTexture(pluginFboTexIds[outIdx], flipY = false, alpha = currTr.opacity.coerceIn(0f, 1f))
+                return@forEachIndexed
+            }
+
+            val texEntry = prepareLayerGpuTexture(layer, timeMs, audio) ?: return@forEachIndexed
+            val (baseHalfW, baseHalfH) = computeLayerBaseHalfSizeFbo(layer, texEntry.aspectWOverH, fboW, fboH)
+            val pluginUsesMotionBlur = layerEffectNodes.any { fx ->
+                PluginPackManager.findPluginEffect(fx.effectId)?.usesNativeMotionBlur == true
+            }
+            val shouldMotionBlur = (layer.motionBlurEnabled || pluginUsesMotionBlur) && quality.shaderDetailLevel >= 1
+
+            if (layer.isClippingMask) {
+                // Write ONLY to destination alpha channel so the mask shape never paints solid RGB over the canvas!
+                GLES20.glColorMask(false, false, false, true)
+                GLES20.glClearColor(0f, 0f, 0f, 0f)
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                GLES20.glEnable(GLES20.GL_BLEND)
+                GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                drawLayerWithOptionalMotionBlur(
+                    texEntry = texEntry,
+                    layer = layer,
+                    project = project,
+                    currTr = currTr,
+                    timeMs = timeMs,
+                    audio = audio,
+                    quality = quality,
+                    baseHalfW = baseHalfW,
+                    baseHalfH = baseHalfH,
+                    scaleToFbo = scaleToFbo,
+                    fboW = fboW,
+                    fboH = fboH,
+                    forceMotionBlur = false,
+                    applyCamera = applyCamera
+                )
+                GLES20.glColorMask(true, true, true, true)
+                return@forEachIndexed
+            }
+
+            if (layerEffectNodes.isNotEmpty()) {
+                val wInt = fboW.toInt().coerceAtLeast(16)
+                val hInt = fboH.toInt().coerceAtLeast(16)
+                ensurePluginLayerFramebuffers(wInt, hInt)
+
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[0])
                 GLES20.glViewport(0, 0, wInt, hInt)
                 GLES20.glClearColor(0f, 0f, 0f, 0f)
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-                if (shouldMotionBlur) {
-                    GLES20.glEnable(GLES20.GL_BLEND)
-                    GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-                    drawLayerWithOptionalMotionBlur(
-                        texEntry = texEntry,
-                        layer = layer,
-                        project = project,
-                        currTr = currTr,
-                        timeMs = timeMs,
-                        audio = audio,
-                        quality = quality,
-                        baseHalfW = baseHalfW,
-                        baseHalfH = baseHalfH,
-                        scaleToFbo = scaleToFbo,
-                        fboW = fboW,
-                        fboH = fboH,
-                        forceMotionBlur = true
-                    )
-                } else {
-                    GLES20.glDisable(GLES20.GL_BLEND)
-                    drawTransformedLayerEntry(texEntry, layer, currTr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
-                }
+                GLES20.glEnable(GLES20.GL_BLEND)
+                GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+                drawLayerWithOptionalMotionBlur(
+                    texEntry = texEntry,
+                    layer = layer,
+                    project = project,
+                    currTr = currTr.copy(opacity = 1f),
+                    timeMs = timeMs,
+                    audio = audio,
+                    quality = quality,
+                    baseHalfW = baseHalfW,
+                    baseHalfH = baseHalfH,
+                    scaleToFbo = scaleToFbo,
+                    fboW = fboW,
+                    fboH = fboH,
+                    forceMotionBlur = shouldMotionBlur,
+                    applyCamera = applyCamera
+                )
 
-                val outIdx = executePluginNodeChain(
-                    pluginNodes = layerPluginNodes,
+                val outIdx = executeLayerEffectNodeChain(
+                    effectNodes = layerEffectNodes,
                     initialBufIdx = 0,
                     timeMs = timeMs,
                     audio = audio,
                     w = wInt,
-                    h = hInt
+                    h = hInt,
+                    shaderDetailLevel = quality.shaderDetailLevel
                 )
 
-                // Composite processed plugin layer back onto fboIds[0] with exact layer blend mode & clipping mask
                 GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboIds[0])
                 GLES20.glViewport(0, 0, wInt, hInt)
                 GLES20.glEnable(GLES20.GL_BLEND)
-                configureLayerBlendState(layer.blendMode, layer.isClippingMask, prevLayerIsMask)
-                drawQuadWithTexture(pluginFboTexIds[outIdx], flipY = false)
+                configureLayerBlendState(layer.blendMode, false, prevLayerIsMask)
+                drawQuadWithTexture(pluginFboTexIds[outIdx], flipY = false, alpha = currTr.opacity.coerceIn(0f, 1f))
+                if (prevLayerIsMask) {
+                    resetFboAlphaToOpaque()
+                }
                 return@forEachIndexed
             }
 
             GLES20.glEnable(GLES20.GL_BLEND)
-            configureLayerBlendState(layer.blendMode, layer.isClippingMask, prevLayerIsMask)
+            configureLayerBlendState(layer.blendMode, false, prevLayerIsMask)
             drawLayerWithOptionalMotionBlur(
                 texEntry = texEntry,
                 layer = layer,
@@ -762,12 +909,24 @@ class FramePollutionGlRenderer(
                 scaleToFbo = scaleToFbo,
                 fboW = fboW,
                 fboH = fboH,
-                forceMotionBlur = shouldMotionBlur
+                forceMotionBlur = shouldMotionBlur,
+                applyCamera = applyCamera
             )
+            if (prevLayerIsMask) {
+                resetFboAlphaToOpaque()
+            }
         }
 
+        GLES20.glColorMask(true, true, true, true)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    private fun resetFboAlphaToOpaque() {
+        GLES20.glColorMask(false, false, false, true)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glColorMask(true, true, true, true)
     }
 
     private fun drawLayerWithOptionalMotionBlur(
@@ -783,7 +942,8 @@ class FramePollutionGlRenderer(
         scaleToFbo: Float,
         fboW: Float,
         fboH: Float,
-        forceMotionBlur: Boolean
+        forceMotionBlur: Boolean,
+        applyCamera: Boolean
     ) {
         if (forceMotionBlur) {
             val shutterDtMs = ((layer.shutterAngle / 360f) * 28f).toLong().coerceIn(6L, 28L)
@@ -792,10 +952,13 @@ class FramePollutionGlRenderer(
                 allLayers = project.layers,
                 timeMs = (timeMs - shutterDtMs).coerceAtLeast(0L),
                 audio = audio,
-                applyActiveCamera = true
+                applyActiveCamera = applyCamera
             )
             val moved = abs(currTr.posX - prevTr.posX) > 0.6f ||
                 abs(currTr.posY - prevTr.posY) > 0.6f ||
+                abs(currTr.posZ - prevTr.posZ) > 0.8f ||
+                abs(currTr.rotX - prevTr.rotX) > 0.4f ||
+                abs(currTr.rotY - prevTr.rotY) > 0.4f ||
                 abs(currTr.rotZ - prevTr.rotZ) > 0.4f ||
                 abs(currTr.scale - prevTr.scale) > 0.01f
 
@@ -806,21 +969,63 @@ class FramePollutionGlRenderer(
                     val interp = EvaluatedTransform(
                         posX = prevTr.posX + (currTr.posX - prevTr.posX) * f,
                         posY = prevTr.posY + (currTr.posY - prevTr.posY) * f,
-                        posZ = currTr.posZ,
+                        posZ = prevTr.posZ + (currTr.posZ - prevTr.posZ) * f,
                         pivotX = currTr.pivotX,
                         pivotY = currTr.pivotY,
                         scale = prevTr.scale + (currTr.scale - prevTr.scale) * f,
-                        rotX = currTr.rotX,
-                        rotY = currTr.rotY,
+                        scaleY = prevTr.scaleY + (currTr.scaleY - prevTr.scaleY) * f,
+                        rotX = prevTr.rotX + (currTr.rotX - prevTr.rotX) * f,
+                        rotY = prevTr.rotY + (currTr.rotY - prevTr.rotY) * f,
                         rotZ = prevTr.rotZ + (currTr.rotZ - prevTr.rotZ) * f,
                         opacity = (currTr.opacity / samples.toFloat()) * 1.35f
                     )
-                    drawTransformedLayerEntry(texEntry, layer, interp, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
+                    drawLayerWithMediaBorders(texEntry, layer, interp, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
                 }
                 return
             }
         }
-        drawTransformedLayerEntry(texEntry, layer, currTr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
+        drawLayerWithMediaBorders(texEntry, layer, currTr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
+    }
+
+    private fun drawLayerWithMediaBorders(
+        texEntry: GpuLayerTexture,
+        layer: Layer,
+        tr: EvaluatedTransform,
+        baseHalfW: Float,
+        baseHalfH: Float,
+        scaleToFbo: Float,
+        fboW: Float,
+        fboH: Float
+    ) {
+        val isMedia = layer.type == LayerType.IMAGE || layer.type == LayerType.VIDEO
+        val padScale = KeyflowTextAndBorderRenderer.MEDIA_BORDER_PAD_SCALE
+        if (isMedia && layer.shadowEnabled) {
+            val shadowTex = prepareMediaShadowTexture(layer, texEntry.aspectWOverH)
+            drawTransformedLayerEntry(
+                shadowTex,
+                layer,
+                tr,
+                baseHalfW * padScale,
+                baseHalfH * padScale,
+                scaleToFbo,
+                fboW,
+                fboH
+            )
+        }
+        drawTransformedLayerEntry(texEntry, layer, tr, baseHalfW, baseHalfH, scaleToFbo, fboW, fboH)
+        if (isMedia && layer.strokeEnabled && layer.strokeWidth > 0.4f) {
+            val strokeTex = prepareMediaStrokeTexture(layer, texEntry.aspectWOverH)
+            drawTransformedLayerEntry(
+                strokeTex,
+                layer,
+                tr,
+                baseHalfW * padScale,
+                baseHalfH * padScale,
+                scaleToFbo,
+                fboW,
+                fboH
+            )
+        }
     }
 
     private fun configureLayerBlendState(blendMode: String, isMaskSource: Boolean, maskedByBelow: Boolean) {
@@ -870,11 +1075,45 @@ class FramePollutionGlRenderer(
                 val hw = hh * texAspect.coerceIn(1f, 6f)
                 hw to hh
             }
+            LayerType.DRAWING -> {
+                (fboW * 0.5f) to (fboH * 0.5f)
+            }
             else -> {
                 val half = minOf(fboW, fboH) * 0.22f
                 half to half
             }
         }
+    }
+
+    private fun isNonShaderMetadataEffect(effectId: String): Boolean {
+        return effectId.equals("com.alightcreative.effects.parenthelper", ignoreCase = true) ||
+            effectId.equals("com.alightcreative.effects.fade", ignoreCase = true) ||
+            effectId.equals("com.alightcreative.effects.drawing.progress", ignoreCase = true) ||
+            effectId.equals("Drawing_Progress", ignoreCase = true)
+    }
+
+    private fun collectActiveAncestorGroupEffects(
+        layer: Layer,
+        allLayers: List<Layer>,
+        timeMs: Long
+    ): List<EffectNode> {
+        if (layer.parentId == null) return emptyList()
+        val byId = allLayers.associateBy { it.id }
+        val result = ArrayList<EffectNode>(2)
+        val visited = HashSet<String>(4)
+        var curParentId = layer.parentId
+        while (curParentId != null && visited.add(curParentId)) {
+            val parent = byId[curParentId] ?: break
+            if (parent.type == LayerType.GROUP && parent.visible && timeMs in parent.startTimeMs..parent.endTimeMs) {
+                parent.effects.forEach { fx ->
+                    if (fx.enabled && !EffectsCatalog.isTextOnlyEffect(fx.effectId) && !isNonShaderMetadataEffect(fx.effectId)) {
+                        result.add(fx)
+                    }
+                }
+            }
+            curParentId = parent.parentId
+        }
+        return result
     }
 
     private fun drawTransformedLayerEntry(
@@ -893,14 +1132,15 @@ class FramePollutionGlRenderer(
         val pivYPx = -tr.pivotY * scaleToFbo
 
         val depthZoom = (1f + tr.posZ / 900f).coerceIn(0.15f, 5f)
-        val cosTiltX = cos(Math.toRadians(tr.rotX.toDouble())).toFloat().coerceIn(0.2f, 1f)
-        val cosTiltY = cos(Math.toRadians(tr.rotY.toDouble())).toFloat().coerceIn(0.2f, 1f)
         val flipSignX = if (layer.flipX) -1f else 1f
         val flipSignY = if (layer.flipY) -1f else 1f
 
-        val effHalfW = baseHalfW * tr.scale * depthZoom * cosTiltY * flipSignX
-        val effHalfH = baseHalfH * tr.scale * depthZoom * cosTiltX * flipSignY
-        val rotRad = Math.toRadians((-tr.rotZ).toDouble()).toFloat()
+        // Full 360-degree 3D Euler rotation (X, Y, Z) with anisotropic scaleY and perspective projection in the vertex shader!
+        val effHalfW = baseHalfW * tr.scale * depthZoom * flipSignX
+        val effHalfH = baseHalfH * tr.scaleY * depthZoom * flipSignY
+        val rotXRad = Math.toRadians(tr.rotX.toDouble()).toFloat()
+        val rotYRad = Math.toRadians(tr.rotY.toDouble()).toFloat()
+        val rotZRad = Math.toRadians((-tr.rotZ).toDouble()).toFloat()
 
         if (entry.isExternalOes && entry.oesMatrix != null) {
             GLES20.glUseProgram(oesLayerQuadProgram)
@@ -916,7 +1156,7 @@ class FramePollutionGlRenderer(
             GLES20.glUniform2f(oesCenterLoc, cxPx, cyPx)
             GLES20.glUniform2f(oesHalfSizeLoc, effHalfW, effHalfH)
             GLES20.glUniform2f(oesPivotLoc, pivXPx, pivYPx)
-            GLES20.glUniform1f(oesRotLoc, rotRad)
+            GLES20.glUniform3f(oesRot3DLoc, rotXRad, rotYRad, rotZRad)
             GLES20.glUniform2f(oesViewportLoc, fboW, fboH)
             GLES20.glUniform1f(oesOpacityLoc, tr.opacity.coerceIn(0f, 1f))
             GLES20.glUniformMatrix4fv(oesTexMatLoc, 1, false, entry.oesMatrix, 0)
@@ -945,7 +1185,7 @@ class FramePollutionGlRenderer(
         GLES20.glUniform2f(lyrCenterLoc, cxPx, cyPx)
         GLES20.glUniform2f(lyrHalfSizeLoc, effHalfW, effHalfH)
         GLES20.glUniform2f(lyrPivotLoc, pivXPx, pivYPx)
-        GLES20.glUniform1f(lyrRotLoc, rotRad)
+        GLES20.glUniform3f(lyrRot3DLoc, rotXRad, rotYRad, rotZRad)
         GLES20.glUniform2f(lyrViewportLoc, fboW, fboH)
         GLES20.glUniform1f(lyrOpacityLoc, tr.opacity.coerceIn(0f, 1f))
 
@@ -976,19 +1216,29 @@ class FramePollutionGlRenderer(
             }
         }
 
-        // 2. Live Zero-Copy Hardware ExoPlayer OES Stream (for standard forward/speed-scaled video preview!)
-        if (!offscreenMode && HardwareVideoPreviewEngine.isEligibleForLiveOesStream(layer)) {
+        // 2. Live Zero-Copy Hardware ExoPlayer OES Stream (when layer has no bitmap alpha masks)
+        if (!offscreenMode && layer.masks.none { it.enabled } && HardwareVideoPreviewEngine.isEligibleForLiveOesStream(layer)) {
             val oesSlot = obtainOrCreateOesVideoSlot(layer)
             if (oesSlot != null) {
                 val pending = oesSlot.pendingFrames.getAndSet(0)
-                if (pending > 0 || (isPlaying && oesSlot.hasLatchedFrame)) {
-                    runCatching {
+                if (pending > 0) {
+                    try {
                         oesSlot.surfaceTexture.updateTexImage()
                         oesSlot.surfaceTexture.getTransformMatrix(oesSlot.stMatrix)
                         oesSlot.hasLatchedFrame = true
+                    } catch (_: Throwable) {
+                        // Stale EGL context on SurfaceTexture — recycle slot so next frame binds cleanly
+                        oesVideoSlots.remove(layer.id)?.let { stale ->
+                            runCatching { stale.surfaceTexture.setOnFrameAvailableListener(null) }
+                            runCatching { stale.surface.release() }
+                            runCatching { stale.surfaceTexture.release() }
+                            if (stale.oesTexId != 0) {
+                                runCatching { GLES20.glDeleteTextures(1, intArrayOf(stale.oesTexId), 0) }
+                            }
+                        }
                     }
                 }
-                if (oesSlot.hasLatchedFrame && HardwareVideoPreviewEngine.hasReadyVideoFrame(layer.id)) {
+                if (oesSlot.hasLatchedFrame && !HardwareVideoPreviewEngine.hasSlotFailed(layer.id)) {
                     val fallbackAspect = (layer.mediaWidth.takeIf { it > 0 }?.toFloat() ?: 16f) /
                         (layer.mediaHeight.takeIf { it > 0 }?.toFloat() ?: 9f)
                     val aspect = HardwareVideoPreviewEngine.getSlotAspect(layer.id) ?: fallbackAspect
@@ -1029,16 +1279,28 @@ class FramePollutionGlRenderer(
                         maxEdgePx = maxOf(surfaceWidth, surfaceHeight).coerceIn(192, 960)
                     )
                 } else {
+                    // Allow async exact-frame retriever fallback whenever OES has not yet latched its first frame!
                     MediaEngine.getMediaBitmapNonBlocking(
                         context = appContext,
                         layer = layer,
                         sourceTimeMs = srcTimeMs,
-                        allowRetrieverFallback = !HardwareVideoPreviewEngine.isEligibleForLiveOesStream(layer),
+                        allowRetrieverFallback = true,
                         onAsyncFrameReady = onAsyncMediaReady
                     )
                 }
 
                 if (mediaBmp != null && !mediaBmp.isRecycled) {
+                    val maskSig = KeyflowTextAndBorderRenderer.buildMaskSignature(layer, timeMs)
+                    if (maskSig.isNotEmpty()) {
+                        val combinedSig = "mediaMasked|${System.identityHashCode(mediaBmp)}|$maskSig"
+                        if (entry.signature != combinedSig) {
+                            val maskedCopy = mediaBmp.copy(Bitmap.Config.ARGB_8888, true)
+                            KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(maskedCopy, layer, timeMs, audio)
+                            uploadBitmapToEntry(entry, maskedCopy, combinedSig)
+                            maskedCopy.recycle()
+                        }
+                        return entry
+                    }
                     val bmpId = System.identityHashCode(mediaBmp)
                     if (bmpId != entry.bitmapIdentity || entry.signature != "media") {
                         uploadBitmapToEntry(entry, mediaBmp, "media")
@@ -1049,50 +1311,57 @@ class FramePollutionGlRenderer(
 
                 // Frame-Hold: if a real video/image frame was already uploaded to GPU, keep displaying it
                 // instead of overwriting the texture with a colored fallback rectangle during seeks/lag!
-                if (entry.signature == "media" && entry.texW > 0 && entry.texH > 0) {
+                if ((entry.signature == "media" || entry.signature.startsWith("mediaMasked|")) && entry.texW > 0 && entry.texH > 0) {
                     return entry
                 }
 
-                // Never flash a colored rectangle while an imported video/image decodes its very first frame
-                if (layer.mediaUri.isNotBlank()) {
+                // Never flash a colored rectangle while a valid local/granted video/image decodes its very first frame;
+                // however, if the URI is an unreachable external XML asset from another phone, render a clean slate proxy card
+                // so the imported layer's movement, scale, rotation, and effects remain 100% visible!
+                if (layer.mediaUri.isNotBlank() && !MediaEngine.isUriUnreachable(layer.mediaUri)) {
                     return null
                 }
 
-                val fallbackSig = "fallback|${layer.type}|${layer.colorHex}|${layer.strokeEnabled}|${layer.strokeWidth}"
+                val maskSig = KeyflowTextAndBorderRenderer.buildMaskSignature(layer, timeMs)
+                val fallbackSig = "fallback|${layer.type}|${layer.name}|${layer.colorHex}|${layer.strokeEnabled}|${layer.strokeWidth}$maskSig"
                 if (entry.signature != fallbackSig) {
                     val bmp = rasterizeFallbackMediaCard(layer)
+                    KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(bmp, layer, timeMs, audio)
                     uploadBitmapToEntry(entry, bmp, fallbackSig)
                 }
                 return entry
             }
 
             LayerType.SHAPE -> {
-                val sig = "shape|${layer.shapeKind}|${layer.colorHex}|${layer.fillMode}|" +
-                    "${layer.gradientEndColorHex}|${layer.gradientAngleDeg.toInt()}|" +
-                    "${layer.strokeEnabled}|${layer.strokeWidth}|${layer.strokeColorHex}|" +
-                    "${layer.shadowEnabled}|${layer.shadowBlur}|${layer.shadowColorHex}"
+                val maskSig = KeyflowTextAndBorderRenderer.buildMaskSignature(layer, timeMs)
+                val sig = KeyflowTextAndBorderRenderer.buildShapeCacheSignature(layer) + maskSig
                 if (entry.signature != sig) {
-                    val bmp = rasterizeShapeBitmap(layer)
+                    val bmp = KeyflowTextAndBorderRenderer.rasterizeShapeLayerBitmap(layer)
+                    KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(bmp, layer, timeMs, audio)
                     uploadBitmapToEntry(entry, bmp, sig)
                 }
                 return entry
             }
 
             LayerType.TEXT -> {
-                val textFx = layer.effects.firstOrNull {
-                    it.enabled && (it.effectId == "Text_Transform" || it.effectId == "Text_Spacing")
-                }
-                val evalTx = textFx?.let { AnimationEvaluator.evaluateEffectNode(it, timeMs, audio) }
-                val txSig = if (textFx != null && evalTx != null) {
-                    "|tx:${textFx.effectId}:${(evalTx.primary * 2f).toInt()}:${(evalTx.secondary * 2f).toInt()}:" +
-                        "${(evalTx.frequency * 2f).toInt()}:${evalTx.angleDeg.toInt()}:${(evalTx.mixFraction * 50f).toInt()}"
-                } else ""
-                val sig = "text|${layer.textContent}|${layer.fontFamilyName}|${layer.colorHex}|" +
-                    "${layer.fillMode}|${layer.gradientEndColorHex}|${layer.gradientAngleDeg.toInt()}|" +
-                    "${layer.strokeEnabled}|${layer.strokeWidth}|${layer.strokeColorHex}|" +
-                    "${layer.shadowEnabled}|${layer.shadowBlur}|${layer.shadowColorHex}$txSig"
+                val animators = KeyflowTextAndBorderRenderer.evaluateTextAnimators(layer, timeMs, audio)
+                val maskSig = KeyflowTextAndBorderRenderer.buildMaskSignature(layer, timeMs)
+                val sig = KeyflowTextAndBorderRenderer.buildTextCacheSignature(layer, animators) + maskSig
                 if (entry.signature != sig) {
-                    val bmp = rasterizeTextBitmap(layer, textFx, evalTx)
+                    val bmp = KeyflowTextAndBorderRenderer.rasterizeTextLayerBitmap(appContext, layer, animators)
+                    KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(bmp, layer, timeMs, audio)
+                    uploadBitmapToEntry(entry, bmp, sig)
+                }
+                return entry
+            }
+
+            LayerType.DRAWING -> {
+                val (startPct, endPct) = KeyflowTextAndBorderRenderer.evaluateDrawingProgressRange(layer, timeMs, audio)
+                val maskSig = KeyflowTextAndBorderRenderer.buildMaskSignature(layer, timeMs)
+                val sig = KeyflowTextAndBorderRenderer.buildDrawingLayerSignature(layer, startPct, endPct, maskSig)
+                if (entry.signature != sig) {
+                    val bmp = KeyflowTextAndBorderRenderer.rasterizeDrawingLayerBitmap(layer, startPct, endPct, 512)
+                    KeyflowTextAndBorderRenderer.applyLayerMasksInPlace(bmp, layer, timeMs, audio)
                     uploadBitmapToEntry(entry, bmp, sig)
                 }
                 return entry
@@ -1102,9 +1371,48 @@ class FramePollutionGlRenderer(
         }
     }
 
+    private fun prepareMediaShadowTexture(layer: Layer, aspectWOverH: Float): GpuLayerTexture {
+        val entry = mediaShadowTextures.getOrPut(layer.id) {
+            val arr = IntArray(1)
+            GLES20.glGenTextures(1, arr, 0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, arr[0])
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GpuLayerTexture(texId = arr[0])
+        }
+        val sig = "shd|" + KeyflowTextAndBorderRenderer.buildMediaBorderSignature(layer, aspectWOverH)
+        if (entry.signature != sig) {
+            val bmp = KeyflowTextAndBorderRenderer.rasterizeMediaShadowUnderlayBitmap(layer, aspectWOverH)
+            uploadBitmapToEntry(entry, bmp, sig)
+        }
+        return entry
+    }
+
+    private fun prepareMediaStrokeTexture(layer: Layer, aspectWOverH: Float): GpuLayerTexture {
+        val entry = mediaStrokeTextures.getOrPut(layer.id) {
+            val arr = IntArray(1)
+            GLES20.glGenTextures(1, arr, 0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, arr[0])
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GpuLayerTexture(texId = arr[0])
+        }
+        val sig = "stk|" + KeyflowTextAndBorderRenderer.buildMediaBorderSignature(layer, aspectWOverH)
+        if (entry.signature != sig) {
+            val bmp = KeyflowTextAndBorderRenderer.rasterizeMediaStrokeOverlayBitmap(layer, aspectWOverH)
+            uploadBitmapToEntry(entry, bmp, sig)
+        }
+        return entry
+    }
+
     private fun obtainOrCreateOesVideoSlot(layer: Layer): OesLayerSurfaceSlot? {
+        val targetPlayableUri = HardwareVideoPreviewEngine.effectivePlayableUriForLayer(layer)
         val existing = oesVideoSlots[layer.id]
-        if (existing != null && existing.boundUri == layer.mediaUri) {
+        if (existing != null && existing.boundUri == targetPlayableUri) {
             return existing
         }
         if (existing != null) {
@@ -1135,7 +1443,7 @@ class FramePollutionGlRenderer(
                 oesTexId = texId,
                 surfaceTexture = st,
                 surface = surf,
-                boundUri = layer.mediaUri
+                boundUri = targetPlayableUri
             )
             st.setOnFrameAvailableListener({
                 slot.pendingFrames.incrementAndGet()
@@ -1147,7 +1455,7 @@ class FramePollutionGlRenderer(
                 context = appContext,
                 rendererToken = rendererToken,
                 layerId = layer.id,
-                mediaUri = layer.mediaUri,
+                mediaUri = targetPlayableUri,
                 surface = surf
             )
             slot
@@ -1412,6 +1720,12 @@ class FramePollutionGlRenderer(
                     GLES20.glDeleteTextures(1, intArrayOf(entry.value.texId), 0)
                     iter.remove()
                 }
+                mediaShadowTextures.remove(entry.key)?.let {
+                    GLES20.glDeleteTextures(1, intArrayOf(it.texId), 0)
+                }
+                mediaStrokeTextures.remove(entry.key)?.let {
+                    GLES20.glDeleteTextures(1, intArrayOf(it.texId), 0)
+                }
             }
             val oesIter = oesVideoSlots.entries.iterator()
             while (oesIter.hasNext()) {
@@ -1433,7 +1747,8 @@ class FramePollutionGlRenderer(
         project: Project,
         timeMs: Long,
         audio: AudioSpectrumSnapshot,
-        aspect: Float
+        aspect: Float,
+        applyCamera: Boolean
     ) {
         val layers3D = project.layers.filter {
             it.visible && it.type == LayerType.MODEL_3D && timeMs in it.startTimeMs..it.endTimeMs
@@ -1449,7 +1764,7 @@ class FramePollutionGlRenderer(
                 allLayers = project.layers,
                 timeMs = timeMs,
                 audio = audio,
-                applyActiveCamera = true
+                applyActiveCamera = applyCamera
             )
             val (mesh, vBuf, iBuf) = when (layer.primitive3D) {
                 Primitive3DType.CUBE -> Triple(cubeMesh, cubeVertBuf, cubeIdxBuf)
@@ -1501,7 +1816,7 @@ class FramePollutionGlRenderer(
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
     }
 
-    private fun drawQuadWithTexture(texId: Int, flipY: Boolean) {
+    private fun drawQuadWithTexture(texId: Int, flipY: Boolean, alpha: Float = 1f) {
         GLES20.glUseProgram(quadProgram)
 
         quadBuffer.position(0)
@@ -1513,6 +1828,9 @@ class FramePollutionGlRenderer(
         GLES20.glVertexAttribPointer(quadUvLoc, 2, GLES20.GL_FLOAT, false, 16, quadBuffer)
 
         GLES20.glUniform1f(quadFlipLoc, if (flipY) 1f else 0f)
+        if (quadAlphaLoc >= 0) {
+            GLES20.glUniform1f(quadAlphaLoc, alpha.coerceIn(0f, 1f))
+        }
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
         GLES20.glUniform1i(quadTexLoc, 0)
@@ -1533,6 +1851,7 @@ class FramePollutionGlRenderer(
     ) {
         val def = EffectsCatalog.findById(effect.effectId)
         val normFx = EffectsCatalog.normalizeForShader(effect.effectId, evalFx)
+        val subMode = KeyflowTextAndBorderRenderer.resolveEffectSubMode(effect.effectId)
         val tintCol = runCatching { Color.parseColor(effect.tintColorHex) }.getOrDefault(Color.WHITE)
 
         GLES20.glUseProgram(effectProgram)
@@ -1547,11 +1866,17 @@ class FramePollutionGlRenderer(
 
         GLES20.glUniform1f(fxFlipLoc, 0f)
         GLES20.glUniform1i(fxModeLoc, def.shaderMode)
+        if (fxSubModeLoc >= 0) {
+            GLES20.glUniform1i(fxSubModeLoc, subMode)
+        }
         GLES20.glUniform1f(fxIntensityLoc, normFx.primary)
         GLES20.glUniform1f(fxSecondaryLoc, normFx.secondary)
         GLES20.glUniform1f(fxFreqLoc, normFx.frequency)
         GLES20.glUniform1f(fxAngleLoc, Math.toRadians(normFx.angleDeg.toDouble()).toFloat())
         GLES20.glUniform1f(fxMixLoc, normFx.mixFraction)
+        if (fxFeatherLoc >= 0) {
+            GLES20.glUniform1f(fxFeatherLoc, normFx.featherFraction.coerceIn(0f, 1f))
+        }
         GLES20.glUniform3f(
             fxTintLoc,
             Color.red(tintCol) / 255f,
@@ -1625,6 +1950,75 @@ class FramePollutionGlRenderer(
         pluginFboH = h
     }
 
+    private fun executeLayerEffectNodeChain(
+        effectNodes: List<EffectNode>,
+        initialBufIdx: Int,
+        timeMs: Long,
+        audio: AudioSpectrumSnapshot,
+        w: Int,
+        h: Int,
+        shaderDetailLevel: Int
+    ): Int {
+        GLES20.glDisable(GLES20.GL_BLEND)
+        var curIdx = initialBufIdx
+        effectNodes.forEach { fxNode ->
+            val plugin = PluginPackManager.findPluginEffect(fxNode.effectId)
+            if (plugin != null) {
+                val mixFraction = (AnimationEvaluator.evaluateProperty(fxNode.mixProp, timeMs, audio) / 100f).coerceIn(0f, 1f)
+                if (mixFraction <= 0.002f) return@forEach
+
+                val compiledPasses = getOrCompilePluginPasses(plugin)
+                if (compiledPasses.isEmpty()) return@forEach
+
+                val evalFloats = AnimationEvaluator.evaluatePluginUniformFloats(plugin, fxNode, timeMs, audio)
+                val origIdx = curIdx
+                val scratchA = (origIdx + 1) % 3
+                val scratchB = (origIdx + 2) % 3
+                var passReadIdx = origIdx
+
+                compiledPasses.forEachIndexed { passIdx, passProg ->
+                    val writeIdx = if (passIdx % 2 == 0) scratchA else scratchB
+                    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[writeIdx])
+                    GLES20.glViewport(0, 0, w, h)
+                    GLES20.glClearColor(0f, 0f, 0f, 0f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                    drawSinglePluginPass(
+                        pass = passProg,
+                        plugin = plugin,
+                        fxNode = fxNode,
+                        evalFloats = evalFloats,
+                        inputTex = pluginFboTexIds[passReadIdx],
+                        origTex = pluginFboTexIds[origIdx],
+                        timeSec = timeMs / 1000f,
+                        resW = w.toFloat(),
+                        resH = h.toFloat()
+                    )
+                    passReadIdx = writeIdx
+                }
+                curIdx = passReadIdx
+            } else {
+                val evalFx = AnimationEvaluator.evaluateEffectNode(fxNode, timeMs, audio)
+                if (evalFx.mixFraction <= 0.002f) return@forEach
+                val writeIdx = (curIdx + 1) % 3
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[writeIdx])
+                GLES20.glViewport(0, 0, w, h)
+                GLES20.glClearColor(0f, 0f, 0f, 0f)
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                drawEffectPass(
+                    inputTex = pluginFboTexIds[curIdx],
+                    effect = fxNode,
+                    evalFx = evalFx,
+                    timeMs = timeMs,
+                    resW = w.toFloat(),
+                    resH = h.toFloat(),
+                    shaderDetailLevel = shaderDetailLevel
+                )
+                curIdx = writeIdx
+            }
+        }
+        return curIdx
+    }
+
     private fun executePluginNodeChain(
         pluginNodes: List<EffectNode>,
         initialBufIdx: Int,
@@ -1632,46 +2026,7 @@ class FramePollutionGlRenderer(
         audio: AudioSpectrumSnapshot,
         w: Int,
         h: Int
-    ): Int {
-        GLES20.glDisable(GLES20.GL_BLEND)
-        var curIdx = initialBufIdx
-        pluginNodes.forEach { fxNode ->
-            val plugin = PluginPackManager.findPluginEffect(fxNode.effectId) ?: return@forEach
-            val mixFraction = (AnimationEvaluator.evaluateProperty(fxNode.mixProp, timeMs, audio) / 100f).coerceIn(0f, 1f)
-            if (mixFraction <= 0.002f) return@forEach
-
-            val compiledPasses = getOrCompilePluginPasses(plugin)
-            if (compiledPasses.isEmpty()) return@forEach
-
-            val evalFloats = AnimationEvaluator.evaluatePluginUniformFloats(plugin, fxNode, timeMs, audio)
-            val origIdx = curIdx
-            val scratchA = (origIdx + 1) % 3
-            val scratchB = (origIdx + 2) % 3
-            var passReadIdx = origIdx
-
-            compiledPasses.forEachIndexed { passIdx, passProg ->
-                val writeIdx = if (passIdx % 2 == 0) scratchA else scratchB
-                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, pluginFboIds[writeIdx])
-                GLES20.glViewport(0, 0, w, h)
-                GLES20.glClearColor(0f, 0f, 0f, 0f)
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                drawSinglePluginPass(
-                    pass = passProg,
-                    plugin = plugin,
-                    fxNode = fxNode,
-                    evalFloats = evalFloats,
-                    inputTex = pluginFboTexIds[passReadIdx],
-                    origTex = pluginFboTexIds[origIdx],
-                    timeSec = timeMs / 1000f,
-                    resW = w.toFloat(),
-                    resH = h.toFloat()
-                )
-                passReadIdx = writeIdx
-            }
-            curIdx = passReadIdx
-        }
-        return curIdx
-    }
+    ): Int = executeLayerEffectNodeChain(pluginNodes, initialBufIdx, timeMs, audio, w, h, 2)
 
     private fun runCompositionPluginEffect(
         plugin: InstalledPluginEffect,
@@ -1738,14 +2093,22 @@ class FramePollutionGlRenderer(
         if (pass.resLoc >= 0) {
             GLES20.glUniform2f(pass.resLoc, resW, resH)
         }
+        if (pass.featherLoc >= 0) {
+            val f = (fxNode.featherProp.baseValue / 100f).coerceIn(0f, 1f)
+            GLES20.glUniform1f(pass.featherLoc, f)
+        }
 
         plugin.parameters.forEach { param ->
             val loc = pass.paramLocs[param.key] ?: -1
             if (loc >= 0) {
                 when (param.type) {
-                    PluginParamType.FLOAT, PluginParamType.BOOL -> {
+                    PluginParamType.FLOAT -> {
                         val v = evalFloats[param.key] ?: param.defaultFloat
                         GLES20.glUniform1f(loc, v)
+                    }
+                    PluginParamType.BOOL -> {
+                        val raw = evalFloats[param.key] ?: param.defaultFloat
+                        GLES20.glUniform1f(loc, if (raw >= 0.5f) 1.0f else 0.0f)
                     }
                     PluginParamType.COLOR -> {
                         val hex = fxNode.customColorFor(param.key, param.defaultColorHex)
@@ -1821,6 +2184,7 @@ class FramePollutionGlRenderer(
                         texelSizeLoc = GLES20.glGetUniformLocation(prog, "uTexelSize"),
                         resLoc = GLES20.glGetUniformLocation(prog, "uResolution"),
                         flipLoc = GLES20.glGetUniformLocation(prog, "uFlipY"),
+                        featherLoc = GLES20.glGetUniformLocation(prog, "uFeather"),
                         paramLocs = pLocs
                     )
                 )
@@ -1958,8 +2322,10 @@ class FramePollutionGlRenderer(
             precision mediump float;
             varying vec2 vUv;
             uniform sampler2D uTexture;
+            uniform float uAlpha;
             void main() {
-                gl_FragColor = texture2D(uTexture, vUv);
+                vec4 tex = texture2D(uTexture, vUv);
+                gl_FragColor = vec4(tex.rgb, tex.a * uAlpha);
             }
         """
 
@@ -1979,7 +2345,7 @@ class FramePollutionGlRenderer(
                     float gx = step(0.97, fract(px.x / 64.0));
                     float gy = step(0.97, fract(px.y / 64.0));
                     float line = max(gx, gy);
-                    vec3 col = mix(vec3(0.04, 0.05, 0.07), vec3(0.0, 0.55, 0.48), line * 0.45);
+                    vec3 col = mix(vec3(0.035, 0.043, 0.059), vec3(0.31, 0.486, 1.0), line * 0.36);
                     gl_FragColor = vec4(col, 1.0);
                 }
             }
@@ -1991,17 +2357,30 @@ class FramePollutionGlRenderer(
             uniform vec2 uCenterPx;
             uniform vec2 uHalfSizePx;
             uniform vec2 uPivotPx;
-            uniform float uRotRad;
+            uniform vec3 uRotRad3D;
             uniform vec2 uViewportPx;
             varying vec2 vUv;
             void main() {
-                vec2 localPx = aPosition * uHalfSizePx - uPivotPx;
-                float c = cos(uRotRad);
-                float s = sin(uRotRad);
-                vec2 rotatedPx = vec2(localPx.x * c - localPx.y * s, localPx.x * s + localPx.y * c) + uPivotPx;
-                vec2 worldPx = uCenterPx + rotatedPx;
-                vec2 ndc = (worldPx / max(uViewportPx, vec2(1.0))) * 2.0 - 1.0;
-                gl_Position = vec4(ndc, 0.0, 1.0);
+                vec3 p = vec3(aPosition * uHalfSizePx - uPivotPx, 0.0);
+                // 3D X-axis tilt (full 360-degree pitch)
+                float cx = cos(uRotRad3D.x);
+                float sx = sin(uRotRad3D.x);
+                p = vec3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
+                // 3D Y-axis turn (full 360-degree yaw)
+                float cy = cos(uRotRad3D.y);
+                float sy = sin(uRotRad3D.y);
+                p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
+                // 3D Z-axis roll (full 360-degree roll)
+                float cz = cos(uRotRad3D.z);
+                float sz = sin(uRotRad3D.z);
+                p = vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+
+                float focalPx = max(max(uViewportPx.x, uViewportPx.y) * 1.35, 420.0);
+                float perspW = max(0.14, 1.0 - p.z / focalPx);
+                vec2 projWorldPx = uCenterPx + uPivotPx + (p.xy / perspW);
+                vec2 ndc = (projWorldPx / max(uViewportPx, vec2(1.0))) * 2.0 - 1.0;
+                // Pass homogeneous w = perspW for perspective-correct 3D texture interpolation!
+                gl_Position = vec4(ndc * perspW, 0.0, perspW);
                 vUv = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
             }
         """
@@ -2023,18 +2402,27 @@ class FramePollutionGlRenderer(
             uniform vec2 uCenterPx;
             uniform vec2 uHalfSizePx;
             uniform vec2 uPivotPx;
-            uniform float uRotRad;
+            uniform vec3 uRotRad3D;
             uniform vec2 uViewportPx;
             uniform mat4 uTexMatrix;
             varying vec2 vUv;
             void main() {
-                vec2 localPx = aPosition * uHalfSizePx - uPivotPx;
-                float c = cos(uRotRad);
-                float s = sin(uRotRad);
-                vec2 rotatedPx = vec2(localPx.x * c - localPx.y * s, localPx.x * s + localPx.y * c) + uPivotPx;
-                vec2 worldPx = uCenterPx + rotatedPx;
-                vec2 ndc = (worldPx / max(uViewportPx, vec2(1.0))) * 2.0 - 1.0;
-                gl_Position = vec4(ndc, 0.0, 1.0);
+                vec3 p = vec3(aPosition * uHalfSizePx - uPivotPx, 0.0);
+                float cx = cos(uRotRad3D.x);
+                float sx = sin(uRotRad3D.x);
+                p = vec3(p.x, p.y * cx - p.z * sx, p.y * sx + p.z * cx);
+                float cy = cos(uRotRad3D.y);
+                float sy = sin(uRotRad3D.y);
+                p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
+                float cz = cos(uRotRad3D.z);
+                float sz = sin(uRotRad3D.z);
+                p = vec3(p.x * cz - p.y * sz, p.x * sz + p.y * cz, p.z);
+
+                float focalPx = max(max(uViewportPx.x, uViewportPx.y) * 1.35, 420.0);
+                float perspW = max(0.14, 1.0 - p.z / focalPx);
+                vec2 projWorldPx = uCenterPx + uPivotPx + (p.xy / perspW);
+                vec2 ndc = (projWorldPx / max(uViewportPx, vec2(1.0))) * 2.0 - 1.0;
+                gl_Position = vec4(ndc * perspW, 0.0, perspW);
                 vec2 safeTc = clamp(aTexCoord, 0.002, 0.998);
                 vUv = (uTexMatrix * vec4(safeTc, 0.0, 1.0)).xy;
             }
@@ -2077,7 +2465,7 @@ class FramePollutionGlRenderer(
                 vec3 n = normalize(vNormal);
                 float diff = max(dot(n, lightDir), 0.18);
                 float rim = pow(max(dot(n, rimDir), 0.0), 2.2) * 0.75;
-                vec3 neonRim = vec3(0.0, 0.85, 0.68) * rim;
+                vec3 neonRim = vec3(0.31, 0.486, 1.0) * rim;
                 vec3 col = uColor.rgb * diff + neonRim;
                 gl_FragColor = vec4(col, uColor.a);
             }
@@ -2088,11 +2476,13 @@ class FramePollutionGlRenderer(
             varying vec2 vUv;
             uniform sampler2D uTexture;
             uniform int uMode;
+            uniform int uSubMode;
             uniform float uIntensity;
             uniform float uSecondary;
             uniform float uFreq;
             uniform float uAngle;
             uniform float uMix;
+            uniform float uFeather;
             uniform vec3 uTint;
             uniform float uTime;
             uniform vec2 uResolution;
@@ -2108,13 +2498,217 @@ class FramePollutionGlRenderer(
                 return vec2(v.x * ca - v.y * sa, v.x * sa + v.y * ca);
             }
 
+            vec4 sampleClampedOrZero(vec2 p) {
+                if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) {
+                    return vec4(0.0);
+                }
+                return texture2D(uTexture, p);
+            }
+
             void main() {
                 vec2 uv = vUv;
                 vec2 px = 1.0 / max(uResolution, vec2(64.0));
                 vec4 origBase = texture2D(uTexture, uv);
                 vec4 outCol = origBase;
 
-                if (uMode == 1) {
+                // Dedicated authentic sub-modes first
+                if (uSubMode == 101) {
+                    // Exposure / Gamma / Offset
+                    float evGain = exp2(uIntensity);
+                    float gamma = max(0.12, uSecondary);
+                    vec3 exposed = clamp(origBase.rgb * evGain + vec3(uFreq * 0.35), 0.0, 1.0);
+                    vec3 graded = pow(exposed, vec3(1.0 / gamma)) * uTint;
+                    outCol = vec4(clamp(graded, 0.0, 1.0), origBase.a);
+                } else if (uSubMode == 102) {
+                    // S_Vignette / Vignette_Cinema
+                    vec2 aspectVec = vec2(uResolution.x / max(uResolution.y, 1.0), 1.0);
+                    vec2 d = (uv - 0.5) * mix(vec2(1.0), aspectVec, 0.45);
+                    d = rot2d(d, uAngle);
+                    float r = length(d) / max(0.18, uSecondary * 0.65);
+                    float soft = max(0.08, 0.25 + uFreq * 0.55);
+                    float vig = smoothstep(1.0 - soft, 1.0 + soft * 0.5, r);
+                    float strength = abs(uIntensity);
+                    vec3 targetEdge = (uIntensity <= 0.0) ? vec3(0.0) : uTint;
+                    vec3 res = mix(origBase.rgb, targetEdge, clamp(vig * strength * 1.15, 0.0, 1.0));
+                    outCol = vec4(res, origBase.a);
+                } else if (uSubMode == 103) {
+                    // Hue Shift + Saturation + Lightness
+                    vec3 k = vec3(0.57735);
+                    float cosA = cos(uAngle);
+                    vec3 hShift = origBase.rgb * cosA + cross(k, origBase.rgb) * sin(uAngle) + k * dot(k, origBase.rgb) * (1.0 - cosA);
+                    float luma = dot(hShift, vec3(0.299, 0.587, 0.114));
+                    vec3 sat = mix(vec3(luma), hShift, max(0.0, 1.0 + uIntensity));
+                    float gamma = max(0.2, uSecondary);
+                    outCol = vec4(pow(clamp(sat + vec3(uFreq * 0.4), 0.0, 1.0), vec3(1.0 / gamma)) * uTint, origBase.a);
+                } else if (uSubMode == 104) {
+                    // Saturation / Vibrance / Duotone
+                    float luma = dot(origBase.rgb, vec3(0.299, 0.587, 0.114));
+                    float satMult = max(0.0, 1.0 + uIntensity * 1.4);
+                    vec3 sat = mix(vec3(luma), origBase.rgb, satMult);
+                    float gamma = max(0.25, uSecondary);
+                    vec3 res = pow(clamp(sat + vec3(uFreq * 0.25), 0.0, 1.0), vec3(1.0 / gamma)) * uTint;
+                    outCol = vec4(clamp(res, 0.0, 1.0), origBase.a);
+                } else if (uSubMode == 105) {
+                    // Invert
+                    vec3 inv = mix(origBase.rgb, 1.0 - origBase.rgb, clamp(uIntensity, 0.0, 1.0));
+                    float gamma = max(0.2, uSecondary);
+                    outCol = vec4(pow(clamp(inv + vec3(uFreq * 0.25), 0.0, 1.0), vec3(1.0 / gamma)) * uTint, origBase.a);
+                } else if (uSubMode == 106) {
+                    // Posterize / Quantize Levels
+                    float steps = floor(mix(24.0, 2.0, clamp(uIntensity / 1.5, 0.0, 1.0)));
+                    vec3 post = floor(origBase.rgb * steps + 0.5) / max(steps, 1.0);
+                    float gamma = max(0.25, uSecondary);
+                    outCol = vec4(pow(clamp(post + vec3(uFreq * 0.15), 0.0, 1.0), vec3(1.0 / gamma)) * uTint, origBase.a);
+                } else if (uSubMode == 107) {
+                    // Blink / Strobe / S_Flicker
+                    float phase = fract(uTime * max(0.2, uFreq) + uAngle / 6.28318);
+                    float onGate = step(phase, clamp(uSecondary, 0.05, 0.95));
+                    float mult = mix(1.0, onGate, clamp(uIntensity, 0.0, 1.0));
+                    outCol = vec4(origBase.rgb * uTint * mult, origBase.a * mix(1.0, mult, 0.85));
+                } else if (uSubMode == 108) {
+                    // Color Temperature / Warmth
+                    vec3 warmShift = vec3(uIntensity * 0.28, uFreq * 0.14, -uIntensity * 0.28);
+                    float gamma = max(0.25, uSecondary);
+                    outCol = vec4(pow(clamp(origBase.rgb + warmShift, 0.0, 1.0), vec3(1.0 / gamma)) * uTint, origBase.a);
+                } else if (uSubMode == 109) {
+                    // Luma Fade / Dissolve
+                    float luma = dot(origBase.rgb, vec3(0.299, 0.587, 0.114));
+                    float soft = max(0.02, abs(uFreq) * 0.4 + 0.08);
+                    float keep = smoothstep(uIntensity - soft, uIntensity + soft, luma);
+                    outCol = vec4(origBase.rgb * uTint, origBase.a * keep);
+                } else if (uSubMode == 110) {
+                    // Pinch / Bulge / Fisheye
+                    vec2 center = vec2(clamp(uFreq, 0.1, 0.9), 0.5);
+                    if (abs(uFreq) < 0.001) center = vec2(0.5, 0.5);
+                    vec2 delta = uv - center;
+                    float dist = length(delta);
+                    float radius = max(0.12, uSecondary * 0.75);
+                    if (dist < radius) {
+                        float pct = dist / radius;
+                        float factor = (uIntensity >= 0.0)
+                            ? pow(pct, max(0.15, 1.0 - uIntensity * 0.55))
+                            : pow(pct, 1.0 - uIntensity * 1.15);
+                        vec2 pUv = center + normalize(delta + vec2(1e-5)) * (factor * radius);
+                        outCol = texture2D(uTexture, clamp(pUv, 0.0, 1.0));
+                    }
+                } else if (uSubMode == 111) {
+                    // Swirl / Twirl Vortex
+                    vec2 delta = uv - 0.5;
+                    float dist = length(delta);
+                    float radius = max(0.12, uSecondary * 0.8);
+                    if (dist < radius) {
+                        float pct = (radius - dist) / radius;
+                        float theta = pct * pct * uIntensity * 6.0 + uAngle;
+                        outCol = texture2D(uTexture, clamp(0.5 + rot2d(delta, theta), 0.0, 1.0));
+                    }
+                } else if (uSubMode == 112) {
+                    // Squeeze / Anamorphic Bend
+                    vec2 d = rot2d(uv - 0.5, uAngle);
+                    float k = uIntensity * 0.55;
+                    d.x *= (1.0 + k * (0.5 - d.y * d.y));
+                    d.y *= max(0.25, 1.0 - k * 0.45);
+                    outCol = sampleClampedOrZero(rot2d(d, -uAngle) + 0.5);
+                } else if (uSubMode == 113) {
+                    // Circular Pond Ripple
+                    vec2 d = uv - 0.5;
+                    float r = length(d);
+                    float wave = sin(r * (12.0 + uSecondary * 40.0) - uTime * (2.5 + uFreq * 4.0)) * uIntensity * 0.032;
+                    outCol = texture2D(uTexture, clamp(uv + normalize(d + vec2(1e-5)) * wave, 0.0, 1.0));
+                } else if (uSubMode == 114) {
+                    // Alight Motion Oscillate (clean directional sine/triangle translation!)
+                    float hz = max(0.05, uFreq * 4.0);
+                    float s = sin(uTime * hz * 6.28318);
+                    float tri = (2.0 / 3.14159) * asin(s);
+                    float wave = mix(s, tri, clamp(uSecondary, 0.0, 1.0));
+                    vec2 shift = rot2d(vec2(wave * uIntensity * 0.12, 0.0), uAngle);
+                    outCol = sampleClampedOrZero(uv - shift);
+                } else if (uSubMode == 115) {
+                    // Alight Motion Swing Pendulum (smooth rotation between Angle 1 & Angle 2!)
+                    float t01 = 0.5 + 0.5 * sin(uTime * uFreq * 6.28318 + uAngle);
+                    float degRad = mix(uIntensity * 1.5708, uSecondary * 1.5708, t01);
+                    vec2 asp = vec2(uResolution.x / max(uResolution.y, 1.0), 1.0);
+                    vec2 p = (uv - 0.5) * asp;
+                    vec2 rp = rot2d(p, -degRad) / asp + 0.5;
+                    outCol = sampleClampedOrZero(rp);
+                } else if (uSubMode == 116) {
+                    // Beat Sync Pulse / Elastic Scale Bounce
+                    float pulse = abs(sin(uTime * max(0.25, uFreq) * 3.14159));
+                    float zoom = 1.0 + uIntensity * 0.35 * pulse;
+                    vec2 rp = rot2d((uv - 0.5) / max(0.2, zoom), -uAngle * 0.25 * pulse) + 0.5;
+                    outCol = sampleClampedOrZero(rp);
+                } else if (uSubMode == 117) {
+                    // Whip Spin Transition
+                    float spin = uAngle * uIntensity;
+                    vec2 mirrored = 1.0 - abs(fract((rot2d(uv - 0.5, spin) + 0.5) * 0.5) * 2.0 - 1.0);
+                    outCol = texture2D(uTexture, clamp(mirrored, 0.0, 1.0));
+                } else if (uSubMode == 118) {
+                    // Radial Clock Wipe
+                    vec2 d = uv - 0.5;
+                    float ang01 = fract((atan(d.y, d.x) + uAngle) / 6.28318 + 0.5);
+                    float lo = min(uIntensity, uSecondary);
+                    float hi = max(uIntensity, uSecondary);
+                    float feather = max(0.01, abs(uFreq) * 0.25 + 0.015);
+                    float mask = smoothstep(lo - feather, lo + feather, ang01) *
+                        (1.0 - smoothstep(hi - feather, hi + feather, ang01));
+                    outCol = vec4(origBase.rgb * mask, origBase.a * mask);
+                } else if (uSubMode == 119) {
+                    // Venetian Blinds
+                    vec2 dirUv = rot2d(uv - 0.5, uAngle) + 0.5;
+                    float slats = fract(dirUv.x * (6.0 + abs(uFreq) * 24.0));
+                    float completion = clamp(uSecondary - uIntensity, 0.0, 1.0);
+                    float mask = smoothstep(1.0 - completion - 0.04, 1.0 - completion + 0.04, slats);
+                    outCol = vec4(origBase.rgb * mask, origBase.a * mask);
+                } else if (uSubMode == 120) {
+                    // Luma Key
+                    float luma = dot(origBase.rgb, vec3(0.299, 0.587, 0.114));
+                    float targetLuma = dot(uTint, vec3(0.299, 0.587, 0.114));
+                    float distL = abs(luma - targetLuma);
+                    float feather = max(0.015, uSecondary * 0.45);
+                    float keep = smoothstep(uIntensity, uIntensity + feather, distL);
+                    outCol = vec4(origBase.rgb * keep, origBase.a * keep);
+                } else if (uSubMode == 121) {
+                    // Polar Coordinates
+                    vec2 d = (uv - 0.5) * 2.0;
+                    float r = length(d) / max(0.25, uIntensity);
+                    float a = fract((atan(d.y, d.x) + uAngle) / 6.28318 + 0.5);
+                    outCol = texture2D(uTexture, clamp(vec2(a, clamp(r, 0.0, 1.0)), 0.0, 1.0));
+                } else if (uSubMode == 122) {
+                    // Mirror Horizontal
+                    vec2 mUv = vec2(uv.x > 0.5 ? 1.0 - uv.x : uv.x, uv.y);
+                    outCol = texture2D(uTexture, clamp(mUv, 0.0, 1.0));
+                } else if (uSubMode == 123) {
+                    // Quad 4-Way Mirror
+                    vec2 mUv = vec2(uv.x > 0.5 ? 1.0 - uv.x : uv.x, uv.y > 0.5 ? 1.0 - uv.y : uv.y) * 2.0;
+                    outCol = texture2D(uTexture, clamp(1.0 - abs(fract(mUv * 0.5) * 2.0 - 1.0), 0.0, 1.0));
+                } else if (uSubMode == 124) {
+                    // Isotropic Gaussian / Lens Blur (9-tap / 5-tap kernel)
+                    vec2 r = px * (uIntensity * (6.0 + uSecondary * 10.0));
+                    vec4 acc = origBase * 0.24;
+                    acc += texture2D(uTexture, clamp(uv + vec2(r.x, 0.0), 0.0, 1.0)) * 0.13;
+                    acc += texture2D(uTexture, clamp(uv - vec2(r.x, 0.0), 0.0, 1.0)) * 0.13;
+                    acc += texture2D(uTexture, clamp(uv + vec2(0.0, r.y), 0.0, 1.0)) * 0.13;
+                    acc += texture2D(uTexture, clamp(uv - vec2(0.0, r.y), 0.0, 1.0)) * 0.13;
+                    acc += texture2D(uTexture, clamp(uv + r * 0.75, 0.0, 1.0)) * 0.06;
+                    acc += texture2D(uTexture, clamp(uv - r * 0.75, 0.0, 1.0)) * 0.06;
+                    acc += texture2D(uTexture, clamp(uv + vec2(r.x, -r.y) * 0.75, 0.0, 1.0)) * 0.06;
+                    acc += texture2D(uTexture, clamp(uv + vec2(-r.x, r.y) * 0.75, 0.0, 1.0)) * 0.06;
+                    outCol = vec4(acc.rgb * uTint, acc.a);
+                } else if (uSubMode == 125) {
+                    // Binary Threshold / Bayer Dither
+                    float luma = dot(origBase.rgb, vec3(0.299, 0.587, 0.114));
+                    float dither = (hash(floor(uv * uResolution * 0.5)) - 0.5) * uFreq * 0.25;
+                    float bw = smoothstep(uIntensity * 0.65 - 0.03, uIntensity * 0.65 + 0.03, luma + dither);
+                    outCol = vec4(uTint * bw, origBase.a);
+                } else if (uSubMode == 126) {
+                    // Halftone Dots
+                    float dotDensity = 28.0 + uSecondary * 52.0;
+                    vec2 g = rot2d(uv - 0.5, uAngle) * dotDensity;
+                    vec2 cell = fract(g) - 0.5;
+                    float luma = dot(origBase.rgb, vec3(0.299, 0.587, 0.114));
+                    float dotMask = smoothstep(luma * 0.62 + 0.05, luma * 0.62 - 0.05, length(cell));
+                    vec3 ht = mix(origBase.rgb * 0.18, uTint * origBase.rgb * 1.25, dotMask);
+                    outCol = vec4(clamp(ht, 0.0, 1.0), origBase.a);
+                } else if (uMode == 1) {
                     float spread = (1.5 + uSecondary * 7.5);
                     vec2 axisA = rot2d(vec2(px.x, px.y) * spread, uAngle);
                     vec2 axisB = rot2d(vec2(-px.x, px.y) * spread, uAngle);
@@ -2144,12 +2738,12 @@ class FramePollutionGlRenderer(
                     float b = texture2D(uTexture, clamp(uv - axis, 0.0, 1.0)).b;
                     outCol = vec4(vec3(r, g, b) * uTint, origBase.a);
                 } else if (uMode == 3) {
-                    float freq = 5.0 + uFreq * 22.0;
+                    float freq = 5.0 + abs(uSecondary) * 20.0;
                     float amp = uIntensity * 0.048;
                     vec2 dirUv = rot2d(uv - 0.5, uAngle) + 0.5;
                     vec2 delta = vec2(
-                        sin(dirUv.y * freq + uTime * 3.5) * amp,
-                        cos(dirUv.x * freq + uTime * 2.8) * amp * (0.2 + uSecondary)
+                        sin(dirUv.y * freq + uTime * 3.5 + uFreq * 3.14159) * amp,
+                        cos(dirUv.x * freq + uTime * 2.8 + uFreq * 3.14159) * amp * 0.55
                     );
                     outCol = texture2D(uTexture, clamp(uv + rot2d(delta, -uAngle), 0.0, 1.0));
                 } else if (uMode == 4) {
@@ -2162,11 +2756,11 @@ class FramePollutionGlRenderer(
                     float scan = 0.90 + 0.10 * sin(ruv.y * uResolution.y * 1.2);
                     outCol = vec4(col.rgb * scan * uTint, col.a);
                 } else if (uMode == 5) {
-                    float scale = max(0.35, uIntensity * 1.45);
+                    float scale = max(0.25, uIntensity * 1.35);
                     vec2 centered = rot2d((uv - 0.5) * scale, uAngle) + 0.5 + vec2(uSecondary - 0.5, uFreq * 0.35);
                     vec2 tuv = fract(centered);
                     vec2 mirrored = 1.0 - abs(fract(centered * 0.5) * 2.0 - 1.0);
-                    vec2 muv = mix(tuv, mirrored, step(0.15, uSecondary));
+                    vec2 muv = mix(tuv, mirrored, step(0.10, uSecondary));
                     outCol = texture2D(uTexture, clamp(muv, 0.0, 1.0));
                 } else if (uMode == 6) {
                     vec2 radial = (vec2(0.5 + (uSecondary - 0.5) * 0.4, 0.5) - uv);
@@ -2192,7 +2786,7 @@ class FramePollutionGlRenderer(
                     float rnd = hash(id);
                     float dist = length(f - vec2(rnd - 0.5, fract(rnd * 17.3) - 0.5) * 0.5);
                     float spark = smoothstep(0.16, 0.01, dist) * step(0.58, rnd) * uIntensity;
-                    vec3 sparkCol = mix(vec3(0.0, 0.85, 0.68), uTint, 0.65);
+                    vec3 sparkCol = mix(vec3(0.31, 0.486, 1.0), uTint, 0.65);
                     outCol = vec4(clamp(origBase.rgb + sparkCol * spark * 1.9, 0.0, 1.0), origBase.a);
                 } else if (uMode == 8) {
                     float thick = 1.0 + uSecondary * 3.0;
@@ -2203,7 +2797,7 @@ class FramePollutionGlRenderer(
                     vec3 neon = uTint * smoothstep(0.06, 0.42, edge) * (uIntensity * 2.2);
                     outCol = vec4(clamp(c * (1.0 - uFreq * 0.25) + neon, 0.0, 1.0), origBase.a);
                 } else if (uMode == 9) {
-                    float angle = uIntensity * 3.14159 + uAngle + uTime * uFreq * 0.4;
+                    float angle = uIntensity * 2.2 + uAngle;
                     vec3 k = vec3(0.57735);
                     float cosA = cos(angle);
                     vec3 shifted = origBase.rgb * cosA + cross(k, origBase.rgb) * sin(angle) + k * dot(k, origBase.rgb) * (1.0 - cosA);
@@ -2211,18 +2805,16 @@ class FramePollutionGlRenderer(
                     vec3 graded = pow(clamp(shifted * uTint + vec3(uFreq * 0.15), 0.0, 1.0), vec3(1.0 / gamma));
                     outCol = vec4(graded, origBase.a);
                 } else if (uMode == 11) {
-                    // Range Wipe / Directional Slice
                     vec2 dirUv = rot2d(uv - 0.5, uAngle) + 0.5;
-                    float feather = max(0.015, uFreq * 0.35 + 0.02);
+                    float feather = max(0.015, abs(uFreq) * 0.35 + 0.02);
                     float lo = min(uIntensity, uSecondary);
                     float hi = max(uIntensity, uSecondary);
                     float mask = smoothstep(lo - feather, lo + feather, dirUv.x) *
                         (1.0 - smoothstep(hi - feather, hi + feather, dirUv.x));
-                    vec2 offsetUv = clamp(uv + rot2d(vec2(0.0, (1.0 - mask) * 0.06), -uAngle), 0.0, 1.0);
+                    vec2 offsetUv = clamp(uv + rot2d(vec2(0.0, (1.0 - mask) * 0.04), -uAngle), 0.0, 1.0);
                     vec4 sampleCol = texture2D(uTexture, offsetUv);
                     outCol = vec4(sampleCol.rgb * mask, sampleCol.a * mask);
                 } else if (uMode == 12) {
-                    // Alight Motion Chroma Key / Luma Key with Feather & Spill Suppression
                     float chromaDist = distance(origBase.rgb, uTint);
                     float thresh = clamp(uIntensity, 0.02, 0.90);
                     float feather = max(0.015, uSecondary * 0.45);
@@ -2230,16 +2822,17 @@ class FramePollutionGlRenderer(
                     float spill = (1.0 - keepMask) * clamp(uFreq, 0.0, 1.0);
                     float luma = dot(origBase.rgb, vec3(0.299, 0.587, 0.114));
                     vec3 despill = mix(origBase.rgb, vec3(luma), spill * 0.75);
-                    vec3 bgChecker = vec3(0.06, 0.07, 0.09);
-                    outCol = vec4(mix(bgChecker, despill, keepMask), origBase.a * keepMask);
+                    outCol = vec4(despill * keepMask, origBase.a * keepMask);
                 } else {
-                    float spd = 12.0 + uFreq * 36.0;
+                    float spd = 10.0 + uFreq * 28.0;
                     vec2 shakeVec = rot2d(vec2(sin(uTime * spd), cos(uTime * spd * 0.87) * uSecondary), uAngle) * 0.032 * uIntensity;
-                    vec2 centered = rot2d((uv - 0.5) / (1.0 + 0.14 * uIntensity * abs(sin(uTime * 6.0))), uAngle * 0.25 * uIntensity) + 0.5;
-                    outCol = texture2D(uTexture, clamp(centered + shakeVec, 0.0, 1.0));
+                    vec2 centered = rot2d((uv - 0.5) / (1.0 + 0.10 * uIntensity * abs(sin(uTime * 5.0))), uAngle * 0.25 * uIntensity) + 0.5;
+                    outCol = sampleClampedOrZero(centered + shakeVec);
                 }
 
-                gl_FragColor = mix(origBase, outCol, clamp(uMix, 0.0, 1.0));
+                float edgeDist = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+                float featherMask = (uFeather > 0.001) ? smoothstep(0.0, max(uFeather * 0.5, 0.002), edgeDist) : 1.0;
+                gl_FragColor = mix(origBase, outCol, clamp(uMix * featherMask, 0.0, 1.0));
             }
         """
     }

@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "FramePollution"
+rootProject.name = "Chronos"
 
-include(":app")
+include(":app", ":script-engine", ":roto-engine", ":depth-engine")

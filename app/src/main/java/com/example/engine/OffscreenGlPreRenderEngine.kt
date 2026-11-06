@@ -45,10 +45,24 @@ object OffscreenGlPreRenderEngine {
         if (Build.FINGERPRINT.equals("robolectric", ignoreCase = true)) return false
         val appCtx = context.applicationContext
 
-        // Pre-warm any Reverse or Time-Remapped video layers in one sequential hardware pass first
+        // 1. Transcode/reuse FFmpegKit short-GOP reversed MP4 proxies for reversed video layers so they
+        //    stream strictly forward via GlSequentialVideoSession (`MediaExtractor + MediaCodec -> OES`)!
+        val proxyEdge = maxOf(targetW, targetH).coerceIn(540, 1080)
+        val reversedProxies = HashMap<String, FFmpegReverseVideoEngine.ReversedProxyMedia>()
+        project.layers.forEach { layer ->
+            if (layer.visible && layer.type == LayerType.VIDEO && layer.mediaUri.isNotBlank() &&
+                layer.reversed && !layer.timeRemapEnabled
+            ) {
+                FFmpegReverseVideoEngine.ensureReversedProxy(appCtx, layer, proxyEdge)?.let { proxy ->
+                    reversedProxies[layer.id] = proxy
+                }
+            }
+        }
+
+        // Only Time-Remapped video layers (or reversed layers whose FFmpeg proxy fell back) need nonlinear frame windowing
         val nonlinearVideoLayers = project.layers.filter {
             it.visible && it.type == LayerType.VIDEO && it.mediaUri.isNotBlank() &&
-                (it.reversed || it.timeRemapEnabled)
+                (it.timeRemapEnabled || (it.reversed && it.id !in reversedProxies))
         }
         val cancelFlag = AtomicBoolean(false)
 
@@ -62,7 +76,6 @@ object OffscreenGlPreRenderEngine {
                 var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
                 var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
                 var renderer: FramePollutionGlRenderer? = null
-                var scratchArgb: Bitmap? = null
                 val videoSessions = HashMap<String, GlSequentialVideoSession>()
                 var gpuSucceeded = false
 
@@ -113,31 +126,31 @@ object OffscreenGlPreRenderEngine {
                                         glRenderer.onSurfaceCreated(null, null)
                                         glRenderer.onSurfaceChanged(null, targetW, targetH)
 
-                                        // Attach sequential hardware OES decoders for forward/freeze video layers
+                                        // Attach sequential hardware OES decoders for forward/freeze AND FFmpeg-reversed video layers!
                                         project.layers.forEach { layer ->
                                             if (layer.visible &&
                                                 layer.type == LayerType.VIDEO &&
                                                 layer.mediaUri.isNotBlank() &&
-                                                !layer.reversed &&
                                                 !layer.timeRemapEnabled
                                             ) {
-                                                val seq = GlSequentialVideoSession(appCtx, layer.mediaUri)
-                                                if (seq.openOnCurrentGlContext()) {
-                                                    videoSessions[layer.id] = seq
+                                                val revProxy = reversedProxies[layer.id]
+                                                val sessionUri = when {
+                                                    !layer.reversed -> layer.mediaUri
+                                                    revProxy != null -> revProxy.fileUri
+                                                    else -> null
+                                                }
+                                                if (sessionUri != null) {
+                                                    val seq = GlSequentialVideoSession(appCtx, sessionUri)
+                                                    if (seq.openOnCurrentGlContext()) {
+                                                        videoSessions[layer.id] = seq
+                                                    }
                                                 }
                                             }
                                         }
 
                                         val rgbaBuf = ByteBuffer.allocateDirect(targetW * targetH * 4)
                                             .order(ByteOrder.nativeOrder())
-                                        val useCompact565 = project.backgroundColor != "Transparent"
-                                        val reusableArgb = Bitmap.createBitmap(
-                                            targetW,
-                                            targetH,
-                                            Bitmap.Config.ARGB_8888
-                                        )
-                                        scratchArgb = reusableArgb
-                                        val warmEdge = maxOf(targetW, targetH).coerceIn(192, 540)
+                                        val warmEdge = maxOf(targetW, targetH).coerceIn(192, 640)
 
                                         var renderedAny = false
                                         for (idx in frameTimestampsMs.indices) {
@@ -151,7 +164,7 @@ object OffscreenGlPreRenderEngine {
                                                 continue
                                             }
 
-                                            val audio = audioEngine.sampleTimelineSpectrum(
+                                            val audio = audioEngine.sampleTimelineSpectrumPure(
                                                 bucketMs,
                                                 project.bpm,
                                                 project.beatMarkers
@@ -188,8 +201,7 @@ object OffscreenGlPreRenderEngine {
                                                                 uriStr = nlLayer.mediaUri,
                                                                 sortedTimestampsMs = windowNeeded,
                                                                 maxEdge = warmEdge,
-                                                                cancelled = cancelFlag,
-                                                                preferRgb565 = true
+                                                                cancelled = cancelFlag
                                                             ) { vBucket, bmp ->
                                                                 MediaEngine.putPreDecodedVideoFrame(nlLayer.mediaUri, vBucket, bmp)
                                                             }
@@ -200,16 +212,25 @@ object OffscreenGlPreRenderEngine {
                                                 }
                                             }
 
-                                            // Advance active sequential hardware video decoders
+                                            // Advance active sequential hardware video decoders (including FFmpeg-reversed proxies!)
                                             videoSessions.forEach { (layerId, seq) ->
                                                 val layer = project.layers.firstOrNull { it.id == layerId }
                                                 if (layer != null && bucketMs in layer.startTimeMs..layer.endTimeMs) {
-                                                    val srcMs = AnimationEvaluator.evaluateSourceMediaTimeMs(
+                                                    val rawSrcMs = AnimationEvaluator.evaluateSourceMediaTimeMs(
                                                         layer,
                                                         bucketMs,
                                                         audio
                                                     )
-                                                    if (seq.advanceToFrameMs(srcMs)) {
+                                                    val revProxy = reversedProxies[layerId]
+                                                    val seqTargetMs = if (layer.reversed && revProxy != null) {
+                                                        FFmpegReverseVideoEngine.mapForwardSourceMsToReversedProxyMs(
+                                                            rawSrcMs,
+                                                            revProxy
+                                                        )
+                                                    } else {
+                                                        rawSrcMs
+                                                    }
+                                                    if (seq.advanceToFrameMs(seqTargetMs)) {
                                                         val aspect = seq.videoWidth.toFloat() /
                                                             seq.videoHeight.toFloat().coerceAtLeast(1f)
                                                         glRenderer.externalOesOverrides[layerId] =
@@ -235,18 +256,14 @@ object OffscreenGlPreRenderEngine {
                                             }
 
                                             rgbaBuf.position(0)
-                                            reusableArgb.copyPixelsFromBuffer(rgbaBuf)
-                                            val finalBmp = if (useCompact565) {
-                                                reusableArgb.copy(Bitmap.Config.RGB_565, false)
-                                                    ?: reusableArgb.copy(Bitmap.Config.ARGB_8888, false)
-                                            } else {
-                                                reusableArgb.copy(Bitmap.Config.ARGB_8888, false)
-                                            }
-
-                                            if (finalBmp != null) {
-                                                onFrameRendered(idx, bucketMs, finalBmp)
-                                                renderedAny = true
-                                            }
+                                            val finalBmp = Bitmap.createBitmap(
+                                                targetW,
+                                                targetH,
+                                                Bitmap.Config.ARGB_8888
+                                            )
+                                            finalBmp.copyPixelsFromBuffer(rgbaBuf)
+                                            onFrameRendered(idx, bucketMs, finalBmp)
+                                            renderedAny = true
                                         }
                                         if (renderedAny) gpuSucceeded = true
                                     }
@@ -257,7 +274,6 @@ object OffscreenGlPreRenderEngine {
                 } catch (_: Throwable) {
                     gpuSucceeded = false
                 } finally {
-                    runCatching { scratchArgb?.recycle() }
                     videoSessions.values.forEach { runCatching { it.release() } }
                     videoSessions.clear()
                     runCatching { renderer?.releaseGlResources() }

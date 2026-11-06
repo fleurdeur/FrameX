@@ -16,16 +16,19 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +50,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,7 +60,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -68,18 +71,22 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Diamond
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.FirstPage
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.LastPage
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.OpenWith
@@ -90,7 +97,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.ViewInAr
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.ZoomIn
@@ -123,6 +131,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -141,31 +150,37 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import com.example.data.model.AudioBand
 import com.example.data.model.EffectNode
 import com.example.data.model.EffectParamSlot
 import com.example.data.model.Layer
+import com.example.data.model.LayerMask
 import com.example.data.model.LayerType
+import com.example.data.model.MaskShapeType
 import com.example.data.model.Primitive3DType
+import com.example.data.model.Project
 import com.example.data.model.PropertyTarget
 import com.example.data.preferences.PreviewQuality
 import com.example.data.preferences.StudioPreferences
 import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
+import com.example.engine.PlaybackCacheEngine
+import com.example.engine.PluginHostRepository
 import com.example.engine.PreRenderUiState
+import com.example.engine.isVisibleInEditorMenu
+import com.example.rotoengine.RotoBrushStroke
+import com.example.rotoengine.RotoModelState
+import com.example.rotoengine.RotoTargetMode
+import com.example.scriptengine.InstalledPlugin
 import com.example.ui.components.AmInteractiveEyedropperOverlay
 import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
 import com.example.ui.components.EyedropperColorSlot
 import com.example.ui.components.GlPreviewCanvas
+import com.example.ui.components.PluginFloatingWindowHost
 import com.example.ui.components.PreviewFrameSampler
-import com.example.ui.theme.AmTeal
-import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.AmTealContainer
 import com.example.ui.theme.AudioCyan
 import com.example.ui.theme.DeepBlack
@@ -187,17 +202,20 @@ import com.example.viewmodel.AmInspectorTab
 import com.example.viewmodel.StudioDestination
 import com.example.viewmodel.StudioWorkspaceState
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToLong
 
 private val TimelinePitchBlack = Color(0xFF000000)
-private val TimelineRulerBg = Color(0xFF060709)
-private val TimelineTransportBg = Color(0xFF08090C)
-private val TimelineHairline = Color(0xFF20242C)
-private val PlayheadEmerald = Color(0xFF1DB954)
-private val BookmarkSkyBlue = Color(0xFF5CC2F2)
-private val ClipMediaBlue = Color(0xFF0D8BFF)
+private val TimelineRulerBg = Color(0xFF06080D)
+private val TimelineTransportBg = Color(0xFF080A10)
+private val TimelineToolbarSubBg = Color(0xFF0B0E16)
+private val TimelineHairline = Color(0xFF1F2634)
+private val PlayheadEmerald = KeyflowBlue
+private val BookmarkSkyBlue = Color(0xFF7CA0FF)
+private val ClipMediaBlue = Color(0xFF2E6BFF)
 private val ClipRigRed = Color(0xFFF0484E)
+private val ClipGroupPurple = Color(0xFF7C3AED)
 
 @Composable
 fun EditorWorkspaceScreen(
@@ -225,6 +243,10 @@ fun EditorWorkspaceScreen(
     onJumpBookmark: (Boolean) -> Unit,
     onJumpKeyframe: (Boolean) -> Unit,
     onSelectLayer: (String) -> Unit,
+    onToggleLayerMultiSelection: (String) -> Unit = {},
+    onGroupSelectedLayers: () -> Unit = {},
+    onPreRenderLayerOrGroup: () -> Unit = {},
+    onImportUniversalFile: (Uri) -> Unit = {},
     onSelectProperty: (PropertyTarget) -> Unit,
     onUpdatePropertyValue: (Float) -> Unit,
     onUpdateExpression: (String) -> Unit,
@@ -254,6 +276,7 @@ fun EditorWorkspaceScreen(
     onExtractAudioFromVideo: () -> Unit,
     onAddLayer: (LayerType, String) -> Unit,
     onAddShapeKind: (String) -> Unit,
+    onAddAdjustmentLayer: () -> Unit = {},
     onCopyLayer: () -> Unit,
     onPasteLayer: () -> Unit,
     onCopyEffects: () -> Unit,
@@ -294,31 +317,74 @@ fun EditorWorkspaceScreen(
     onBindAudioToProperty: (AudioBand, Float) -> Unit = { _, _ -> },
     onUpdateShapeKind: (String, String) -> Unit,
     onUpdateBlendMode: (String, String) -> Unit,
-    onUpdateBorderShadow: (String, Boolean, Float, String, Boolean, Float, String) -> Unit,
+    onUpdateBorderShadow: (String, Boolean, Float, String, String, Boolean, Float, String, Float, Float) -> Unit,
     onUpdate3DPrimitive: (String, Primitive3DType) -> Unit,
     onUpdateEffectNode: (EffectNode) -> Unit,
     onRemoveEffectNode: (String) -> Unit,
     onClearAllEffects: (() -> Unit)? = null,
     onUpdateProjectSettings: (String, Int, Int, Int, Int, String) -> Unit,
     onViewportGesture: (Float, Float, Float) -> Unit,
-    onResetViewport: () -> Unit
+    onResetViewport: () -> Unit,
+    onDeselectLayer: () -> Unit = onCollapseToTimeline,
+    onToggleCameraPreview: () -> Unit = {},
+    onMoveLayerToIndex: (String, Int) -> Unit = { _, _ -> },
+    onResetPropertyTarget: (PropertyTarget) -> Unit = {},
+    onResetMoveSubMode: (Int) -> Unit = {},
+    onResetStroke: () -> Unit = {},
+    onResetShadow: () -> Unit = {},
+    onResetSingleEffectParam: (String, EffectParamSlot?, String?) -> Unit = { _, _, _ -> },
+    onBakeBeatsToKeyframes: (PropertyTarget, Float, Long) -> Unit = { _, _, _ -> },
+    onSetAddFabExpanded: (Boolean) -> Unit = {},
+    onToggleGroupExpanded: (String) -> Unit = {},
+    installedAePlugins: List<InstalledPlugin> = emptyList(),
+    pluginHostRepository: PluginHostRepository? = null,
+    onOpenAePlugin: (InstalledPlugin) -> Unit = {},
+    onCloseFloatingPlugin: () -> Unit = {},
+    onStatusMessage: (String) -> Unit = {},
+    rotoStrokes: List<RotoBrushStroke> = emptyList(),
+    rotoModelState: RotoModelState = RotoModelState(),
+    onAddMask: (MaskShapeType) -> Unit = {},
+    onSelectMask: (String?) -> Unit = {},
+    onSetPenMaskEditMode: (Boolean) -> Unit = {},
+    onAddPenMaskVertex: (Float, Float) -> Unit = { _, _ -> },
+    onUpdateMask: (String, (LayerMask) -> LayerMask) -> Unit = { _, _ -> },
+    onRemoveMask: (String) -> Unit = {},
+    onActivateRotoBrush: () -> Unit = {},
+    onDismissRotoDownloadDialog: () -> Unit = {},
+    onConfirmDownloadRotoModels: () -> Unit = {},
+    onSetRotoTargetMode: (RotoTargetMode) -> Unit = {},
+    onSetRotoBrushRadiusDp: (Float) -> Unit = {},
+    onAddRotoBrushStroke: (List<Pair<Float, Float>>, Float) -> Unit = { _, _ -> },
+    onRunAutoRoto: () -> Unit = {},
+    onUndoRotoStroke: () -> Unit = {},
+    onRedoRotoStroke: () -> Unit = {},
+    onClearRotoStrokes: () -> Unit = {},
+    onPropagateRoto: () -> Unit = {},
+    onCancelRotoPropagation: () -> Unit = {},
+    onRelinkMissingMedia: (String, Uri) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val project = state.activeProject
     val selectedLayer = project.layers.firstOrNull { it.id == state.selectedLayerId }
     val isLayerSheetOpen = state.inspectorTab != AmInspectorTab.TIMELINE && selectedLayer != null
-    val density = LocalDensity.current
 
     val previewFrameSampler = remember { PreviewFrameSampler() }
     var activeEyedropperSlot by remember { mutableStateOf<EyedropperColorSlot?>(null) }
     var pendingPluginEyedropperColorKey by remember { mutableStateOf<String?>(null) }
     var eyedropperBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    var showAddDrawer by remember { mutableStateOf(false) }
+    val showAddDrawer = state.isAddFabExpanded
+    val setShowAddDrawer: (Boolean) -> Unit = { expanded -> onSetAddFabExpanded(expanded) }
+    val pinnedAePlugins = remember(installedAePlugins) {
+        installedAePlugins.filter { it.isVisibleInEditorMenu() }
+    }
+    val activeFloatingPlugin = remember(installedAePlugins, state.activeFloatingPluginId) {
+        val targetId = state.activeFloatingPluginId
+        if (targetId == null) null else installedAePlugins.firstOrNull { it.bundleId == targetId }
+    }
     var showProjectSettings by remember { mutableStateOf(false) }
     var showClipboardMenu by remember { mutableStateOf(false) }
     var showQualityMenu by remember { mutableStateOf(false) }
-    var showPlayHoldMenu by remember { mutableStateOf(false) }
     var showFloatingBeatReactor by remember { mutableStateOf(false) }
     var showCanvasGrid by remember { mutableStateOf(false) }
 
@@ -362,21 +428,36 @@ fun EditorWorkspaceScreen(
     ) { uri ->
         if (uri != null) onImportMediaUri(uri, LayerType.AUDIO)
     }
+    val universalImportPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onImportUniversalFile(uri)
+    }
 
     var showTopRenameDialog by remember { mutableStateOf(false) }
     var topRenameDraft by remember(selectedLayer?.id, selectedLayer?.name) {
         mutableStateOf(selectedLayer?.name.orEmpty())
     }
     var showTopLayerOverflow by remember { mutableStateOf(false) }
+    var showMediaInfoDialog by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = selectedLayer != null || showAddDrawer) {
+    BackHandler(enabled = selectedLayer != null || showAddDrawer || activeFloatingPlugin != null) {
         when {
-            showAddDrawer -> showAddDrawer = false
+            activeFloatingPlugin != null -> onCloseFloatingPlugin()
+            showAddDrawer -> setShowAddDrawer(false)
             selectedLayer != null && state.inspectorTab != AmInspectorTab.LAYER_OVERVIEW && state.inspectorTab != AmInspectorTab.TIMELINE -> {
                 onSetInspectorTab(AmInspectorTab.LAYER_OVERVIEW)
             }
-            selectedLayer != null -> onCollapseToTimeline()
+            selectedLayer != null -> onDeselectLayer()
         }
+    }
+
+    if (showMediaInfoDialog && selectedLayer != null) {
+        KeyflowMediaInfoDialog(
+            layer = selectedLayer,
+            project = project,
+            onDismiss = { showMediaInfoDialog = false }
+        )
     }
 
     if (showTopRenameDialog && selectedLayer != null) {
@@ -430,7 +511,7 @@ fun EditorWorkspaceScreen(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = TimelineTransportBg),
                     navigationIcon = {
                         IconButton(
-                            onClick = onCollapseToTimeline,
+                            onClick = onDeselectLayer,
                             modifier = Modifier.testTag("top_collapse_layer_button")
                         ) {
                             Icon(
@@ -442,169 +523,108 @@ fun EditorWorkspaceScreen(
                         }
                     },
                     title = {
-                        Text(
-                            text = selectedLayer.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable {
-                                    topRenameDraft = selectedLayer.name
-                                    showTopRenameDialog = true
-                                }
-                                .testTag("rename_layer_button")
-                                .padding(horizontal = 4.dp, vertical = 4.dp)
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (selectedLayer.type == LayerType.GROUP) {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = "Group Layer",
+                                    tint = Color(0xFFA78BFA),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Text(
+                                text = selectedLayer.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        topRenameDraft = selectedLayer.name
+                                        showTopRenameDialog = true
+                                    }
+                                    .testTag("rename_layer_button")
+                                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                            )
+                        }
                     },
                     actions = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(end = 4.dp)
-                        ) {
+                        Box(modifier = Modifier.padding(end = 4.dp)) {
                             IconButton(
-                                onClick = { onNavigateTool(StudioDestination.WORKSPACE_3D) },
-                                modifier = Modifier.size(38.dp)
+                                onClick = { showTopLayerOverflow = true },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .testTag("selected_layer_overflow_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.ViewInAr,
-                                    contentDescription = "3D View",
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "More Options",
                                     tint = Color.White,
                                     modifier = Modifier.size(21.dp)
                                 )
                             }
-
-                            // KeyFlow Dual-Circle Clipping Mask Toggle
-                            Box(
-                                modifier = Modifier
-                                    .size(width = 40.dp, height = 38.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onToggleClippingMask(selectedLayer.id) }
-                                    .testTag("topbar_mask_toggle_button"),
-                                contentAlignment = Alignment.Center
+                            DropdownMenu(
+                                expanded = showTopLayerOverflow,
+                                onDismissRequest = { showTopLayerOverflow = false }
                             ) {
-                                Canvas(modifier = Modifier.size(width = 30.dp, height = 18.dp)) {
-                                    val r = size.height * 0.48f
-                                    val cy = size.height * 0.5f
-                                    drawCircle(
-                                        color = if (selectedLayer.isClippingMask) KeyflowBlue else Color(0xFF454954),
-                                        radius = r,
-                                        center = Offset(r + 1.dp.toPx(), cy)
-                                    )
-                                    drawCircle(
-                                        color = Color.White,
-                                        radius = r,
-                                        center = Offset(size.width - r - 1.dp.toPx(), cy)
-                                    )
-                                }
-                            }
-
-                            IconButton(
-                                onClick = onDuplicateLayer,
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .testTag("duplicate_layer_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = "Duplicate Layer",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
+                                DropdownMenuItem(
+                                    text = { Text("Media Info", color = KeyflowBlueBright, fontWeight = FontWeight.Bold) },
+                                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = KeyflowBlueBright) },
+                                    onClick = {
+                                        showTopLayerOverflow = false
+                                        showMediaInfoDialog = true
+                                    },
+                                    modifier = Modifier.testTag("layer_media_info_menu_item")
                                 )
-                            }
-
-                            Box {
-                                IconButton(
-                                    onClick = { showTopLayerOverflow = true },
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .testTag("selected_layer_overflow_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.MoreVert,
-                                        contentDescription = "More Options",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(21.dp)
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = showTopLayerOverflow,
-                                    onDismissRequest = { showTopLayerOverflow = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Export Video", color = KeyflowBlueBright, fontWeight = FontWeight.SemiBold) },
-                                        leadingIcon = { Icon(Icons.Default.IosShare, contentDescription = null, tint = KeyflowBlueBright) },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            onNavigateTool(StudioDestination.EXPORT_PIPELINE)
-                                        },
-                                        modifier = Modifier.testTag("editor_export_button")
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Save to Cloud") },
-                                        leadingIcon = { Icon(Icons.Default.CloudUpload, contentDescription = null) },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            onSaveCloud()
-                                        },
-                                        modifier = Modifier.testTag("editor_cloud_save_button")
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Plugin Packs (.kfpack)") },
-                                        leadingIcon = { Icon(Icons.Default.Extension, contentDescription = null, tint = KeyflowBlueBright) },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            onNavigateTool(StudioDestination.PLUGIN_MANAGER)
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Project Settings") },
-                                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            showProjectSettings = true
-                                        }
-                                    )
-                                    if (selectedLayer.type == LayerType.VIDEO) {
-                                        DropdownMenuItem(
-                                            text = { Text("Extract Audio") },
-                                            leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null) },
-                                            onClick = {
-                                                showTopLayerOverflow = false
-                                                onExtractAudioFromVideo()
-                                            }
-                                        )
+                                DropdownMenuItem(
+                                    text = { Text(if (selectedLayer.locked) "Unlock Layer" else "Lock Layer") },
+                                    onClick = {
+                                        showTopLayerOverflow = false
+                                        onToggleLayerLock(selectedLayer.id)
                                     }
-                                    DropdownMenuItem(
-                                        text = { Text(if (selectedLayer.locked) "Unlock Layer" else "Lock Layer") },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            onToggleLayerLock(selectedLayer.id)
-                                        }
-                                    )
-                                    HorizontalDivider(color = OutlineSubtle)
-                                    DropdownMenuItem(
-                                        text = { Text("Delete Layer", color = KeyflowDangerRed) },
-                                        leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = KeyflowDangerRed) },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            onDeleteSelectedLayer()
-                                        },
-                                        modifier = Modifier.testTag("topbar_delete_layer_button")
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Exit to Projects") },
-                                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
-                                        onClick = {
-                                            showTopLayerOverflow = false
-                                            onBack()
-                                        },
-                                        modifier = Modifier.testTag("editor_back_button")
-                                    )
-                                }
+                                )
+                                HorizontalDivider(color = OutlineSubtle)
+                                DropdownMenuItem(
+                                    text = { Text("Export Video", color = KeyflowBlueBright, fontWeight = FontWeight.SemiBold) },
+                                    leadingIcon = { Icon(Icons.Default.IosShare, contentDescription = null, tint = KeyflowBlueBright) },
+                                    onClick = {
+                                        showTopLayerOverflow = false
+                                        onNavigateTool(StudioDestination.EXPORT_PIPELINE)
+                                    },
+                                    modifier = Modifier.testTag("editor_export_button")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Save to Cloud") },
+                                    leadingIcon = { Icon(Icons.Default.CloudUpload, contentDescription = null) },
+                                    onClick = {
+                                        showTopLayerOverflow = false
+                                        onSaveCloud()
+                                    },
+                                    modifier = Modifier.testTag("editor_cloud_save_button")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Project Settings") },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                    onClick = {
+                                        showTopLayerOverflow = false
+                                        showProjectSettings = true
+                                    }
+                                )
+                                HorizontalDivider(color = OutlineSubtle)
+                                DropdownMenuItem(
+                                    text = { Text("Exit to Projects") },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
+                                    onClick = {
+                                        showTopLayerOverflow = false
+                                        onBack()
+                                    },
+                                    modifier = Modifier.testTag("editor_back_button")
+                                )
                             }
                         }
                     }
@@ -680,19 +700,33 @@ fun EditorWorkspaceScreen(
             }
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(TimelinePitchBlack)
                 .padding(innerPadding)
         ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(TimelinePitchBlack)
+        ) {
             // 1. TOP HALF: UNOBSTRUCTED PREVIEW STAGE
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.45f)
+                    .weight(0.44f)
                     .background(TimelinePitchBlack)
             ) {
+                val activePenOffsets: List<Offset> = remember(selectedLayer, state.activeMaskId) {
+                    val m = selectedLayer?.masks?.firstOrNull { it.id == state.activeMaskId && it.shapeType == MaskShapeType.PEN }
+                        ?: selectedLayer?.masks?.lastOrNull { it.shapeType == MaskShapeType.PEN }
+                    m?.vertices?.map { pt -> Offset(pt.x, pt.y) } ?: emptyList()
+                }
+                val rotoStrokeOffsets = remember(rotoStrokes) {
+                    rotoStrokes.map { st -> st.pointsNormalized.map { (x, y) -> Offset(x, y) } }
+                }
+
                 GlPreviewCanvas(
                     project = project,
                     playheadMs = state.playheadMs,
@@ -712,11 +746,26 @@ fun EditorWorkspaceScreen(
                     cameraDistance = state.cameraDistance,
                     selectedLayerId = state.selectedLayerId,
                     show3DGridOverlay = showCanvasGrid,
+                    activeCameraPreviewEnabled = state.activeCameraPreviewEnabled,
                     onViewportGesture = onViewportGesture,
                     onDragSelectedLayer = onDragLayerOnCanvas,
                     onScaleAndRotateSelectedLayer = onScaleAndRotateLayerOnCanvas,
                     onSelectLayerOnCanvas = onSelectLayer,
+                    onDeselectLayer = onDeselectLayer,
                     previewFrameSampler = previewFrameSampler,
+                    rotoBrushActive = state.rotoBrushActive,
+                    rotoBrushRadiusDp = state.rotoBrushRadiusDp,
+                    rotoPreviewStrokesNormalized = rotoStrokeOffsets,
+                    onRotoStrokeCompleted = { pts ->
+                        val normPts = pts.map { it.x.coerceIn(0f, 1f) to it.y.coerceIn(0f, 1f) }
+                        val normRadius = (state.rotoBrushRadiusDp / 360f).coerceIn(0.015f, 0.2f)
+                        onAddRotoBrushStroke(normPts, normRadius)
+                    },
+                    penMaskEditActive = state.penMaskEditActive,
+                    penMaskPointsNormalized = activePenOffsets,
+                    onPenMaskPointAdded = { pt ->
+                        onAddPenMaskVertex(pt.x, pt.y)
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
 
@@ -826,9 +875,9 @@ fun EditorWorkspaceScreen(
                         selectedLayer = selectedLayer,
                         selectedProperty = state.selectedProperty,
                         onAutoDetectBass = { sens -> onAutoDetectBassBeats(sens) },
-                        onToggleBeatAtPlayhead = onToggleBeatBookmark,
-                        onClearBeats = onClearAllBeatMarkers,
                         onBindAudioToProperty = onBindAudioToProperty,
+                        onBakeBeatsToKeyframes = onBakeBeatsToKeyframes,
+                        onClearBeats = onClearAllBeatMarkers,
                         onOpenFullAudioStudio = {
                             showFloatingBeatReactor = false
                             onNavigateTool(StudioDestination.AUDIO_REACTOR)
@@ -878,9 +927,12 @@ fun EditorWorkspaceScreen(
                                             true,
                                             selectedLayer.strokeWidth,
                                             pickedHex,
+                                            selectedLayer.strokePosition,
                                             selectedLayer.shadowEnabled,
                                             selectedLayer.shadowBlur,
-                                            selectedLayer.shadowColorHex
+                                            selectedLayer.shadowColorHex,
+                                            selectedLayer.shadowOffsetX,
+                                            selectedLayer.shadowOffsetY
                                         )
                                     }
                                 }
@@ -891,9 +943,12 @@ fun EditorWorkspaceScreen(
                                             selectedLayer.strokeEnabled,
                                             selectedLayer.strokeWidth,
                                             selectedLayer.strokeColorHex,
+                                            selectedLayer.strokePosition,
                                             true,
                                             selectedLayer.shadowBlur,
-                                            pickedHex
+                                            pickedHex,
+                                            selectedLayer.shadowOffsetX,
+                                            selectedLayer.shadowOffsetY
                                         )
                                     }
                                 }
@@ -928,28 +983,44 @@ fun EditorWorkspaceScreen(
                 }
             }
 
-            // 2. REFERENCE-DESIGN PITCH-BLACK TRANSPORT STRIP:
-            // [Grid] [Full] [Bookmark]     |<   Play/Pause   >|     [Layers] [Undo] [Redo]
+            // 2. MIDDLE TIMELINE TOOLBAR (Zero Duplicate Buttons):
+            // Row A: [Grid] [Full/Comp Cache] [Bookmark]   |< Play/Pause >|   [Camera] [Undo] [Redo]
+            // Row B: [Copy] [Paste] [Duplicate] [Group] [Pre-render Layer/Group] [More ▾]
             val hasBookmarkHere = project.beatMarkers.any { abs(it.timeMs - state.playheadMs) <= 45L }
+            val hasCameraInProject = project.layers.any { it.type == LayerType.CAMERA }
+            val isSelectedLayerOrGroupCached = remember(
+                selectedLayer?.id,
+                state.projectRevision,
+                state.previewQuality,
+                preRenderState.cachedFramesCount
+            ) {
+                selectedLayer != null && PlaybackCacheEngine.isLayerOrGroupCached(
+                    projectRevision = state.projectRevision,
+                    quality = state.previewQuality,
+                    layerId = selectedLayer.id
+                )
+            }
+            val multiSelectCount = state.selectedLayerIds.size
+
             Column(modifier = Modifier.fillMaxWidth()) {
                 HorizontalDivider(thickness = 0.7.dp, color = TimelineHairline)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(42.dp)
+                        .height(35.dp)
                         .background(TimelineTransportBg)
-                        .padding(horizontal = 8.dp),
+                        .padding(horizontal = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Left Cluster: Grid | [Full] Quality Pill | Bookmark
+                    // Left Cluster: Grid | [Quality] | Bookmark
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(30.dp)
                                 .clip(RoundedCornerShape(6.dp))
                                 .combinedClickable(
                                     onClick = { showCanvasGrid = !showCanvasGrid },
@@ -960,33 +1031,33 @@ fun EditorWorkspaceScreen(
                             Icon(
                                 imageVector = Icons.Default.GridOn,
                                 contentDescription = "Grid",
-                                tint = if (showCanvasGrid) PlayheadEmerald else Color.White,
-                                modifier = Modifier.size(19.dp)
+                                tint = if (showCanvasGrid) KeyflowBlueBright else Color.White,
+                                modifier = Modifier.size(17.dp)
                             )
                         }
 
                         Box {
                             Box(
                                 modifier = Modifier
-                                    .height(26.dp)
+                                    .height(22.dp)
                                     .clip(RoundedCornerShape(5.dp))
-                                    .background(Color(0xFF0E1015))
+                                    .background(Color(0xFF0E121B))
                                     .border(
-                                        1.dp,
-                                        if (preRenderState.cachedFramesCount > 0) PlayheadEmerald.copy(alpha = 0.75f)
-                                        else Color(0xFF3E434E),
+                                        0.9.dp,
+                                        if (preRenderState.cachedFramesCount > 0) KeyflowBlue.copy(alpha = 0.85f)
+                                        else Color(0xFF343C4E),
                                         RoundedCornerShape(5.dp)
                                     )
                                     .clickable { showQualityMenu = true }
                                     .testTag("preview_quality_button")
-                                    .padding(horizontal = 9.dp),
+                                    .padding(horizontal = 7.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = state.previewQuality.badge,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = Color(0xFFD6DBE4)
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (preRenderState.cachedFramesCount > 0) KeyflowBlueBright else Color(0xFFD6DBE4)
                                 )
                             }
 
@@ -1005,13 +1076,13 @@ fun EditorWorkspaceScreen(
                                                 Text(
                                                     text = q.badge,
                                                     fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (isCurrent) PlayheadEmerald else TextPrimary
+                                                    color = if (isCurrent) KeyflowBlueBright else TextPrimary
                                                 )
                                                 if (isCurrent) {
                                                     Icon(
                                                         imageVector = Icons.Default.Check,
                                                         contentDescription = null,
-                                                        tint = PlayheadEmerald,
+                                                        tint = KeyflowBlueBright,
                                                         modifier = Modifier.size(14.dp)
                                                     )
                                                 }
@@ -1028,8 +1099,8 @@ fun EditorWorkspaceScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            text = if (preRenderState.isPreRendering) "Stop" else "Pre-render",
-                                            color = PlayheadEmerald,
+                                            text = if (preRenderState.isPreRendering) "Stop Comp Pre-render" else "Pre-render Full Comp",
+                                            color = KeyflowBlueBright,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     },
@@ -1042,8 +1113,8 @@ fun EditorWorkspaceScreen(
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            text = "Loop",
-                                            color = if (state.isLoopPlayback) PlayheadEmerald else TextSecondary
+                                            text = if (state.isLoopPlayback) "Loop: On" else "Loop: Off",
+                                            color = if (state.isLoopPlayback) KeyflowBlueBright else TextSecondary
                                         )
                                     },
                                     onClick = {
@@ -1067,7 +1138,7 @@ fun EditorWorkspaceScreen(
 
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(30.dp)
                                 .clip(RoundedCornerShape(6.dp))
                                 .combinedClickable(
                                     onClick = onToggleBeatBookmark,
@@ -1080,19 +1151,19 @@ fun EditorWorkspaceScreen(
                                 imageVector = if (hasBookmarkHere) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                                 contentDescription = "Bookmark",
                                 tint = if (hasBookmarkHere) BookmarkSkyBlue else Color.White,
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier.size(17.dp)
                             )
                         }
                     }
 
                     // Center Cluster: |<   Play/Pause   >|
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .clip(CircleShape)
                                 .combinedClickable(
                                     onClick = { onJumpBookmark(false) },
@@ -1105,109 +1176,30 @@ fun EditorWorkspaceScreen(
                                 imageVector = Icons.Default.SkipPrevious,
                                 contentDescription = "Previous",
                                 tint = Color.White,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(20.dp)
                             )
-                        }
-
-                        Box(contentAlignment = Alignment.Center) {
-                            if (showPlayHoldMenu) {
-                                Popup(
-                                    alignment = Alignment.TopCenter,
-                                    offset = IntOffset(0, -with(density) { 44.dp.roundToPx() }),
-                                    onDismissRequest = { showPlayHoldMenu = false },
-                                    properties = PopupProperties(focusable = true)
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .shadow(8.dp, RoundedCornerShape(10.dp))
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(Color(0xFF101218))
-                                            .border(1.dp, TimelineHairline, RoundedCornerShape(10.dp))
-                                            .testTag("play_hold_upper_menu")
-                                            .padding(horizontal = 6.dp, vertical = 5.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(7.dp))
-                                                .background(if (state.isLoopPlayback) AmTealContainer else PanelDark)
-                                                .clickable {
-                                                    onToggleLoop()
-                                                    showPlayHoldMenu = false
-                                                }
-                                                .testTag("play_hold_loop_button")
-                                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Loop,
-                                                contentDescription = "Loop",
-                                                tint = if (state.isLoopPlayback) PlayheadEmerald else TextSecondary,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = "Loop",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (state.isLoopPlayback) PlayheadEmerald else TextPrimary
-                                            )
-                                        }
-
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(7.dp))
-                                                .background(PanelDark)
-                                                .clickable {
-                                                    onTriggerOrCancelPreRender()
-                                                    showPlayHoldMenu = false
-                                                }
-                                                .testTag("play_hold_prerender_button")
-                                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Bolt,
-                                                contentDescription = "Pre-render",
-                                                tint = PlayheadEmerald,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = if (preRenderState.isPreRendering) "Stop" else "Pre-render",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = PlayheadEmerald
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .combinedClickable(
-                                        onClick = onTogglePlay,
-                                        onLongClick = { showPlayHoldMenu = true }
-                                    )
-                                    .testTag("timeline_play_pause_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (state.isPlaying) "Pause" else "Play",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(25.dp)
-                                )
-                            }
                         }
 
                         Box(
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(if (state.isPlaying) KeyflowBlue.copy(alpha = 0.22f) else Color.Transparent)
+                                .clickable(onClick = onTogglePlay)
+                                .testTag("timeline_play_pause_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (state.isPlaying) "Pause" else "Play",
+                                tint = if (state.isPlaying) KeyflowBlueBright else Color.White,
+                                modifier = Modifier.size(23.dp)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
                                 .clip(CircleShape)
                                 .combinedClickable(
                                     onClick = { onJumpBookmark(true) },
@@ -1220,184 +1212,52 @@ fun EditorWorkspaceScreen(
                                 imageVector = Icons.Default.SkipNext,
                                 contentDescription = "Next",
                                 tint = Color.White,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
 
-                    // Right Cluster: Layers Menu | Undo | Redo
+                    // Right Cluster: Camera View Toggle | Undo | Redo
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box {
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { showClipboardMenu = true }
-                                    .testTag(if (isLayerSheetOpen) "topbar_clipboard_button" else "duplicate_layer_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Layers,
-                                    contentDescription = "Layer menu",
-                                    tint = if (state.hasCopiedLayer || state.hasCopiedEffects) PlayheadEmerald else Color.White,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-
-                            DropdownMenu(
-                                expanded = showClipboardMenu,
-                                onDismissRequest = { showClipboardMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Copy") },
-                                    enabled = selectedLayer != null,
-                                    onClick = {
-                                        onCopyLayer()
-                                        showClipboardMenu = false
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    when {
+                                        !state.activeCameraPreviewEnabled -> KeyflowBlue.copy(alpha = 0.20f)
+                                        hasCameraInProject -> KeyflowBlue.copy(alpha = 0.12f)
+                                        else -> Color.Transparent
                                     }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("Paste") },
-                                    enabled = state.hasCopiedLayer,
-                                    onClick = {
-                                        onPasteLayer()
-                                        showClipboardMenu = false
+                                .combinedClickable(
+                                    onClick = onToggleCameraPreview,
+                                    onLongClick = {
+                                        if (!hasCameraInProject) onAddLayer(LayerType.CAMERA, "")
+                                        else onToggleCameraPreview()
                                     }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("Duplicate") },
-                                    enabled = selectedLayer != null,
-                                    onClick = {
-                                        onDuplicateLayer()
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                if (selectedLayer != null) {
-                                    HorizontalDivider(color = OutlineSubtle)
-                                    DropdownMenuItem(
-                                        text = { Text("Bring Forward") },
-                                        onClick = {
-                                            onMoveLayerZOrder(selectedLayer.id, false)
-                                            showClipboardMenu = false
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Send Backward") },
-                                        onClick = {
-                                            onMoveLayerZOrder(selectedLayer.id, true)
-                                            showClipboardMenu = false
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text(if (state.soloLayerId == selectedLayer.id) "Un-solo" else "Solo") },
-                                        onClick = {
-                                            onToggleSoloLayer(selectedLayer.id)
-                                            showClipboardMenu = false
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Expand to End") },
-                                        onClick = {
-                                            onExpandLayerToComp()
-                                            showClipboardMenu = false
-                                        }
-                                    )
-                                }
-                                if (project.layers.size >= 2) {
-                                    DropdownMenuItem(
-                                        text = { Text("Group Rig") },
-                                        onClick = {
-                                            onGroupIntoNullRig()
-                                            showClipboardMenu = false
-                                        }
-                                    )
-                                }
-                                if (selectedLayer?.type == LayerType.VIDEO) {
-                                    HorizontalDivider(color = OutlineSubtle)
-                                    DropdownMenuItem(
-                                        text = { Text("Extract Audio", color = AudioCyan, fontWeight = FontWeight.Bold) },
-                                        onClick = {
-                                            onExtractAudioFromVideo()
-                                            showClipboardMenu = false
-                                        }
-                                    )
-                                }
-                                HorizontalDivider(color = OutlineSubtle)
-                                DropdownMenuItem(
-                                    text = { Text("Fit") },
-                                    enabled = selectedLayer != null && selectedLayer.type != LayerType.AUDIO,
-                                    onClick = {
-                                        onFitOrFillComposition(false)
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Fill") },
-                                    enabled = selectedLayer != null && selectedLayer.type != LayerType.AUDIO,
-                                    onClick = {
-                                        onFitOrFillComposition(true)
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (selectedLayer?.isClippingMask == true) "Unmask" else "Mask") },
-                                    enabled = selectedLayer != null && selectedLayer.type != LayerType.AUDIO,
-                                    onClick = {
-                                        if (selectedLayer != null) onToggleClippingMask(selectedLayer.id)
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                HorizontalDivider(color = OutlineSubtle)
-                                DropdownMenuItem(
-                                    text = { Text("Copy Effects") },
-                                    enabled = selectedLayer?.effects?.isNotEmpty() == true,
-                                    onClick = {
-                                        onCopyEffects()
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Paste Effects") },
-                                    enabled = state.hasCopiedEffects && selectedLayer != null,
-                                    onClick = {
-                                        onPasteEffects()
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                HorizontalDivider(color = OutlineSubtle)
-                                DropdownMenuItem(
-                                    text = { Text("Flip H") },
-                                    enabled = selectedLayer != null,
-                                    onClick = {
-                                        onFlipLayer(true)
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Flip V") },
-                                    enabled = selectedLayer != null,
-                                    onClick = {
-                                        onFlipLayer(false)
-                                        showClipboardMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Reset") },
-                                    enabled = selectedLayer != null,
-                                    onClick = {
-                                        onResetTransform()
-                                        showClipboardMenu = false
-                                    }
-                                )
-                            }
+                                .testTag("toggle_camera_view_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (state.activeCameraPreviewEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                                contentDescription = if (state.activeCameraPreviewEnabled) "Camera View Active" else "Custom View (Camera Off)",
+                                tint = when {
+                                    !state.activeCameraPreviewEnabled -> KeyflowBlueBright
+                                    hasCameraInProject -> KeyflowBlueBright
+                                    else -> Color(0xFFB8C0CE)
+                                },
+                                modifier = Modifier.size(17.dp)
+                            )
                         }
 
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(30.dp)
                                 .clip(RoundedCornerShape(6.dp))
                                 .clickable(enabled = state.canUndo, onClick = onUndo)
                                 .testTag("editor_undo_button"),
@@ -1407,13 +1267,13 @@ fun EditorWorkspaceScreen(
                                 imageVector = Icons.AutoMirrored.Filled.Undo,
                                 contentDescription = "Undo",
                                 tint = if (state.canUndo) Color.White else Color(0xFF505664),
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier.size(17.dp)
                             )
                         }
 
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(30.dp)
                                 .clip(RoundedCornerShape(6.dp))
                                 .clickable(enabled = state.canRedo, onClick = onRedo)
                                 .testTag("editor_redo_button"),
@@ -1423,19 +1283,132 @@ fun EditorWorkspaceScreen(
                                 imageVector = Icons.AutoMirrored.Filled.Redo,
                                 contentDescription = "Redo",
                                 tint = if (state.canRedo) Color.White else Color(0xFF505664),
-                                modifier = Modifier.size(19.dp)
+                                modifier = Modifier.size(17.dp)
                             )
+                        }
+                    }
+                }
+
+                // Middle Timeline Action Strip: Copy | Paste | Duplicate | Group | Pre-render Layer/Group | FX/Solo Menu
+                HorizontalDivider(thickness = 0.5.dp, color = TimelineHairline.copy(alpha = 0.7f))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(32.dp)
+                        .background(TimelineToolbarSubBg)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    MiddleToolbarActionPill(
+                        icon = Icons.Default.ContentCopy,
+                        label = "Copy",
+                        enabled = selectedLayer != null,
+                        onClick = onCopyLayer,
+                        testTag = "timeline_copy_button"
+                    )
+                    MiddleToolbarActionPill(
+                        icon = Icons.Default.ContentPaste,
+                        label = "Paste",
+                        enabled = state.hasCopiedLayer,
+                        highlighted = state.hasCopiedLayer,
+                        onClick = onPasteLayer,
+                        testTag = "timeline_paste_button"
+                    )
+                    MiddleToolbarActionPill(
+                        icon = Icons.Default.FilterNone,
+                        label = "Duplicate",
+                        enabled = selectedLayer != null,
+                        onClick = onDuplicateLayer,
+                        testTag = "duplicate_layer_button"
+                    )
+                    MiddleToolbarActionPill(
+                        icon = Icons.Default.Folder,
+                        label = if (multiSelectCount > 1) "Group ($multiSelectCount)" else "Group",
+                        enabled = selectedLayer != null || multiSelectCount > 0,
+                        highlighted = multiSelectCount > 1,
+                        accentColor = Color(0xFFA78BFA),
+                        onClick = onGroupSelectedLayers,
+                        testTag = "timeline_group_button"
+                    )
+                    MiddleToolbarActionPill(
+                        icon = Icons.Default.Bolt,
+                        label = when {
+                            selectedLayer?.type == LayerType.GROUP && isSelectedLayerOrGroupCached -> "Group Cached"
+                            selectedLayer?.type == LayerType.GROUP -> "Pre-render Group"
+                            isSelectedLayerOrGroupCached -> "Layer Cached"
+                            else -> "Pre-render Layer"
+                        },
+                        enabled = selectedLayer != null,
+                        highlighted = isSelectedLayerOrGroupCached,
+                        accentColor = KeyflowBlueBright,
+                        onClick = onPreRenderLayerOrGroup,
+                        testTag = "timeline_prerender_layer_button"
+                    )
+
+                    Box {
+                        MiddleToolbarActionPill(
+                            icon = Icons.Default.MoreHoriz,
+                            label = "FX / Solo",
+                            enabled = selectedLayer != null || state.hasCopiedEffects,
+                            highlighted = state.hasCopiedEffects || state.soloLayerId != null,
+                            onClick = { showClipboardMenu = true },
+                            testTag = "topbar_clipboard_button"
+                        )
+
+                        DropdownMenu(
+                            expanded = showClipboardMenu,
+                            onDismissRequest = { showClipboardMenu = false },
+                            modifier = Modifier.widthIn(min = 156.dp, max = 196.dp)
+                        ) {
+                            CompactMenuRow(
+                                label = "Copy Effects",
+                                enabled = selectedLayer?.effects?.isNotEmpty() == true,
+                                onClick = {
+                                    onCopyEffects()
+                                    showClipboardMenu = false
+                                }
+                            )
+                            CompactMenuRow(
+                                label = "Paste Effects",
+                                enabled = state.hasCopiedEffects && selectedLayer != null,
+                                onClick = {
+                                    onPasteEffects()
+                                    showClipboardMenu = false
+                                }
+                            )
+                            if (selectedLayer != null) {
+                                HorizontalDivider(color = OutlineSubtle)
+                                CompactMenuRow(
+                                    label = if (state.soloLayerId == selectedLayer.id) "Un-solo Layer" else "Solo Layer",
+                                    onClick = {
+                                        onToggleSoloLayer(selectedLayer.id)
+                                        showClipboardMenu = false
+                                    }
+                                )
+                                if (selectedLayer.type == LayerType.VIDEO) {
+                                    CompactMenuRow(
+                                        label = "Extract Audio",
+                                        accent = AudioCyan,
+                                        onClick = {
+                                            onExtractAudioFromVideo()
+                                            showClipboardMenu = false
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
                 HorizontalDivider(thickness = 0.7.dp, color = TimelineHairline)
             }
 
-            // 3. BOTTOM HALF: KEYFLOW TIMELINE + SELECTED-LAYER DOCK OR SPLIT SUB-INSPECTOR DRAWER
+            // 3. BOTTOM HALF: FREELY MOVABLE ALIGHT MOTION TIMELINE + SINGLE PLAYHEAD
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.55f)
+                    .weight(0.56f)
                     .background(TimelinePitchBlack)
             ) {
                 val isSubInspectorOpen = selectedLayer != null &&
@@ -1446,11 +1419,10 @@ fun EditorWorkspaceScreen(
                 if (isSubInspectorOpen && selectedLayer != null) {
                     val selIdx = project.layers.indexOfFirst { it.id == selectedLayer.id }
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Compact Timeline Strip (Time Ruler + Selected Layer Track) matching KeyFlow Effects / Sub-Panel screenshots
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(74.dp)
+                                .height(72.dp)
                                 .background(TimelinePitchBlack)
                         ) {
                             AmMultitrackTimelineArea(
@@ -1463,16 +1435,18 @@ fun EditorWorkspaceScreen(
                                 onScrubPlayhead = onScrubPlayhead,
                                 onSetTimelineZoom = onSetTimelineZoom,
                                 onSelectLayer = onSelectLayer,
+                                onToggleLayerMultiSelection = onToggleLayerMultiSelection,
+                                onDeselectLayer = onDeselectLayer,
                                 onMoveLayerTimeRange = onMoveLayerTimeRange,
+                                onMoveLayerToIndex = onMoveLayerToIndex,
                                 onToggleLayerVisibility = onToggleLayerVisibility,
+                                onToggleGroupExpanded = onToggleGroupExpanded,
                                 onToggleFloatingBeatReactor = { showFloatingBeatReactor = !showFloatingBeatReactor },
                                 onNavigateTool = onNavigateTool,
-                                onAddNullRig = { onAddLayer(LayerType.NULL_OBJECT, "") },
-                                onOpenAddDrawer = { showAddDrawer = true }
+                                onOpenAddDrawer = { setShowAddDrawer(true) }
                             )
                         }
 
-                        // KeyFlow Split Sub-Inspector Drawer (Left 50dp Tool Rail + Right Content)
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -1482,7 +1456,7 @@ fun EditorWorkspaceScreen(
                                 activeTab = state.inspectorTab,
                                 selectedLayer = selectedLayer,
                                 allLayers = project.layers,
-                                projectDurationMs = project.durationMs,
+                                projectDurationMs = project.effectiveEditDurationMs(),
                                 selectedProperty = state.selectedProperty,
                                 selectedEffectId = state.selectedEffectId,
                                 selectedEffectSlot = state.selectedEffectSlot,
@@ -1495,14 +1469,20 @@ fun EditorWorkspaceScreen(
                                 canMoveBackward = selIdx > 0,
                                 onMoveLayerZOrder = { sendBack -> onMoveLayerZOrder(selectedLayer.id, sendBack) },
                                 onRenameLayer = onRenameLayer,
+                                onShowMediaInfo = { showMediaInfoDialog = true },
                                 onSetInspectorTab = onSetInspectorTab,
-                                onCollapseToTimeline = onCollapseToTimeline,
+                                onCollapseToTimeline = onDeselectLayer,
                                 onScrubPlayhead = onScrubPlayhead,
                                 onSelectProperty = onSelectProperty,
                                 onUpdatePropertyValue = onUpdatePropertyValue,
                                 onUpdateExpression = onUpdateExpression,
                                 onDragLayerOnCanvas = onDragLayerOnCanvas,
                                 onResetTransform = onResetTransform,
+                                onResetPropertyTarget = onResetPropertyTarget,
+                                onResetMoveSubMode = onResetMoveSubMode,
+                                onResetStroke = onResetStroke,
+                                onResetShadow = onResetShadow,
+                                onResetSingleEffectParam = onResetSingleEffectParam,
                                 onToggleKeyframe = onToggleKeyframe,
                                 onJumpKeyframe = onJumpKeyframe,
                                 onUpdateBezierHandles = onUpdateBezierHandles,
@@ -1547,6 +1527,34 @@ fun EditorWorkspaceScreen(
                                 onFlipLayer = onFlipLayer,
                                 onDuplicateLayer = onDuplicateLayer,
                                 onDeleteLayer = onDeleteSelectedLayer,
+                                onPreRenderLayerOrGroup = onPreRenderLayerOrGroup,
+                                activeMaskId = state.activeMaskId,
+                                penMaskEditActive = state.penMaskEditActive,
+                                rotoBrushActive = state.rotoBrushActive,
+                                rotoTargetMode = state.rotoTargetMode,
+                                rotoBrushRadiusDp = state.rotoBrushRadiusDp,
+                                rotoStrokeCount = rotoStrokes.size,
+                                isRotoPropagating = state.isRotoPropagating,
+                                rotoPropagateProgress = state.rotoPropagateProgress,
+                                showRotoModelDownloadDialog = state.showRotoModelDownloadDialog,
+                                rotoModelState = rotoModelState,
+                                onAddMask = onAddMask,
+                                onSelectMask = onSelectMask,
+                                onSetPenMaskEditMode = onSetPenMaskEditMode,
+                                onUpdateMask = onUpdateMask,
+                                onRemoveMask = onRemoveMask,
+                                onActivateRotoBrush = onActivateRotoBrush,
+                                onDismissRotoDownloadDialog = onDismissRotoDownloadDialog,
+                                onConfirmDownloadRotoModels = onConfirmDownloadRotoModels,
+                                onSetRotoTargetMode = onSetRotoTargetMode,
+                                onSetRotoBrushRadiusDp = onSetRotoBrushRadiusDp,
+                                onRunAutoRoto = onRunAutoRoto,
+                                onUndoRotoStroke = onUndoRotoStroke,
+                                onRedoRotoStroke = onRedoRotoStroke,
+                                onClearRotoStrokes = onClearRotoStrokes,
+                                onPropagateRoto = onPropagateRoto,
+                                onCancelRotoPropagation = onCancelRotoPropagation,
+                                onRelinkMissingMedia = onRelinkMissingMedia,
                                 onToggleVisibility = onToggleLayerVisibility,
                                 onToggleLock = onToggleLayerLock,
                                 onSetLayerParent = onSetLayerParent,
@@ -1573,7 +1581,6 @@ fun EditorWorkspaceScreen(
                         }
                     }
                 } else if (isLayerSheetOpen && selectedLayer != null && !showAddDrawer) {
-                    // KeyFlow Layer Clicked Overview: Full Multitrack Timeline + 4-Segment Trim/Split/Delete Pill + Bottom Nav Dock
                     Column(modifier = Modifier.fillMaxSize()) {
                         Box(
                             modifier = Modifier
@@ -1590,25 +1597,28 @@ fun EditorWorkspaceScreen(
                                 onScrubPlayhead = onScrubPlayhead,
                                 onSetTimelineZoom = onSetTimelineZoom,
                                 onSelectLayer = onSelectLayer,
+                                onToggleLayerMultiSelection = onToggleLayerMultiSelection,
+                                onDeselectLayer = onDeselectLayer,
                                 onMoveLayerTimeRange = onMoveLayerTimeRange,
+                                onMoveLayerToIndex = onMoveLayerToIndex,
                                 onToggleLayerVisibility = onToggleLayerVisibility,
+                                onToggleGroupExpanded = onToggleGroupExpanded,
                                 onToggleFloatingBeatReactor = { showFloatingBeatReactor = !showFloatingBeatReactor },
                                 onNavigateTool = onNavigateTool,
-                                onAddNullRig = { onAddLayer(LayerType.NULL_OBJECT, "") },
-                                onOpenAddDrawer = { showAddDrawer = true }
+                                onOpenAddDrawer = { setShowAddDrawer(true) }
                             )
                         }
 
                         KeyflowSelectedLayerBottomDock(
                             selectedLayer = selectedLayer,
-                            onCollapseToTimeline = onCollapseToTimeline,
+                            onCollapseToTimeline = onDeselectLayer,
                             onTrimStart = onTrimStart,
                             onPullStart = onPullStart,
                             onSplitLayer = onSplitLayer,
                             onTrimEnd = onTrimEnd,
                             onPullEnd = onPullEnd,
                             onDeleteLayer = onDeleteSelectedLayer,
-                            onToggleMask = { onToggleClippingMask(selectedLayer.id) },
+                            onToggleMask = { onSetInspectorTab(AmInspectorTab.MASK_ROTO) },
                             onOpenInspectorTab = onSetInspectorTab
                         )
                     }
@@ -1623,12 +1633,15 @@ fun EditorWorkspaceScreen(
                         onScrubPlayhead = onScrubPlayhead,
                         onSetTimelineZoom = onSetTimelineZoom,
                         onSelectLayer = onSelectLayer,
+                        onToggleLayerMultiSelection = onToggleLayerMultiSelection,
+                        onDeselectLayer = onDeselectLayer,
                         onMoveLayerTimeRange = onMoveLayerTimeRange,
+                        onMoveLayerToIndex = onMoveLayerToIndex,
                         onToggleLayerVisibility = onToggleLayerVisibility,
+                        onToggleGroupExpanded = onToggleGroupExpanded,
                         onToggleFloatingBeatReactor = { showFloatingBeatReactor = !showFloatingBeatReactor },
                         onNavigateTool = onNavigateTool,
-                        onAddNullRig = { onAddLayer(LayerType.NULL_OBJECT, "") },
-                        onOpenAddDrawer = { showAddDrawer = true }
+                        onOpenAddDrawer = { setShowAddDrawer(true) }
                     )
                 }
 
@@ -1639,6 +1652,7 @@ fun EditorWorkspaceScreen(
                 ) {
                     AmAddElementBottomSheet(
                         hasCopiedLayer = state.hasCopiedLayer,
+                        pinnedAePlugins = pinnedAePlugins,
                         onAddShapeKind = onAddShapeKind,
                         onAddLayerType = { type -> onAddLayer(type, "") },
                         onPickVideo = {
@@ -1650,14 +1664,201 @@ fun EditorWorkspaceScreen(
                         onPickAudio = {
                             audioPicker.launch("audio/*")
                         },
+                        onImportUniversalFile = {
+                            universalImportPicker.launch(arrayOf("*/*"))
+                        },
                         onPasteLayer = onPasteLayer,
                         onAddBeatBookmark = onToggleBeatBookmark,
+                        onAddAdjustmentLayer = onAddAdjustmentLayer,
+                        onOpenAePlugin = onOpenAePlugin,
                         onNavigateTool = onNavigateTool,
-                        onDismiss = { showAddDrawer = false }
+                        onDismiss = { setShowAddDrawer(false) }
                     )
                 }
             }
         }
+
+        // Non-modal floating AE / ScriptUI plugin panel overlay (timeline & inspector stay interactive underneath!)
+        if (activeFloatingPlugin != null && pluginHostRepository != null) {
+            PluginFloatingWindowHost(
+                plugin = activeFloatingPlugin,
+                pluginRepository = pluginHostRepository,
+                asBottomSheet = state.activeFloatingPluginAsSheet,
+                onStatusMessage = onStatusMessage,
+                onClose = onCloseFloatingPlugin
+            )
+        }
+        }
+    }
+}
+
+@Composable
+private fun MiddleToolbarActionPill(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    highlighted: Boolean = false,
+    accentColor: Color = KeyflowBlueBright,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val bgColor = when {
+        !enabled -> Color(0xFF0E121B).copy(alpha = 0.55f)
+        highlighted -> accentColor.copy(alpha = 0.20f)
+        else -> Color(0xFF121723)
+    }
+    val borderColor = when {
+        !enabled -> Color(0xFF1C2332)
+        highlighted -> accentColor.copy(alpha = 0.85f)
+        else -> Color(0xFF273145)
+    }
+    val contentTint = when {
+        !enabled -> Color(0xFF535D70)
+        highlighted -> accentColor
+        else -> Color(0xFFE4E9F5)
+    }
+
+    Row(
+        modifier = Modifier
+            .height(24.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(bgColor)
+            .border(0.8.dp, borderColor, RoundedCornerShape(6.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag(testTag)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = contentTint,
+            modifier = Modifier.size(13.dp)
+        )
+        Text(
+            text = label,
+            fontSize = 10.5.sp,
+            fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Medium,
+            color = contentTint,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun CompactMenuRow(
+    label: String,
+    enabled: Boolean = true,
+    accent: Color? = null,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (accent != null) FontWeight.Bold else FontWeight.Medium,
+                color = when {
+                    !enabled -> TextSecondary.copy(alpha = 0.45f)
+                    accent != null -> accent
+                    else -> TextPrimary
+                }
+            )
+        },
+        enabled = enabled,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+        modifier = Modifier.height(34.dp),
+        onClick = onClick
+    )
+}
+
+@Composable
+private fun KeyflowMediaInfoDialog(
+    layer: Layer,
+    project: Project,
+    onDismiss: () -> Unit
+) {
+    val activeSpanMs = (layer.endTimeMs - layer.startTimeMs).coerceAtLeast(0L)
+    val resolutionLabel = if (layer.mediaWidth > 0 && layer.mediaHeight > 0) {
+        "${layer.mediaWidth} × ${layer.mediaHeight} px"
+    } else {
+        "${project.width} × ${project.height} px (Comp)"
+    }
+    val sourceUriName = layer.mediaUri.substringAfterLast('/').ifBlank { "Procedural / Internal Layer" }
+    val speedLabel = buildString {
+        append(String.format("%.2fx", layer.speedMultiplier))
+        if (layer.reversed) append(" · Reversed")
+        if (layer.timeRemapEnabled) append(" · Time Remapped")
+        if (layer.freezeFrameMs != null) append(" · Frozen")
+    }
+    val audioInfo = when (layer.type) {
+        LayerType.VIDEO, LayerType.AUDIO -> {
+            if (layer.audioMuted) "Muted (${(layer.audioVolume * 100).toInt()}%)"
+            else "${(layer.audioVolume * 100).toInt()}% · Preset: ${layer.audioPreset}"
+        }
+        else -> "No Audio Track"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceDark,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = KeyflowBlueBright, modifier = Modifier.size(20.dp))
+                Text("Media & Layer Info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimary)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MediaInfoLine("Layer Name", layer.name)
+                MediaInfoLine("Type", layer.type.label)
+                MediaInfoLine("Source", sourceUriName)
+                MediaInfoLine("Resolution", resolutionLabel)
+                MediaInfoLine("Frame Rate", "${project.fps} FPS")
+                if (layer.sourceDurationMs > 0L) {
+                    MediaInfoLine("Source Length", String.format("%.2fs (%d ms)", layer.sourceDurationMs / 1000f, layer.sourceDurationMs))
+                }
+                MediaInfoLine(
+                    "Timeline Span",
+                    "${String.format("%.2fs", layer.startTimeMs / 1000f)} → ${String.format("%.2fs", layer.endTimeMs / 1000f)} (${String.format("%.2fs", activeSpanMs / 1000f)})"
+                )
+                if (layer.sourceOffsetMs > 0L) {
+                    MediaInfoLine("Trim In Offset", "${layer.sourceOffsetMs} ms")
+                }
+                MediaInfoLine("Speed / Timing", speedLabel)
+                MediaInfoLine("Audio", audioInfo)
+                MediaInfoLine("Effects / Keyframes", "${layer.effects.size} FX · ${layer.allKeyframeTimes().size} Keyframes")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Done", color = KeyflowBlueBright, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+@Composable
+private fun MediaInfoLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -1669,9 +1870,9 @@ private fun AmFloatingBeatReactorPopover(
     selectedLayer: Layer?,
     selectedProperty: PropertyTarget,
     onAutoDetectBass: (Float) -> Unit,
-    onToggleBeatAtPlayhead: () -> Unit,
     onClearBeats: () -> Unit,
     onBindAudioToProperty: (AudioBand, Float) -> Unit,
+    onBakeBeatsToKeyframes: (PropertyTarget, Float, Long) -> Unit = { _, _, _ -> },
     onOpenFullAudioStudio: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1701,7 +1902,7 @@ private fun AmFloatingBeatReactorPopover(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(Icons.Default.GraphicEq, contentDescription = null, tint = BookmarkSkyBlue, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.GraphicEq, contentDescription = null, tint = KeyflowBlueBright, modifier = Modifier.size(16.dp))
                     Text(
                         text = "Beats ($beatCount)",
                         style = MaterialTheme.typography.labelLarge,
@@ -1725,8 +1926,8 @@ private fun AmFloatingBeatReactorPopover(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        Text("Audio", style = MaterialTheme.typography.labelSmall, color = AudioCyan, fontWeight = FontWeight.SemiBold)
-                        Icon(Icons.Default.OpenInNew, contentDescription = "Audio", tint = AudioCyan, modifier = Modifier.size(11.dp))
+                        Text("Studio", style = MaterialTheme.typography.labelSmall, color = KeyflowBlueBright, fontWeight = FontWeight.SemiBold)
+                        Icon(Icons.Default.OpenInNew, contentDescription = "Audio", tint = KeyflowBlueBright, modifier = Modifier.size(11.dp))
                     }
                     Box(
                         modifier = Modifier
@@ -1746,10 +1947,10 @@ private fun AmFloatingBeatReactorPopover(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Bass", style = MaterialTheme.typography.labelSmall, color = BookmarkSkyBlue, fontWeight = FontWeight.Bold)
+                Text("Bass", style = MaterialTheme.typography.labelSmall, color = KeyflowBlueBright, fontWeight = FontWeight.Bold)
                 LinearProgressIndicator(
                     progress = { bassLevel.coerceIn(0f, 1f) },
-                    color = BookmarkSkyBlue,
+                    color = KeyflowBlueBright,
                     trackColor = PanelDark,
                     modifier = Modifier
                         .width(52.dp)
@@ -1765,7 +1966,7 @@ private fun AmFloatingBeatReactorPopover(
                     value = localSens,
                     onValueChange = { localSens = it.coerceIn(0.15f, 1f) },
                     valueRange = 0.15f..1f,
-                    colors = SliderDefaults.colors(thumbColor = AmTealBright, activeTrackColor = AmTeal),
+                    colors = SliderDefaults.colors(thumbColor = KeyflowBlueBright, activeTrackColor = KeyflowBlue),
                     modifier = Modifier
                         .weight(1f)
                         .height(24.dp)
@@ -1782,7 +1983,7 @@ private fun AmFloatingBeatReactorPopover(
                         .weight(1f)
                         .height(32.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Brush.linearGradient(listOf(AmTealBright, AmTeal)))
+                        .background(Brush.linearGradient(listOf(KeyflowBlueBright, KeyflowBlue)))
                         .clickable { onAutoDetectBass(localSens) }
                         .testTag("floating_auto_detect_bass_button")
                         .padding(horizontal = 8.dp),
@@ -1792,26 +1993,37 @@ private fun AmFloatingBeatReactorPopover(
                     Icon(Icons.Default.Bolt, contentDescription = null, tint = DeepBlack, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Detect",
+                        text = "Detect Beats",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = DeepBlack
                     )
                 }
 
-                Row(
-                    modifier = Modifier
-                        .height(32.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(PanelDark)
-                        .border(0.8.dp, OutlineSubtle, RoundedCornerShape(8.dp))
-                        .clickable(onClick = onToggleBeatAtPlayhead)
-                        .padding(horizontal = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.Bookmark, contentDescription = null, tint = BookmarkSkyBlue, modifier = Modifier.size(13.dp))
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text("Add", style = MaterialTheme.typography.labelSmall, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                if (beatCount > 0 && selectedLayer != null) {
+                    Row(
+                        modifier = Modifier
+                            .height(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(KeyflowBlue.copy(alpha = 0.20f))
+                            .border(0.8.dp, KeyflowBlue, RoundedCornerShape(8.dp))
+                            .clickable {
+                                val pulse = when (selectedProperty) {
+                                    PropertyTarget.SCALE -> 18f
+                                    PropertyTarget.OPACITY -> -25f
+                                    PropertyTarget.ROTATION_Z -> 12f
+                                    else -> 28f
+                                }
+                                onBakeBeatsToKeyframes(selectedProperty, pulse, 180L)
+                            }
+                            .testTag("floating_bake_beat_keyframes_button")
+                            .padding(horizontal = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Diamond, contentDescription = null, tint = KeyframeAmber, modifier = Modifier.size(12.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Bake KF", style = MaterialTheme.typography.labelSmall, color = KeyflowBlueBright, fontWeight = FontWeight.Bold)
+                    }
                 }
 
                 if (beatCount > 0) {
@@ -1823,7 +2035,7 @@ private fun AmFloatingBeatReactorPopover(
                             .border(0.8.dp, NeonPink.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
                             .clickable(onClick = onClearBeats)
                             .testTag("floating_clear_beats_button")
-                            .padding(horizontal = 9.dp),
+                            .padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Clear", style = MaterialTheme.typography.labelSmall, color = NeonPink, fontWeight = FontWeight.Bold)
@@ -1858,17 +2070,11 @@ private fun AmFloatingBeatReactorPopover(
     }
 }
 
-private val TIMELINE_LEFT_GUTTER = 34.dp
+private val TIMELINE_LEFT_GUTTER = 46.dp
 private val TIMELINE_RIGHT_GUTTER = 34.dp
 private val TIMELINE_ROW_HEIGHT = 34.dp
+private val TIMELINE_RULER_HEIGHT = 28.dp
 
-/**
- * Full-width Pitch-Black Alight Motion Timeline Area matching the reference UI layout:
- * - Time Ruler with top emerald cache line, clean integer second labels (0, 1, 2...),
- *   sky-blue bookmark pins, and a bright green MM:SS:FF capsule connected to a 1.5dp vertical green playhead line.
- * - Full-width pitch-black layer rows: [Eye Gutter] | [Colored Bordered Clip Pills + Inline Name & Diamonds] | [≡ Handle].
- * - Supports 2-finger pinch zoom (0.5x..5.0x), synchronized horizontal scroll, and hold-to-drag clip shifting.
- */
 @Composable
 private fun KeyflowSelectedLayerBottomDock(
     selectedLayer: Layer,
@@ -1888,7 +2094,6 @@ private fun KeyflowSelectedLayerBottomDock(
             .background(TimelinePitchBlack)
             .navigationBarsPadding()
     ) {
-        // 1. KeyFlow 4-Segment Dark Pill Bar: [ |< ] | [ >|< ] | [ >| ] | [ Trash ]
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1930,18 +2135,15 @@ private fun KeyflowSelectedLayerBottomDock(
                     .testTag("split_layer_button"),
                 contentAlignment = Alignment.Center
             ) {
-                // KeyFlow signature |>|<| split icon
                 Canvas(modifier = Modifier.size(20.dp)) {
                     val c = KeyflowBlueBright
                     val cy = size.height * 0.5f
                     val cx = size.width * 0.5f
                     val sw = 1.8.dp.toPx()
                     drawLine(c, Offset(cx, 2.dp.toPx()), Offset(cx, size.height - 2.dp.toPx()), strokeWidth = sw)
-                    // Left arrow ->|
                     drawLine(c, Offset(2.dp.toPx(), cy), Offset(cx - 2.5.dp.toPx(), cy), strokeWidth = sw)
                     drawLine(c, Offset(cx - 5.5.dp.toPx(), cy - 3.2.dp.toPx()), Offset(cx - 2.2.dp.toPx(), cy), strokeWidth = sw)
                     drawLine(c, Offset(cx - 5.5.dp.toPx(), cy + 3.2.dp.toPx()), Offset(cx - 2.2.dp.toPx(), cy), strokeWidth = sw)
-                    // Right arrow |<-
                     drawLine(c, Offset(size.width - 2.dp.toPx(), cy), Offset(cx + 2.5.dp.toPx(), cy), strokeWidth = sw)
                     drawLine(c, Offset(cx + 5.5.dp.toPx(), cy - 3.2.dp.toPx()), Offset(cx + 2.2.dp.toPx(), cy), strokeWidth = sw)
                     drawLine(c, Offset(cx + 5.5.dp.toPx(), cy + 3.2.dp.toPx()), Offset(cx + 2.2.dp.toPx(), cy), strokeWidth = sw)
@@ -1997,17 +2199,16 @@ private fun KeyflowSelectedLayerBottomDock(
 
         HorizontalDivider(thickness = 0.7.dp, color = KeyflowRailDivider)
 
-        // 2. KeyFlow Bottom Navigation Bar: [ < ] | [ Edit | Move | Mask | Effects | Blending | Speed | Color | Border ]
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp)
+                .height(54.dp)
                 .background(KeyflowDrawerBg),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .width(44.dp)
+                    .width(42.dp)
                     .fillMaxHeight()
                     .clickable(onClick = onCollapseToTimeline)
                     .testTag("collapse_layer_sheet_button"),
@@ -2015,9 +2216,9 @@ private fun KeyflowSelectedLayerBottomDock(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "Collapse Layer Bar",
+                    contentDescription = "Deselect Layer",
                     tint = KeyflowBlueBright,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(23.dp)
                 )
             }
 
@@ -2037,47 +2238,11 @@ private fun KeyflowSelectedLayerBottomDock(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 KeyflowBottomNavTab(
-                    label = "Edit",
-                    testTag = "tile_edit_layer",
-                    onClick = {
-                        if (selectedLayer.type == LayerType.VIDEO || selectedLayer.type == LayerType.AUDIO) {
-                            onOpenInspectorTab(AmInspectorTab.SPEED_TIMING)
-                        } else {
-                            onOpenInspectorTab(AmInspectorTab.EDIT_LAYER)
-                        }
-                    }
-                ) {
-                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
-                }
-
-                KeyflowBottomNavTab(
                     label = "Move",
                     testTag = "tile_move_transform",
                     onClick = { onOpenInspectorTab(AmInspectorTab.MOVE_TRANSFORM) }
                 ) {
-                    Icon(Icons.Default.OpenWith, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
-                }
-
-                KeyflowBottomNavTab(
-                    label = "Mask",
-                    active = selectedLayer.isClippingMask,
-                    testTag = "tile_mask_toggle",
-                    onClick = onToggleMask
-                ) {
-                    val tint = if (selectedLayer.isClippingMask) KeyflowBlueBright else Color.White
-                    Canvas(modifier = Modifier.size(20.dp)) {
-                        drawRoundRect(
-                            color = tint,
-                            topLeft = Offset(1.dp.toPx(), 3.dp.toPx()),
-                            size = Size(size.width - 2.dp.toPx(), size.height - 6.dp.toPx()),
-                            cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
-                        )
-                        drawOval(
-                            color = KeyflowDrawerBg,
-                            topLeft = Offset(4.dp.toPx(), 5.5.dp.toPx()),
-                            size = Size(size.width - 8.dp.toPx(), size.height - 11.dp.toPx())
-                        )
-                    }
+                    Icon(Icons.Default.OpenWith, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
                 }
 
                 KeyflowBottomNavTab(
@@ -2090,8 +2255,55 @@ private fun KeyflowSelectedLayerBottomDock(
                         imageVector = Icons.Default.AutoAwesome,
                         contentDescription = null,
                         tint = if (selectedLayer.effects.isNotEmpty()) KeyflowBlueBright else Color.White,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
+                }
+
+                KeyflowBottomNavTab(
+                    label = "Edit",
+                    testTag = "tile_edit_layer",
+                    onClick = {
+                        if (selectedLayer.type == LayerType.VIDEO || selectedLayer.type == LayerType.AUDIO) {
+                            onOpenInspectorTab(AmInspectorTab.SPEED_TIMING)
+                        } else {
+                            onOpenInspectorTab(AmInspectorTab.EDIT_LAYER)
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
+                }
+
+                if (selectedLayer.type == LayerType.SHAPE ||
+                    selectedLayer.type == LayerType.TEXT ||
+                    selectedLayer.type == LayerType.MODEL_3D
+                ) {
+                    KeyflowBottomNavTab(
+                        label = "Color",
+                        testTag = "tile_color_fill",
+                        onClick = { onOpenInspectorTab(AmInspectorTab.COLOR_FILL) }
+                    ) {
+                        Icon(Icons.Default.Palette, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
+                    }
+                }
+
+                if (selectedLayer.type != LayerType.AUDIO &&
+                    selectedLayer.type != LayerType.CAMERA &&
+                    selectedLayer.type != LayerType.NULL_OBJECT &&
+                    selectedLayer.type != LayerType.GROUP
+                ) {
+                    KeyflowBottomNavTab(
+                        label = "Border",
+                        active = selectedLayer.strokeEnabled || selectedLayer.shadowEnabled,
+                        testTag = "tile_border_shadow",
+                        onClick = { onOpenInspectorTab(AmInspectorTab.BORDER_SHADOW) }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BorderStyle,
+                            contentDescription = null,
+                            tint = if (selectedLayer.strokeEnabled || selectedLayer.shadowEnabled) KeyflowBlueBright else Color.White,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
                 }
 
                 KeyflowBottomNavTab(
@@ -2099,7 +2311,7 @@ private fun KeyflowSelectedLayerBottomDock(
                     testTag = "tile_blending_opacity",
                     onClick = { onOpenInspectorTab(AmInspectorTab.BLENDING_OPACITY) }
                 ) {
-                    Canvas(modifier = Modifier.size(20.dp)) {
+                    Canvas(modifier = Modifier.size(19.dp)) {
                         val drop = Path().apply {
                             moveTo(size.width * 0.5f, 2.dp.toPx())
                             cubicTo(
@@ -2128,30 +2340,47 @@ private fun KeyflowSelectedLayerBottomDock(
                         imageVector = Icons.Default.Speed,
                         contentDescription = null,
                         tint = if (selectedLayer.reversed || selectedLayer.speedMultiplier != 1.0f) KeyflowBlueBright else Color.White,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
-                if (selectedLayer.type == LayerType.SHAPE ||
-                    selectedLayer.type == LayerType.TEXT ||
-                    selectedLayer.type == LayerType.MODEL_3D
-                ) {
+                if (selectedLayer.type != LayerType.AUDIO && selectedLayer.type != LayerType.CAMERA) {
+                    val hasMaskActive = selectedLayer.masks.isNotEmpty() || selectedLayer.isClippingMask
                     KeyflowBottomNavTab(
-                        label = "Color",
-                        testTag = "tile_color_fill",
-                        onClick = { onOpenInspectorTab(AmInspectorTab.COLOR_FILL) }
+                        label = "Mask",
+                        active = hasMaskActive,
+                        testTag = "tile_mask_toggle",
+                        onClick = onToggleMask
                     ) {
-                        Icon(Icons.Default.Palette, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        val tint = if (hasMaskActive) KeyflowBlueBright else Color.White
+                        Canvas(modifier = Modifier.size(19.dp)) {
+                            drawRoundRect(
+                                color = tint,
+                                topLeft = Offset(1.dp.toPx(), 3.dp.toPx()),
+                                size = Size(size.width - 2.dp.toPx(), size.height - 6.dp.toPx()),
+                                cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                            )
+                            drawOval(
+                                color = KeyflowDrawerBg,
+                                topLeft = Offset(4.dp.toPx(), 5.5.dp.toPx()),
+                                size = Size(size.width - 8.dp.toPx(), size.height - 11.dp.toPx())
+                            )
+                        }
                     }
                 }
 
                 KeyflowBottomNavTab(
-                    label = "Border",
-                    active = selectedLayer.strokeEnabled || selectedLayer.shadowEnabled,
-                    testTag = "tile_border_shadow",
-                    onClick = { onOpenInspectorTab(AmInspectorTab.BORDER_SHADOW) }
+                    label = "Plugins",
+                    active = false,
+                    testTag = "tile_plugins",
+                    onClick = { onOpenInspectorTab(AmInspectorTab.EFFECTS) }
                 ) {
-                    Icon(Icons.Default.BorderStyle, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Icon(
+                        imageVector = Icons.Default.Extension,
+                        contentDescription = "After Effects Plugins",
+                        tint = Color.White,
+                        modifier = Modifier.size(19.dp)
+                    )
                 }
             }
         }
@@ -2189,6 +2418,15 @@ private fun KeyflowBottomNavTab(
     }
 }
 
+/**
+ * Alight Motion / KeyFlow Freely Movable 2D Multitrack Timeline:
+ * - ONE SINGLE FIXED VERTICAL PLAYHEAD LINE anchored dead-center horizontally, with zero duplicate lines
+ *   regardless of how many layers exist or are added.
+ * - Full-surface horizontal pan + momentum fling (`Orientation.Horizontal`), vertical layer scrolling
+ *   (`LazyColumn`), 2-finger pinch-to-zoom (`0.25x .. 8.0x`), tap-on-ruler to scrub, tap-on-clip to
+ *   select WITHOUT spawning or interrupting playback, multi-select checkboxes for Grouping, and hold-to-drag
+ *   clip timing & vertical stack reordering.
+ */
 @Composable
 private fun AmMultitrackTimelineArea(
     state: StudioWorkspaceState,
@@ -2200,21 +2438,28 @@ private fun AmMultitrackTimelineArea(
     onScrubPlayhead: (Long) -> Unit,
     onSetTimelineZoom: (Float) -> Unit,
     onSelectLayer: (String) -> Unit,
+    onToggleLayerMultiSelection: (String) -> Unit = {},
+    onDeselectLayer: () -> Unit = {},
     onMoveLayerTimeRange: (String, Long, Boolean) -> Unit,
+    onMoveLayerToIndex: (String, Int) -> Unit = { _, _ -> },
     onToggleLayerVisibility: (String) -> Unit,
+    onToggleGroupExpanded: (String) -> Unit = {},
     onToggleFloatingBeatReactor: () -> Unit,
     onNavigateTool: (StudioDestination) -> Unit,
-    onAddNullRig: () -> Unit,
     onOpenAddDrawer: () -> Unit
 ) {
     val project = state.activeProject
-    val durFloat = project.durationMs.coerceAtLeast(1L).toFloat()
     val density = LocalDensity.current
-    val timelineHScroll = rememberScrollState()
     val currentZoomState = rememberUpdatedState(state.timelineZoom)
     val onZoomUpdated = rememberUpdatedState(onSetTimelineZoom)
+    val latestPlayheadMs by rememberUpdatedState(state.playheadMs)
+    val latestScrubCallback by rememberUpdatedState(onScrubPlayhead)
     val isLayerSelectedMode = state.selectedLayerId != null
-    val activePlayheadColor = if (isLayerSelectedMode) KeyflowBlue else PlayheadEmerald
+    val activePlayheadColor = if (isLayerSelectedMode) KeyflowBlueBright else KeyflowBlue
+    val verticalListState = rememberLazyListState()
+
+    var isAnyClipBeingDragged by remember { mutableStateOf(false) }
+    var panFractionMsAccum by remember { mutableFloatStateOf(0f) }
 
     val rulerLabelPaint = remember(density) {
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2223,9 +2468,9 @@ private fun AmMultitrackTimelineArea(
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
         }
     }
-    val playheadPillTextPaint = remember(density, isLayerSelectedMode) {
+    val playheadPillTextPaint = remember(density) {
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (isLayerSelectedMode) android.graphics.Color.rgb(6, 10, 22) else android.graphics.Color.rgb(4, 18, 8)
+            color = android.graphics.Color.rgb(6, 10, 22)
             textSize = with(density) { 10.sp.toPx() }
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             textAlign = Paint.Align.CENTER
@@ -2235,6 +2480,7 @@ private fun AmMultitrackTimelineArea(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .clipToBounds()
             .background(TimelinePitchBlack)
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -2244,7 +2490,7 @@ private fun AmMultitrackTimelineArea(
                         if (pressedCount >= 2) {
                             val zoomFactor = event.calculateZoom()
                             if (zoomFactor.isFinite() && abs(zoomFactor - 1f) > 0.004f) {
-                                val nextZoom = (currentZoomState.value * zoomFactor).coerceIn(0.5f, 5.0f)
+                                val nextZoom = (currentZoomState.value * zoomFactor).coerceIn(0.25f, 8.0f)
                                 onZoomUpdated.value(nextZoom)
                                 event.changes.forEach { ch ->
                                     if (ch.positionChanged()) ch.consume()
@@ -2256,115 +2502,154 @@ private fun AmMultitrackTimelineArea(
             }
             .testTag("timeline_multitrack_container")
     ) {
-        val viewportLaneWidthDp = (maxWidth - TIMELINE_LEFT_GUTTER - TIMELINE_RIGHT_GUTTER).coerceAtLeast(140.dp)
-        val zoom = state.timelineZoom.coerceIn(0.5f, 5.0f)
-        val contentCanvasWidthDp = max(viewportLaneWidthDp.value, viewportLaneWidthDp.value * zoom).dp
-        val compSpanWidthPx = with(density) { (viewportLaneWidthDp * zoom).toPx().coerceAtLeast(48f) }
+        val leftGutterPx = with(density) { TIMELINE_LEFT_GUTTER.toPx() }
+        val viewportLaneWidthDp = (maxWidth - TIMELINE_LEFT_GUTTER - TIMELINE_RIGHT_GUTTER).coerceAtLeast(120.dp)
+        val viewportLaneWidthPx = with(density) { viewportLaneWidthDp.toPx().coerceAtLeast(120f) }
+        val zoom = state.timelineZoom.coerceIn(0.25f, 8.0f)
+        // At 1.0x zoom, 6 seconds span across the timeline lane; zooming smoothly scales pxPerSecond around center playhead.
+        val pxPerSecond = (viewportLaneWidthPx / 6.0f) * zoom
+        val latestPxPerSec by rememberUpdatedState(pxPerSecond)
+        val centerXInLane = viewportLaneWidthPx * 0.5f
+
+        val editEndMs = remember(project) { project.effectiveEditDurationMs() }
         val timecodeShort = remember(state.playheadMs, project.fps) {
             AnimationEvaluator.formatSmpteTimecode(state.playheadMs, project.fps).drop(3)
         }
 
-        Column(modifier = Modifier.fillMaxSize()) {
-            // A. REFERENCE-DESIGN TIME RULER STRIP
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(28.dp)
-                    .background(TimelineRulerBg),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(TIMELINE_LEFT_GUTTER)
-                        .fillMaxHeight()
-                        .clickable {
-                            val nextZoom = when {
-                                state.timelineZoom < 0.85f -> 1.0f
-                                state.timelineZoom < 1.35f -> 1.8f
-                                state.timelineZoom < 2.4f -> 3.0f
-                                else -> 0.6f
-                            }
-                            onSetTimelineZoom(nextZoom)
-                        }
-                        .testTag("timeline_zoom_badge"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ZoomIn,
-                        contentDescription = "Zoom",
-                        tint = Color(0xFF666E7D),
-                        modifier = Modifier.size(13.dp)
-                    )
+        // Native 60fps horizontal pan + inertia fling across the ENTIRE timeline surface (ruler, tracks, and empty canvas)
+        val horizontalPanState = rememberScrollableState { deltaPx ->
+            if (isAnyClipBeingDragged) {
+                0f
+            } else {
+                val pps = latestPxPerSec.coerceAtLeast(8f)
+                val deltaMsFloat = -(deltaPx / pps) * 1000f + panFractionMsAccum
+                val wholeMs = deltaMsFloat.toLong()
+                panFractionMsAccum = deltaMsFloat - wholeMs
+                if (wholeMs != 0L) {
+                    val targetMs = (latestPlayheadMs + wholeMs).coerceAtLeast(0L)
+                    latestScrubCallback(targetMs)
                 }
+                deltaPx
+            }
+        }
 
-                Box(
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .scrollable(
+                    state = horizontalPanState,
+                    orientation = Orientation.Horizontal,
+                    enabled = !isAnyClipBeingDragged,
+                    flingBehavior = ScrollableDefaults.flingBehavior()
+                )
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // A. TIME RULER STRIP (Pans & Scrubs relative to Center Fixed Playhead, zero duplicate playhead line here!)
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .horizontalScroll(timelineHScroll, enabled = zoom > 1.02f)
+                        .fillMaxWidth()
+                        .height(TIMELINE_RULER_HEIGHT)
+                        .background(TimelineRulerBg),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(contentCanvasWidthDp)
+                            .width(TIMELINE_LEFT_GUTTER)
                             .fillMaxHeight()
-                            .pointerInput(project.durationMs, compSpanWidthPx) {
-                                detectTapGestures { offset ->
-                                    val frac = (offset.x / compSpanWidthPx).coerceIn(0f, 1f)
-                                    onScrubPlayhead((frac * project.durationMs).toLong())
+                            .clickable {
+                                val nextZoom = when {
+                                    state.timelineZoom < 0.85f -> 1.0f
+                                    state.timelineZoom < 1.5f -> 2.0f
+                                    state.timelineZoom < 3.0f -> 4.0f
+                                    else -> 0.5f
                                 }
+                                onSetTimelineZoom(nextZoom)
                             }
-                            .pointerInput(project.durationMs, compSpanWidthPx) {
-                                detectHorizontalDragGestures { change, _ ->
-                                    change.consume()
-                                    val frac = (change.position.x / compSpanWidthPx).coerceIn(0f, 1f)
-                                    onScrubPlayhead((frac * project.durationMs).toLong())
+                            .testTag("timeline_zoom_badge"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ZoomIn,
+                            contentDescription = "Zoom Timeline",
+                            tint = KeyflowBlueBright,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clipToBounds()
+                            .pointerInput(viewportLaneWidthPx) {
+                                detectTapGestures { offset ->
+                                    val pps = latestPxPerSec.coerceAtLeast(8f)
+                                    val tappedMs = (latestPlayheadMs + (((offset.x - viewportLaneWidthPx * 0.5f) / pps) * 1000f).roundToLong())
+                                        .coerceAtLeast(0L)
+                                    latestScrubCallback(tappedMs)
                                 }
                             }
                             .testTag("timeline_ruler_scrubber")
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            val w = compSpanWidthPx.coerceAtMost(size.width)
+                            val w = size.width
                             val h = size.height
-                            val px = (state.playheadMs / durFloat).coerceIn(0f, 1f) * w
+                            val cx = w * 0.5f
+                            val curSec = state.playheadMs / 1000f
 
-                            drawRect(
-                                color = activePlayheadColor.copy(alpha = 0.55f),
-                                topLeft = Offset(0f, 0f),
-                                size = Size(px.coerceAtLeast(2f), 2.5.dp.toPx())
-                            )
+                            fun secToX(sec: Float): Float = cx + (sec - curSec) * pxPerSecond
+
+                            // Pre-rendered span highlights along the top edge of the ruler
+                            val editEndSec = editEndMs / 1000f
                             cachedSpanFractions.forEach { (startF, endF) ->
-                                val sx = (startF.coerceIn(0f, 1f)) * w
-                                val ex = (endF.coerceIn(0f, 1f)) * w
-                                drawRect(
-                                    color = activePlayheadColor,
-                                    topLeft = Offset(sx, 0f),
-                                    size = Size((ex - sx).coerceAtLeast(3f), 2.5.dp.toPx())
-                                )
+                                val sx = secToX(startF.coerceIn(0f, 1f) * editEndSec).coerceIn(0f, w)
+                                val ex = secToX(endF.coerceIn(0f, 1f) * editEndSec).coerceIn(0f, w)
+                                if (ex > sx) {
+                                    drawRect(
+                                        color = KeyflowBlueBright,
+                                        topLeft = Offset(sx, 0f),
+                                        size = Size((ex - sx).coerceAtLeast(3f), 2.5.dp.toPx())
+                                    )
+                                }
+                            }
+
+                            // Subtle end-of-edit boundary marker
+                            if (project.layers.isNotEmpty()) {
+                                val editEndX = secToX(editEndSec)
+                                if (editEndX in -2f..(w + 2f)) {
+                                    drawLine(
+                                        color = KeyflowBlue.copy(alpha = 0.65f),
+                                        start = Offset(editEndX, 0f),
+                                        end = Offset(editEndX, h),
+                                        strokeWidth = 1.4.dp.toPx()
+                                    )
+                                }
                             }
 
                             drawLine(
-                                color = Color(0xFF1A1D24),
+                                color = Color(0xFF1A202D),
                                 start = Offset(0f, h - 1f),
-                                end = Offset(size.width, h - 1f),
+                                end = Offset(w, h - 1f),
                                 strokeWidth = 1f
                             )
 
-                            val totalSec = (project.durationMs / 1000f).coerceAtLeast(1f)
-                            val pxPerSec = w / totalSec
                             val secStep = when {
-                                pxPerSec >= 38f -> 1
-                                pxPerSec >= 19f -> 2
-                                else -> 5
+                                pxPerSecond >= 46f -> 1
+                                pxPerSecond >= 22f -> 2
+                                pxPerSecond >= 10f -> 5
+                                else -> 10
                             }
-                            val subTicksPerStep = 10
-                            val maxSecInt = totalSec.toInt()
+                            val firstVisibleSec = max(0, (floor((curSec - cx / pxPerSecond) / secStep).toInt() - 1) * secStep)
+                            val lastVisibleSec = max(firstVisibleSec + secStep, (floor((curSec + (w - cx) / pxPerSecond) / secStep).toInt() + 2) * secStep)
+                            val subTicks = 10
 
-                            for (s in 0..maxSecInt step secStep) {
-                                val secX = (s / totalSec) * w
-                                if (secX <= w + 1f) {
+                            var s = firstVisibleSec
+                            while (s <= lastVisibleSec) {
+                                val secX = secToX(s.toFloat())
+                                if (secX in -24f..(w + 24f)) {
                                     drawLine(
-                                        color = Color(0xFF4B5260),
-                                        start = Offset(secX, h * 0.58f),
+                                        color = Color(0xFF4B5568),
+                                        start = Offset(secX, h * 0.56f),
                                         end = Offset(secX, h),
                                         strokeWidth = 1.2f
                                     )
@@ -2375,215 +2660,288 @@ private fun AmMultitrackTimelineArea(
                                         rulerLabelPaint
                                     )
                                 }
-                                for (sub in 1 until subTicksPerStep) {
-                                    val subSec = s + (sub.toFloat() / subTicksPerStep) * secStep
-                                    if (subSec <= totalSec) {
-                                        val tx = (subSec / totalSec) * w
-                                        val isHalf = sub == subTicksPerStep / 2
+                                for (sub in 1 until subTicks) {
+                                    val subSec = s + (sub.toFloat() / subTicks) * secStep
+                                    val tx = secToX(subSec)
+                                    if (tx in 0f..w) {
+                                        val isHalf = sub == subTicks / 2
                                         drawLine(
-                                            color = if (isHalf) Color(0xFF343944) else Color(0xFF22262E),
+                                            color = if (isHalf) Color(0xFF343B4A) else Color(0xFF212632),
                                             start = Offset(tx, if (isHalf) h * 0.70f else h * 0.80f),
                                             end = Offset(tx, h),
                                             strokeWidth = 1f
                                         )
                                     }
                                 }
+                                s += secStep
                             }
 
+                            // Sky-blue beat bookmark pins
                             project.beatMarkers.forEach { bm ->
-                                val bx = (bm.timeMs / durFloat).coerceIn(0f, 1f) * w
-                                val pinTop = Path().apply {
-                                    moveTo(bx - 5.dp.toPx(), 1.5.dp.toPx())
-                                    lineTo(bx + 5.dp.toPx(), 1.5.dp.toPx())
-                                    lineTo(bx + 5.dp.toPx(), 7.dp.toPx())
-                                    lineTo(bx, 11.5.dp.toPx())
-                                    lineTo(bx - 5.dp.toPx(), 7.dp.toPx())
-                                    close()
+                                val bx = secToX(bm.timeMs / 1000f)
+                                if (bx in -8f..(w + 8f)) {
+                                    val pinTop = Path().apply {
+                                        moveTo(bx - 5.dp.toPx(), 1.5.dp.toPx())
+                                        lineTo(bx + 5.dp.toPx(), 1.5.dp.toPx())
+                                        lineTo(bx + 5.dp.toPx(), 7.dp.toPx())
+                                        lineTo(bx, 11.5.dp.toPx())
+                                        lineTo(bx - 5.dp.toPx(), 7.dp.toPx())
+                                        close()
+                                    }
+                                    drawPath(pinTop, BookmarkSkyBlue)
+                                    drawLine(
+                                        color = BookmarkSkyBlue,
+                                        start = Offset(bx, 11.dp.toPx()),
+                                        end = Offset(bx, h),
+                                        strokeWidth = 1.4.dp.toPx()
+                                    )
                                 }
-                                drawPath(pinTop, BookmarkSkyBlue)
-                                drawLine(
-                                    color = BookmarkSkyBlue,
-                                    start = Offset(bx, 11.dp.toPx()),
-                                    end = Offset(bx, h),
-                                    strokeWidth = 1.4.dp.toPx()
-                                )
                             }
-
-                            val pillW = 54.dp.toPx()
-                            val pillH = 16.5.dp.toPx()
-                            val pillLeft = (px - pillW * 0.5f).coerceIn(0f, (size.width - pillW).coerceAtLeast(0f))
-                            val pillTop = 4.dp.toPx()
-
-                            drawLine(
-                                color = activePlayheadColor,
-                                start = Offset(px, pillTop + pillH),
-                                end = Offset(px, h),
-                                strokeWidth = 1.6.dp.toPx()
-                            )
-                            drawRoundRect(
-                                color = activePlayheadColor,
-                                topLeft = Offset(pillLeft, pillTop),
-                                size = Size(pillW, pillH),
-                                cornerRadius = CornerRadius(pillH * 0.5f, pillH * 0.5f)
-                            )
-                            val textBaselineY = pillTop + pillH * 0.5f - (playheadPillTextPaint.descent() + playheadPillTextPaint.ascent()) * 0.5f
-                            drawContext.canvas.nativeCanvas.drawText(
-                                timecodeShort,
-                                pillLeft + pillW * 0.5f,
-                                textBaselineY,
-                                playheadPillTextPaint
-                            )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(TIMELINE_RIGHT_GUTTER))
                 }
 
-                Spacer(modifier = Modifier.width(TIMELINE_RIGHT_GUTTER))
-            }
-
-            // B. FULL-WIDTH PITCH-BLACK LAYER STACK
-            if (project.layers.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .background(TimelinePitchBlack)
-                        .padding(bottom = if (showFloatingFabs) 52.dp else 4.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Layers,
-                            contentDescription = null,
-                            tint = Color(0xFF3E4552),
-                            modifier = Modifier.size(26.dp)
-                        )
-                        Text(
-                            text = "No layers",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = TextSecondary
-                        )
-                    }
-                }
-            } else {
+                // B. FREELY SCROLLABLE & CLICKABLE LAYER STACK + INTERACTIVE BACKGROUND CANVAS
+                // Hide descendants of any collapsed LayerType.GROUP (!groupExpanded) while preserving render/export (Section 3.3)
                 val visibleLayers = remember(project.layers, state.selectedLayerId, compactSelectedOnly) {
-                    val rev = project.layers.asReversed()
+                    val byId = project.layers.associateBy { it.id }
+                    fun isHiddenByCollapsedAncestor(layer: Layer): Boolean {
+                        var cursorId = layer.parentId
+                        val visited = HashSet<String>()
+                        while (!cursorId.isNullOrBlank() && visited.add(cursorId)) {
+                            val parent = byId[cursorId] ?: break
+                            if (parent.type == LayerType.GROUP && !parent.groupExpanded) {
+                                return true
+                            }
+                            cursorId = parent.parentId
+                        }
+                        return false
+                    }
+                    val rev = project.layers.asReversed().filterNot { isHiddenByCollapsedAncestor(it) }
                     if (compactSelectedOnly && state.selectedLayerId != null) {
                         rev.filter { it.id == state.selectedLayerId }.ifEmpty { rev.take(1) }
                     } else {
                         rev
                     }
                 }
+
                 LazyColumn(
+                    state = verticalListState,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                         .background(TimelinePitchBlack),
                     contentPadding = PaddingValues(
                         top = 4.dp,
-                        bottom = if (showFloatingFabs) 68.dp else 6.dp
+                        bottom = if (showFloatingFabs) 74.dp else 10.dp
                     ),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    itemsIndexed(visibleLayers, key = { _, l -> l.id }) { _, layer ->
-                        val isSelected = layer.id == state.selectedLayerId
-                        AmTimelineLayerRow(
-                            layer = layer,
-                            isSelected = isSelected,
-                            anyLayerSelected = isLayerSelectedMode,
-                            playheadMs = state.playheadMs,
-                            durationMs = project.durationMs,
-                            timelineHScroll = timelineHScroll,
-                            enableHorizontalScroll = zoom > 1.02f,
-                            contentCanvasWidthDp = contentCanvasWidthDp,
-                            compSpanWidthPx = compSpanWidthPx,
-                            onClickLayer = { onSelectLayer(layer.id) },
-                            onMoveLayerTimeRange = { newStart, recordUndo ->
-                                onMoveLayerTimeRange(layer.id, newStart, recordUndo)
-                            },
-                            onScrubPlayhead = onScrubPlayhead,
-                            onToggleVisibility = { onToggleLayerVisibility(layer.id) }
-                        )
+                    if (visibleLayers.isEmpty()) {
+                        item(key = "empty_timeline_canvas") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(170.dp)
+                                    .pointerInput(viewportLaneWidthPx) {
+                                        detectTapGestures { offset ->
+                                            val laneX = offset.x - leftGutterPx
+                                            if (laneX in 0f..viewportLaneWidthPx) {
+                                                val pps = latestPxPerSec.coerceAtLeast(8f)
+                                                val tappedMs = (latestPlayheadMs + (((laneX - viewportLaneWidthPx * 0.5f) / pps) * 1000f).roundToLong())
+                                                    .coerceAtLeast(0L)
+                                                latestScrubCallback(tappedMs)
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Layers,
+                                        contentDescription = null,
+                                        tint = Color(0xFF3E485C),
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                    Text(
+                                        text = "Tap + to add media, text, shapes, or import .aep / .xml",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        itemsIndexed(visibleLayers, key = { _, l -> l.id }) { _, layer ->
+                            val isSelected = layer.id == state.selectedLayerId
+                            val isMultiChecked = state.selectedLayerIds.contains(layer.id)
+                            val actualLayerIdx = project.layers.indexOfFirst { it.id == layer.id }
+                            AmTimelineLayerRow(
+                                layer = layer,
+                                layerIndexInProject = actualLayerIdx,
+                                totalLayerCount = project.layers.size,
+                                isSelected = isSelected,
+                                isMultiChecked = isMultiChecked,
+                                playheadMs = state.playheadMs,
+                                pxPerSecond = pxPerSecond,
+                                onDragActiveChange = { active -> isAnyClipBeingDragged = active },
+                                onClickLayer = { onSelectLayer(layer.id) },
+                                onToggleMultiSelect = { onToggleLayerMultiSelection(layer.id) },
+                                onClickEmptyLane = { tappedMs ->
+                                    if (isLayerSelectedMode) {
+                                        onDeselectLayer()
+                                    } else {
+                                        onScrubPlayhead(tappedMs)
+                                    }
+                                },
+                                onMoveLayerTimeRange = { newStart, recordUndo ->
+                                    onMoveLayerTimeRange(layer.id, newStart, recordUndo)
+                                },
+                                onMoveLayerToIndex = { targetIdx ->
+                                    onMoveLayerToIndex(layer.id, targetIdx)
+                                },
+                                onToggleVisibility = { onToggleLayerVisibility(layer.id) },
+                                onToggleGroupExpanded = { onToggleGroupExpanded(layer.id) }
+                            )
+                        }
+
+                        // Extra free clickable/scrollable canvas tail so user can pan/scroll freely below tracks
+                        if (!compactSelectedOnly) {
+                            item(key = "timeline_free_tail_space") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(96.dp)
+                                        .pointerInput(viewportLaneWidthPx, isLayerSelectedMode) {
+                                            detectTapGestures { offset ->
+                                                if (isLayerSelectedMode) {
+                                                    onDeselectLayer()
+                                                } else {
+                                                    val laneX = offset.x - leftGutterPx
+                                                    if (laneX in 0f..viewportLaneWidthPx) {
+                                                        val pps = latestPxPerSec.coerceAtLeast(8f)
+                                                        val tappedMs = (latestPlayheadMs + (((laneX - viewportLaneWidthPx * 0.5f) / pps) * 1000f).roundToLong())
+                                                            .coerceAtLeast(0L)
+                                                        latestScrubCallback(tappedMs)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                )
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        // C. SCALED-DOWN FLOATING STUDIO ICON PILL (Bottom-Left) + CIRCULAR TEAL '+' FAB (Bottom-Right)
-        if (showFloatingFabs && !isAddDrawerOpen) {
-            Row(
+            // C. SINGLE SHORT FIXED-LENGTH PLAYHEAD OVERLAY (Zero Duplicate Lines!)
+            Canvas(
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .navigationBarsPadding()
-                    .padding(start = 10.dp, bottom = 8.dp)
-                    .height(36.dp)
-                    .shadow(6.dp, CircleShape)
-                    .clip(CircleShape)
-                    .background(Color(0xE6101217))
-                    .border(1.dp, TimelineHairline, CircleShape)
-                    .padding(horizontal = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    .fillMaxWidth()
+                    .height(34.dp)
+                    .align(Alignment.TopCenter)
+                    .testTag("single_fixed_timeline_playhead")
             ) {
-                AmMiniStudioIcon(
-                    icon = Icons.Default.AutoFixHigh,
-                    contentDescription = "Effects",
-                    onClick = { onNavigateTool(StudioDestination.EFFECTS_BROWSER) },
-                    testTag = "tool_effects_button"
+                val fixedPlayheadX = leftGutterPx + centerXInLane
+                val pillW = 56.dp.toPx()
+                val pillH = 16.5.dp.toPx()
+                val pillLeft = (fixedPlayheadX - pillW * 0.5f).coerceIn(2f, (size.width - pillW - 2f).coerceAtLeast(2f))
+                val pillTop = 3.5.dp.toPx()
+                val stemStartY = pillTop + pillH
+                // Ultra-short compact playhead needle stem (6.dp clean span right under timecode pill)
+                val stemEndY = (stemStartY + 6.dp.toPx()).coerceAtMost(size.height - 2.dp.toPx())
+
+                drawLine(
+                    color = activePlayheadColor,
+                    start = Offset(fixedPlayheadX, stemStartY),
+                    end = Offset(fixedPlayheadX, stemEndY),
+                    strokeWidth = 1.8.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
                 )
-                AmMiniStudioIcon(
-                    icon = Icons.AutoMirrored.Filled.ShowChart,
-                    contentDescription = "Graph",
-                    onClick = { onNavigateTool(StudioDestination.GRAPH_EDITOR) },
-                    testTag = "tool_graph_button"
+
+                // Top timecode badge centered on the single fixed playhead
+                drawRoundRect(
+                    color = activePlayheadColor,
+                    topLeft = Offset(pillLeft, pillTop),
+                    size = Size(pillW, pillH),
+                    cornerRadius = CornerRadius(pillH * 0.5f, pillH * 0.5f)
                 )
-                AmMiniStudioIcon(
-                    icon = Icons.Default.GraphicEq,
-                    contentDescription = "Audio",
-                    active = isBeatPopoverOpen,
-                    onClick = onToggleFloatingBeatReactor,
-                    testTag = "tool_audio_button"
-                )
-                AmMiniStudioIcon(
-                    icon = Icons.Default.ViewInAr,
-                    contentDescription = "3D",
-                    onClick = { onNavigateTool(StudioDestination.WORKSPACE_3D) },
-                    testTag = "tool_3d_button"
-                )
-                AmMiniStudioIcon(
-                    icon = Icons.Default.AccountTree,
-                    contentDescription = "Null",
-                    onClick = onAddNullRig,
-                    testTag = "tool_rig_button"
+                val textBaselineY = pillTop + pillH * 0.5f - (playheadPillTextPaint.descent() + playheadPillTextPaint.ascent()) * 0.5f
+                drawContext.canvas.nativeCanvas.drawText(
+                    timecodeShort,
+                    pillLeft + pillW * 0.5f,
+                    textBaselineY,
+                    playheadPillTextPaint
                 )
             }
 
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
-                    .padding(end = 12.dp, bottom = 8.dp)
-                    .size(48.dp)
-                    .clickable(onClick = onOpenAddDrawer)
-                    .testTag("add_layer_button"),
-                contentAlignment = Alignment.Center
-            ) {
+            // D. FLOATING STUDIO TOOL PILL (Bottom-Left: Effects, Graph, Audio — no duplicates of FAB!) + '+' FAB (Bottom-Right)
+            if (showFloatingFabs && !isAddDrawerOpen) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 10.dp, bottom = 8.dp)
+                        .height(36.dp)
+                        .shadow(6.dp, CircleShape)
+                        .clip(CircleShape)
+                        .background(Color(0xEB0E121A))
+                        .border(1.dp, TimelineHairline, CircleShape)
+                        .padding(horizontal = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    AmMiniStudioIcon(
+                        icon = Icons.Default.AutoFixHigh,
+                        contentDescription = "Effects Library",
+                        onClick = { onNavigateTool(StudioDestination.EFFECTS_BROWSER) },
+                        testTag = "tool_effects_button"
+                    )
+                    AmMiniStudioIcon(
+                        icon = Icons.AutoMirrored.Filled.ShowChart,
+                        contentDescription = "Graph Editor",
+                        onClick = { onNavigateTool(StudioDestination.GRAPH_EDITOR) },
+                        testTag = "tool_graph_button"
+                    )
+                    AmMiniStudioIcon(
+                        icon = Icons.Default.GraphicEq,
+                        contentDescription = "Beat Reactor",
+                        active = isBeatPopoverOpen,
+                        onClick = onToggleFloatingBeatReactor,
+                        testTag = "tool_audio_button"
+                    )
+                }
+
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
-                        .shadow(8.dp, CircleShape)
-                        .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(AmTealBright, AmTeal))),
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(end = 12.dp, bottom = 8.dp)
+                        .size(48.dp)
+                        .clickable(onClick = onOpenAddDrawer)
+                        .testTag("add_layer_button"),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Add",
-                        tint = DeepBlack,
-                        modifier = Modifier.size(21.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .shadow(8.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(KeyflowBlueBright, KeyflowBlue))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Element",
+                            tint = DeepBlack,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
                 }
             }
         }
@@ -2610,7 +2968,7 @@ private fun AmMiniStudioIcon(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (active) BookmarkSkyBlue else AmTealBright,
+            tint = if (active) KeyflowBlueBright else Color(0xFFD0DCFF),
             modifier = Modifier.size(16.dp)
         )
     }
@@ -2619,25 +2977,29 @@ private fun AmMiniStudioIcon(
 @Composable
 private fun AmTimelineLayerRow(
     layer: Layer,
+    layerIndexInProject: Int,
+    totalLayerCount: Int,
     isSelected: Boolean,
-    anyLayerSelected: Boolean = false,
+    isMultiChecked: Boolean,
     playheadMs: Long,
-    durationMs: Long,
-    timelineHScroll: ScrollState,
-    enableHorizontalScroll: Boolean,
-    contentCanvasWidthDp: androidx.compose.ui.unit.Dp,
-    compSpanWidthPx: Float,
+    pxPerSecond: Float,
+    onDragActiveChange: (Boolean) -> Unit,
     onClickLayer: () -> Unit,
+    onToggleMultiSelect: () -> Unit,
+    onClickEmptyLane: (Long) -> Unit,
     onMoveLayerTimeRange: (rawNewStartMs: Long, recordUndo: Boolean) -> Unit,
-    onScrubPlayhead: (Long) -> Unit,
-    onToggleVisibility: () -> Unit
+    onMoveLayerToIndex: (Int) -> Unit,
+    onToggleVisibility: () -> Unit,
+    onToggleGroupExpanded: () -> Unit = {}
 ) {
     val density = LocalDensity.current
     val clipFillColor = remember(layer.colorHex, layer.type) {
         when (layer.type) {
+            LayerType.GROUP -> ClipGroupPurple
             LayerType.IMAGE, LayerType.VIDEO -> ClipMediaBlue
             LayerType.NULL_OBJECT, LayerType.CAMERA -> ClipRigRed
             LayerType.AUDIO -> AudioCyan
+            LayerType.DRAWING -> Color(0xFF14B8A6)
             else -> runCatching { Color(android.graphics.Color.parseColor(layer.colorHex)) }.getOrDefault(ClipMediaBlue)
         }
     }
@@ -2650,16 +3012,26 @@ private fun AmTimelineLayerRow(
         }
     }
     val kfTimes = remember(layer) { layer.allKeyframeTimes() }
-    val durFloat = durationMs.coerceAtLeast(1L).toFloat()
 
     var isHoldingClip by remember { mutableStateOf(false) }
+    var isDraggingHandle by remember { mutableStateOf(false) }
     var dragOriginStartMs by remember { mutableLongStateOf(0L) }
     var dragAccumPx by remember { mutableFloatStateOf(0f) }
+    var dragAccumY by remember { mutableFloatStateOf(0f) }
 
     val latestLayer by rememberUpdatedState(layer)
-    val latestDurationMs by rememberUpdatedState(durationMs)
-    val latestCompSpanPx by rememberUpdatedState(compSpanWidthPx)
+    val latestLayerIdx by rememberUpdatedState(layerIndexInProject)
+    val latestTotalLayers by rememberUpdatedState(totalLayerCount)
+    val latestPlayheadMs by rememberUpdatedState(playheadMs)
+    val latestPxPerSec by rememberUpdatedState(pxPerSecond)
     val latestMoveCallback by rememberUpdatedState(onMoveLayerTimeRange)
+    val latestReorderCallback by rememberUpdatedState(onMoveLayerToIndex)
+    val latestClickLayer by rememberUpdatedState(onClickLayer)
+    val latestToggleMulti by rememberUpdatedState(onToggleMultiSelect)
+    val latestClickEmpty by rememberUpdatedState(onClickEmptyLane)
+    val latestToggleGroupExpanded by rememberUpdatedState(onToggleGroupExpanded)
+    val latestDragActiveChange by rememberUpdatedState(onDragActiveChange)
+    val rowHeightPx = with(density) { TIMELINE_ROW_HEIGHT.toPx().coerceAtLeast(24f) }
 
     Row(
         modifier = Modifier
@@ -2667,95 +3039,166 @@ private fun AmTimelineLayerRow(
             .height(TIMELINE_ROW_HEIGHT)
             .background(
                 when {
-                    isHoldingClip -> Color(0xFF141820)
-                    isSelected -> Color(0xFF06080D)
+                    isHoldingClip || isDraggingHandle -> Color(0xFF141D2E)
+                    isSelected -> Color(0xFF0A1120)
+                    isMultiChecked -> Color(0xFF120E24)
                     else -> TimelinePitchBlack
                 }
             ),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        // Left Gutter: [Visibility Eye] + [Multi-select Checkbox Dot for Grouping]
+        Row(
             modifier = Modifier
                 .width(TIMELINE_LEFT_GUTTER)
                 .fillMaxHeight()
-                .clickable(onClick = onToggleVisibility),
-            contentAlignment = Alignment.Center
+                .padding(horizontal = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            Icon(
-                imageVector = if (layer.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                contentDescription = "Visibility",
-                tint = if (layer.visible) Color(0xFFD5DCE8) else Color(0xFF3E4452),
-                modifier = Modifier.size(15.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .size(21.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onToggleVisibility),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (layer.visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                    contentDescription = "Visibility",
+                    tint = if (layer.visible) Color(0xFFD5DCE8) else Color(0xFF3E4452),
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(17.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        if (isMultiChecked) Color(0xFF8B5CF6) else Color(0xFF121722)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = if (isMultiChecked) Color(0xFFC4B5FD) else Color(0xFF323C50),
+                        shape = RoundedCornerShape(4.dp)
+                    )
+                    .clickable(onClick = latestToggleMulti)
+                    .testTag("layer_multiselect_${layer.id}"),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isMultiChecked) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Selected for Group",
+                        tint = Color.White,
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            }
         }
 
+        // Center Timeline Track Lane (Positioned relative to the single center playhead; zero per-row playhead drawing!)
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                .clipToBounds()
                 .background(TimelinePitchBlack)
-                .horizontalScroll(timelineHScroll, enabled = enableHorizontalScroll && !isHoldingClip)
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(contentCanvasWidthDp)
-                    .fillMaxHeight()
-                    .pointerInput(layer.id) {
-                        detectTapGestures { offset ->
-                            val curL = latestLayer
-                            val curDur = latestDurationMs.coerceAtLeast(1L)
-                            val w = latestCompSpanPx.coerceAtLeast(1f)
-                            val tappedMs = ((offset.x / w).coerceIn(0f, 1f) * curDur).toLong()
-                            if (tappedMs in curL.startTimeMs..curL.endTimeMs) {
-                                onClickLayer()
-                            } else {
-                                onScrubPlayhead(tappedMs)
+                .pointerInput(layer.id) {
+                    detectTapGestures { offset ->
+                        val curL = latestLayer
+                        val laneW = size.width.toFloat().coerceAtLeast(1f)
+                        val pps = latestPxPerSec.coerceAtLeast(8f)
+                        val tappedMs = (latestPlayheadMs + (((offset.x - laneW * 0.5f) / pps) * 1000f).roundToLong())
+                            .coerceAtLeast(0L)
+                        // Check middle bottom-down chevron tap on Group layer bar (Section 3.3)
+                        if (curL.type == LayerType.GROUP) {
+                            val cx = laneW * 0.5f
+                            val sX = cx + ((curL.startTimeMs - latestPlayheadMs) / 1000f) * pps
+                            val eX = cx + ((curL.endTimeMs - latestPlayheadMs) / 1000f) * pps
+                            val visLeft = sX.coerceIn(0f, laneW)
+                            val visRight = eX.coerceIn(0f, laneW)
+                            val chevronCenterX = (visLeft + visRight) * 0.5f
+                            if (visRight > visLeft && abs(offset.x - chevronCenterX) <= 24.dp.toPx()) {
+                                latestToggleGroupExpanded()
+                                return@detectTapGestures
                             }
                         }
+                        val earPaddingMs = ((14.dp.toPx() / pps) * 1000f).toLong()
+                        if (tappedMs in (curL.startTimeMs - earPaddingMs)..curL.endTimeMs) {
+                            // Clicking a layer ONLY selects/unclicks it — NEVER touches playback!
+                            latestClickLayer()
+                        } else {
+                            latestClickEmpty(tappedMs)
+                        }
                     }
-                    .pointerInput(layer.id) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = {
-                                if (!latestLayer.locked) {
-                                    isHoldingClip = true
-                                    dragOriginStartMs = latestLayer.startTimeMs
-                                    dragAccumPx = 0f
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                if (isHoldingClip && !latestLayer.locked) {
-                                    change.consume()
-                                    dragAccumPx += dragAmount.x
-                                    val deltaMs = ((dragAccumPx / latestCompSpanPx.coerceAtLeast(1f)) * latestDurationMs).roundToLong()
-                                    latestMoveCallback(dragOriginStartMs + deltaMs, false)
-                                }
-                            },
-                            onDragEnd = {
-                                if (isHoldingClip) {
-                                    isHoldingClip = false
-                                    latestMoveCallback(latestLayer.startTimeMs, true)
-                                }
-                            },
-                            onDragCancel = {
-                                isHoldingClip = false
+                }
+                .pointerInput(layer.id) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = {
+                            if (!latestLayer.locked) {
+                                isHoldingClip = true
+                                latestDragActiveChange(true)
+                                dragOriginStartMs = latestLayer.startTimeMs
+                                dragAccumPx = 0f
+                                dragAccumY = 0f
                             }
-                        )
-                    }
-                    .testTag("layer_clip_lane_${layer.id}")
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val w = compSpanWidthPx.coerceAtMost(size.width)
-                    val h = size.height
+                        },
+                        onDrag = { change, dragAmount ->
+                            if (isHoldingClip && !latestLayer.locked) {
+                                change.consume()
+                                val pps = latestPxPerSec.coerceAtLeast(8f)
+                                dragAccumPx += dragAmount.x
+                                val deltaMs = ((dragAccumPx / pps) * 1000f).roundToLong()
+                                latestMoveCallback((dragOriginStartMs + deltaMs).coerceAtLeast(0L), false)
 
-                    val rawSX = (layer.startTimeMs / durFloat).coerceIn(0f, 1f) * w
-                    val earW = if (isSelected) 11.dp.toPx() else 0f
-                    val sX = if (isSelected && rawSX < earW) earW else rawSX
-                    val eX = ((layer.endTimeMs / durFloat).coerceIn(0f, 1f) * w).coerceAtLeast(sX + 6.dp.toPx())
-                    val rawClipW = eX - sX
-                    val minPillW = 6.dp.toPx()
-                    val clipW = rawClipW.coerceAtLeast(minPillW)
-                    val barTop = 2.5.dp.toPx()
-                    val barH = (h - 5.dp.toPx()).coerceAtLeast(10f)
+                                dragAccumY += dragAmount.y
+                                if (abs(dragAccumY) >= rowHeightPx * 0.92f && latestTotalLayers > 1 && latestLayerIdx >= 0) {
+                                    val stepsUp = (-dragAccumY / rowHeightPx).toInt()
+                                    if (stepsUp != 0) {
+                                        val nextIdx = (latestLayerIdx + stepsUp).coerceIn(0, latestTotalLayers - 1)
+                                        if (nextIdx != latestLayerIdx) {
+                                            latestReorderCallback(nextIdx)
+                                        }
+                                        dragAccumY = 0f
+                                    }
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            if (isHoldingClip) {
+                                isHoldingClip = false
+                                latestDragActiveChange(false)
+                                latestMoveCallback(latestLayer.startTimeMs, true)
+                            }
+                        },
+                        onDragCancel = {
+                            isHoldingClip = false
+                            latestDragActiveChange(false)
+                        }
+                    )
+                }
+                .testTag("layer_clip_lane_${layer.id}")
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                val cx = w * 0.5f
+
+                fun msToX(ms: Long): Float = cx + ((ms - playheadMs) / 1000f) * pxPerSecond
+
+                val rawSX = msToX(layer.startTimeMs)
+                val rawEX = msToX(layer.endTimeMs)
+                val earW = if (isSelected) 11.dp.toPx() else 0f
+                val minPillW = 6.dp.toPx()
+                val rawClipW = (rawEX - rawSX).coerceAtLeast(minPillW)
+
+                // Skip offscreen clips fast for 60fps large-project scrolling
+                if (rawSX + rawClipW >= -earW - 8f && rawSX <= w + 8f) {
+                    val sX = rawSX
+                    val clipW = rawClipW
+                    val barTop = if (layer.parentId != null) 4.dp.toPx() else 2.5.dp.toPx()
+                    val barH = (h - barTop * 2f).coerceAtLeast(10f)
                     val cornerPx = 5.5.dp.toPx()
 
                     if (clipW < 18.dp.toPx()) {
@@ -2774,9 +3217,8 @@ private fun AmTimelineLayerRow(
                             style = Stroke(width = 1.1.dp.toPx())
                         )
                     } else {
-                        // KeyFlow Signature White Left '<' Trim Ear Cap when selected
                         if (isSelected) {
-                            val earLeft = (sX - earW).coerceAtLeast(0f)
+                            val earLeft = sX - earW
                             drawRoundRect(
                                 color = Color.White,
                                 topLeft = Offset(earLeft, barTop),
@@ -2797,7 +3239,7 @@ private fun AmTimelineLayerRow(
 
                         drawRoundRect(
                             color = when {
-                                isHoldingClip -> KeyframeAmber.copy(alpha = 0.85f)
+                                isHoldingClip || isDraggingHandle -> KeyframeAmber.copy(alpha = 0.85f)
                                 isSelected -> clipFillColor
                                 else -> clipFillColor.copy(alpha = 0.88f)
                             },
@@ -2806,11 +3248,11 @@ private fun AmTimelineLayerRow(
                             cornerRadius = CornerRadius(if (isSelected) 2.dp.toPx() else cornerPx, if (isSelected) 2.dp.toPx() else cornerPx)
                         )
 
-                        // Subtle vertical frame ticks inside selected media clip matching KeyFlow
                         if (isSelected) {
                             val tickGap = 5.dp.toPx()
-                            var tx = sX + tickGap
-                            while (tx < sX + clipW - 4.dp.toPx()) {
+                            var tx = max(0f, sX + tickGap)
+                            val endTick = (sX + clipW - 4.dp.toPx()).coerceAtMost(w)
+                            while (tx < endTick) {
                                 drawLine(
                                     color = Color.White.copy(alpha = 0.14f),
                                     start = Offset(tx, barTop + 1.dp.toPx()),
@@ -2825,93 +3267,171 @@ private fun AmTimelineLayerRow(
                             val bins = layer.extractedWaveform
                             val stepW = clipW / bins.size.coerceAtLeast(1)
                             for (i in bins.indices) {
-                                val amp = bins[i].coerceIn(0.08f, 1f)
-                                val bh = amp * (barH - 6f)
                                 val bx = sX + i * stepW + stepW * 0.5f
-                                drawLine(
-                                    color = Color.White.copy(alpha = 0.28f),
-                                    start = Offset(bx, h * 0.5f - bh * 0.5f),
-                                    end = Offset(bx, h * 0.5f + bh * 0.5f),
-                                    strokeWidth = (stepW * 0.58f).coerceIn(1f, 3f)
-                                )
+                                if (bx in 0f..w) {
+                                    val amp = bins[i].coerceIn(0.08f, 1f)
+                                    val bh = amp * (barH - 6f)
+                                    drawLine(
+                                        color = Color.White.copy(alpha = 0.28f),
+                                        start = Offset(bx, h * 0.5f - bh * 0.5f),
+                                        end = Offset(bx, h * 0.5f + bh * 0.5f),
+                                        strokeWidth = (stepW * 0.58f).coerceIn(1f, 3f)
+                                    )
+                                }
                             }
                         }
 
-                        clipRect(
-                            left = sX + 4.dp.toPx(),
-                            top = barTop,
-                            right = sX + clipW - 4.dp.toPx(),
-                            bottom = barTop + barH
-                        ) {
-                            if (clipW >= 34.dp.toPx()) {
-                                val textY = h * 0.5f - (clipLabelPaint.descent() + clipLabelPaint.ascent()) * 0.5f
-                                drawContext.canvas.nativeCanvas.drawText(
-                                    layer.name,
-                                    sX + 7.dp.toPx(),
-                                    textY,
-                                    clipLabelPaint
-                                )
-                            }
-
-                            kfTimes.forEach { kt ->
-                                val kx = (kt / durFloat).coerceIn(0f, 1f) * w
-                                val cy = h * 0.5f
-                                val r = 4.2.dp.toPx()
-                                val diamond = Path().apply {
-                                    moveTo(kx, cy - r)
-                                    lineTo(kx + r, cy)
-                                    lineTo(kx, cy + r)
-                                    lineTo(kx - r, cy)
-                                    close()
+                        val clipVisLeft = (sX + 4.dp.toPx()).coerceIn(0f, w)
+                        val clipVisRight = (sX + clipW - 4.dp.toPx()).coerceIn(0f, w)
+                        if (clipVisRight > clipVisLeft) {
+                            clipRect(
+                                left = clipVisLeft,
+                                top = barTop,
+                                right = clipVisRight,
+                                bottom = barTop + barH
+                            ) {
+                                if (clipW >= 34.dp.toPx()) {
+                                    val textY = h * 0.5f - (clipLabelPaint.descent() + clipLabelPaint.ascent()) * 0.5f
+                                    val displayLabel = buildString {
+                                        if (layer.type == LayerType.GROUP) append("[GRP] ")
+                                        else if (layer.parentId != null) append("↳ ")
+                                        append(layer.name)
+                                    }
+                                    // Sticky label stays readable when clip scrolls partially past left edge
+                                    val labelX = max(sX + 7.dp.toPx(), 6.dp.toPx())
+                                    drawContext.canvas.nativeCanvas.drawText(
+                                        displayLabel,
+                                        labelX,
+                                        textY,
+                                        clipLabelPaint
+                                    )
                                 }
-                                val isAtPlayhead = abs(kt - playheadMs) <= 35L
-                                if (isAtPlayhead) {
-                                    drawPath(diamond, Color.White)
-                                } else {
-                                    drawPath(diamond, Color.Black.copy(alpha = 0.28f))
-                                    drawPath(diamond, Color.White.copy(alpha = 0.90f), style = Stroke(width = 1.2.dp.toPx()))
+
+                                kfTimes.forEach { kt ->
+                                    val kx = msToX(kt)
+                                    if (kx in (clipVisLeft - 6f)..(clipVisRight + 6f)) {
+                                        val cy = h * 0.5f
+                                        val r = 4.2.dp.toPx()
+                                        val diamond = Path().apply {
+                                            moveTo(kx, cy - r)
+                                            lineTo(kx + r, cy)
+                                            lineTo(kx, cy + r)
+                                            lineTo(kx - r, cy)
+                                            close()
+                                        }
+                                        val isAtPlayhead = abs(kt - playheadMs) <= 35L
+                                        if (isAtPlayhead) {
+                                            drawPath(diamond, Color.White)
+                                        } else {
+                                            drawPath(diamond, Color.Black.copy(alpha = 0.28f))
+                                            drawPath(diamond, Color.White.copy(alpha = 0.90f), style = Stroke(width = 1.2.dp.toPx()))
+                                        }
+                                    }
+                                }
+
+                                // Middle bottom-down expand/collapse chevron on Group track bar (Section 3.3)
+                                if (layer.type == LayerType.GROUP) {
+                                    val chevX = (clipVisLeft + clipVisRight) * 0.5f
+                                    val chevY = barTop + barH - 7.dp.toPx()
+                                    val chevR = 4.2.dp.toPx()
+                                    drawRoundRect(
+                                        color = Color.Black.copy(alpha = 0.45f),
+                                        topLeft = Offset(chevX - 10.dp.toPx(), chevY - 5.5.dp.toPx()),
+                                        size = Size(20.dp.toPx(), 11.dp.toPx()),
+                                        cornerRadius = CornerRadius(5.5.dp.toPx(), 5.5.dp.toPx())
+                                    )
+                                    val chevPath = Path().apply {
+                                        if (layer.groupExpanded) {
+                                            // Downward chevron ▾
+                                            moveTo(chevX - chevR, chevY - chevR * 0.45f)
+                                            lineTo(chevX, chevY + chevR * 0.55f)
+                                            lineTo(chevX + chevR, chevY - chevR * 0.45f)
+                                        } else {
+                                            // Collapsed chevron ▸
+                                            moveTo(chevX - chevR * 0.45f, chevY - chevR)
+                                            lineTo(chevX + chevR * 0.55f, chevY)
+                                            lineTo(chevX - chevR * 0.45f, chevY + chevR)
+                                        }
+                                    }
+                                    drawPath(
+                                        path = chevPath,
+                                        color = Color.White,
+                                        style = Stroke(width = 1.7.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                                    )
                                 }
                             }
                         }
 
                         drawRoundRect(
                             color = when {
-                                isHoldingClip -> KeyframeAmber
+                                isHoldingClip || isDraggingHandle -> KeyframeAmber
+                                isMultiChecked -> Color(0xFFC4B5FD)
                                 isSelected -> Color.White
                                 else -> Color.White.copy(alpha = 0.82f)
                             },
                             topLeft = Offset(sX, barTop),
                             size = Size(clipW, barH),
                             cornerRadius = CornerRadius(if (isSelected) 2.dp.toPx() else cornerPx, if (isSelected) 2.dp.toPx() else cornerPx),
-                            style = Stroke(width = if (isSelected || isHoldingClip) 1.6.dp.toPx() else 1.1.dp.toPx())
+                            style = Stroke(width = if (isSelected || isMultiChecked || isHoldingClip || isDraggingHandle) 1.6.dp.toPx() else 1.1.dp.toPx())
                         )
                     }
-
-                    // Continuous unbroken vertical playhead line (KeyFlow Blue when layer selected, Emerald otherwise)
-                    val px = (playheadMs / durFloat).coerceIn(0f, 1f) * w
-                    drawLine(
-                        color = if (anyLayerSelected) KeyflowBlue else PlayheadEmerald,
-                        start = Offset(px, 0f),
-                        end = Offset(px, h),
-                        strokeWidth = 1.6.dp.toPx()
-                    )
                 }
             }
         }
 
-        // Right 34dp Gutter: Clean 3-Line Hamburger Handle (Selects/Opens Layer Sheet)
+        // Right 34dp Gutter: Three-Dashes ('≡') Reorder Handle (Tap to Select, Long-Tap to Multi-Select, Drag Up/Down to Reorder!)
         Box(
             modifier = Modifier
                 .width(TIMELINE_RIGHT_GUTTER)
                 .fillMaxHeight()
-                .clickable(onClick = onClickLayer)
+                .combinedClickable(
+                    onClick = latestClickLayer,
+                    onLongClick = latestToggleMulti
+                )
+                .pointerInput(layer.id) {
+                    var handleAccumY = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            isDraggingHandle = true
+                            latestDragActiveChange(true)
+                            handleAccumY = 0f
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            handleAccumY += dragAmount
+                            if (abs(handleAccumY) >= rowHeightPx * 0.85f && latestTotalLayers > 1 && latestLayerIdx >= 0) {
+                                val stepsUp = (-handleAccumY / rowHeightPx).toInt()
+                                if (stepsUp != 0) {
+                                    val nextIdx = (latestLayerIdx + stepsUp).coerceIn(0, latestTotalLayers - 1)
+                                    if (nextIdx != latestLayerIdx) {
+                                        latestReorderCallback(nextIdx)
+                                    }
+                                    handleAccumY = 0f
+                                }
+                            }
+                        },
+                        onDragEnd = {
+                            isDraggingHandle = false
+                            latestDragActiveChange(false)
+                        },
+                        onDragCancel = {
+                            isDraggingHandle = false
+                            latestDragActiveChange(false)
+                        }
+                    )
+                }
                 .testTag("layer_track_${layer.id}"),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Default.Menu,
-                contentDescription = layer.name,
-                tint = if (isSelected) Color.White else Color(0xFF7D8594),
+                contentDescription = "Reorder or Select ${layer.name}",
+                tint = when {
+                    isDraggingHandle -> KeyframeAmber
+                    isMultiChecked -> Color(0xFFC4B5FD)
+                    isSelected -> KeyflowBlueBright
+                    else -> Color(0xFF7D889C)
+                },
                 modifier = Modifier.size(17.dp)
             )
         }

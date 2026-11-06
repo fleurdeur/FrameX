@@ -79,9 +79,11 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.Diamond
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.sp
 import com.example.ui.components.KeyflowPropertyRulerCard
 import com.example.ui.theme.AmTeal
@@ -114,6 +116,35 @@ private val FX_TINT_SWATCHES = listOf(
 )
 
 internal const val PLUGIN_MIX_KEY = "__MIX__"
+internal const val PLUGIN_FEATHER_KEY = "__FEATHER__"
+
+private data class KeyflowTextAnimField(
+    val key: String,
+    val label: String,
+    val minVal: Float,
+    val maxVal: Float,
+    val defaultVal: Float,
+    val unit: String,
+    val unbounded: Boolean = false
+)
+
+private val KEYFLOW_TEXT_RANGE_FIELDS = listOf(
+    KeyflowTextAnimField("kf_range_start", "Start", 0f, 100f, 0f, "%"),
+    KeyflowTextAnimField("kf_range_end", "End", 0f, 100f, 100f, "%"),
+    KeyflowTextAnimField("kf_phase", "Phase", -100f, 100f, 0f, "%"),
+    KeyflowTextAnimField("kf_smooth", "Smoothness", 0f, 100f, 35f, "%")
+)
+
+private val KEYFLOW_TEXT_TRANSFORM_FIELDS = listOf(
+    KeyflowTextAnimField("kf_offset_x", "Position X", -600f, 600f, 0f, "px", unbounded = true),
+    KeyflowTextAnimField("kf_offset_y", "Position Y", -600f, 600f, -48f, "px", unbounded = true),
+    KeyflowTextAnimField("kf_scale", "Scale", 0f, 300f, 100f, "%"),
+    KeyflowTextAnimField("kf_rotation", "Rotation", -360f, 360f, 0f, "°"),
+    KeyflowTextAnimField("kf_opacity", "Opacity", 0f, 100f, 0f, "%"),
+    KeyflowTextAnimField("kf_tracking", "Tracking", -60f, 120f, 0f, "px")
+)
+
+private val ALL_KEYFLOW_TEXT_FIELDS = KEYFLOW_TEXT_RANGE_FIELDS + KEYFLOW_TEXT_TRANSFORM_FIELDS
 
 /**
  * 1:1 Alight Motion + KeyFlow Clickable Effect Detail Inspector!
@@ -168,6 +199,7 @@ fun AmEffectDetailInspectorPanel(
         } else {
             when {
                 selectedPluginParamKey == PLUGIN_MIX_KEY -> PLUGIN_MIX_KEY
+                selectedPluginParamKey == PLUGIN_FEATHER_KEY -> PLUGIN_FEATHER_KEY
                 selectedPluginParamKey != null && numericPluginParams.any { it.key == selectedPluginParamKey } -> selectedPluginParamKey
                 numericPluginParams.isNotEmpty() -> numericPluginParams.first().key
                 else -> PLUGIN_MIX_KEY
@@ -181,6 +213,7 @@ fun AmEffectDetailInspectorPanel(
     val activeSpec = specs.firstOrNull { it.slot == selectedSlot } ?: specs.first()
     val activeProp: AnimatableProperty = when {
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> effect.mixProp
+        pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> effect.featherProp
         pluginDef != null && activePluginParam != null -> {
             effect.customParamFor(activePluginParam.key, activePluginParam.defaultFloat)
         }
@@ -189,26 +222,31 @@ fun AmEffectDetailInspectorPanel(
 
     val activeLabel = when {
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> "Mix"
+        pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> "Feather"
         activePluginParam != null -> activePluginParam.label
         else -> activeSpec.label
     }
     val activeMin = when {
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 0f
+        pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> 0f
         activePluginParam != null -> activePluginParam.min
         else -> activeSpec.minVal
     }
     val activeMax = when {
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 100f
+        pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> 100f
         activePluginParam != null -> activePluginParam.max
         else -> activeSpec.maxVal
     }
     val activeUnit = when {
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> "%"
+        pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> "px"
         activePluginParam != null -> ""
         else -> activeSpec.unit
     }
     val activeFineStep = when {
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 1f
+        pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> 0.5f
         activePluginParam != null -> ((activePluginParam.max - activePluginParam.min) / 200f).coerceAtLeast(0.01f)
         else -> activeSpec.fineStep
     }
@@ -448,6 +486,54 @@ fun AmEffectDetailInspectorPanel(
                         fontWeight = FontWeight.Bold
                     )
                 }
+
+                // Universal Feather chip for every plugin effect (Section 3.1)
+                val featherV = AnimationEvaluator.evaluateProperty(effect.featherProp, playheadMs, audioSpectrum)
+                val featherKfs = effect.featherProp.keyframes.size
+                val isFeatherSelected = resolvedPluginKey == PLUGIN_FEATHER_KEY
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isFeatherSelected) AmTealContainer else PanelDark)
+                        .border(
+                            1.2.dp,
+                            if (isFeatherSelected) AmTealBright else OutlineSubtle,
+                            RoundedCornerShape(10.dp)
+                        )
+                        .clickable {
+                            onSelectSlot(EffectParamSlot.FEATHER)
+                            onSelectPluginParamKey(PLUGIN_FEATHER_KEY)
+                        }
+                        .testTag("plugin_param_chip_feather")
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Feather",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isFeatherSelected) AmTealBright else TextSecondary,
+                            fontWeight = if (isFeatherSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                        if (featherKfs > 0) {
+                            Text(
+                                text = "◆$featherKfs",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = KeyframeAmber,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    Text(
+                        text = "${featherV.toInt()}px",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             } else {
                 specs.forEach { spec ->
                     val p = effect.propertyFor(spec.slot)
@@ -623,10 +709,15 @@ fun AmEffectDetailInspectorPanel(
                         label = activeLabel,
                         fineStep = activeFineStep,
                         onValueChange = { next ->
-                            if (pluginDef != null && resolvedPluginKey != null) {
-                                onUpdateCustomPluginParamValue(resolvedPluginKey, next)
-                            } else {
-                                onUpdateSlotValue(next)
+                            when {
+                                pluginDef != null && resolvedPluginKey == PLUGIN_FEATHER_KEY -> {
+                                    onSelectSlot(EffectParamSlot.FEATHER)
+                                    onUpdateSlotValue(next)
+                                }
+                                pluginDef != null && resolvedPluginKey != null -> {
+                                    onUpdateCustomPluginParamValue(resolvedPluginKey, next)
+                                }
+                                else -> onUpdateSlotValue(next)
                             }
                         },
                         testTag = "effect_property_value_slider"
@@ -807,67 +898,6 @@ fun AmEffectDetailInspectorPanel(
                 )
             }
         }
-
-        // 5. EXPLICIT DELETE EFFECT & DUPLICATE FOOTER BAR
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(34.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(NeonPink.copy(alpha = 0.14f))
-                    .border(1.dp, NeonPink.copy(alpha = 0.65f), RoundedCornerShape(9.dp))
-                    .clickable(onClick = onRemoveEffect)
-                    .testTag("delete_effect_detail_button")
-                    .padding(horizontal = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.DeleteOutline,
-                    contentDescription = "Delete",
-                    tint = NeonPink,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Delete",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = NeonPink
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .height(34.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(PanelDark)
-                    .border(1.dp, OutlineSubtle, RoundedCornerShape(9.dp))
-                    .clickable(onClick = onDuplicateEffect)
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ContentCopy,
-                    contentDescription = "Duplicate Effect",
-                    tint = TextPrimary,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "Duplicate",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary
-                )
-            }
-        }
     }
 }
 
@@ -911,8 +941,17 @@ fun AmEffectInlineCurvePanel(
         numericPluginParams.firstOrNull { it.key == resolvedPluginKey }
     }
 
+    val kfTextField = remember(effect.effectId, selectedPluginParamKey) {
+        if (effect.effectId == "Keyflow_Text_Animator" || effect.effectId == "Text_Transform") {
+            ALL_KEYFLOW_TEXT_FIELDS.firstOrNull { it.key == selectedPluginParamKey }
+                ?: if (effect.effectId == "Keyflow_Text_Animator") ALL_KEYFLOW_TEXT_FIELDS.first() else null
+        } else {
+            null
+        }
+    }
     val activeSpec = specs.firstOrNull { it.slot == selectedSlot } ?: specs.first()
     val activeProp = when {
+        kfTextField != null -> effect.customParamFor(kfTextField.key, kfTextField.defaultVal)
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> effect.mixProp
         pluginDef != null && activePluginParam != null -> {
             effect.customParamFor(activePluginParam.key, activePluginParam.defaultFloat)
@@ -920,16 +959,19 @@ fun AmEffectInlineCurvePanel(
         else -> effect.propertyFor(selectedSlot)
     }
     val activeLabel = when {
+        kfTextField != null -> kfTextField.label
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> "Mix"
         activePluginParam != null -> activePluginParam.label
         else -> activeSpec.label
     }
     val activeMin = when {
+        kfTextField != null -> kfTextField.minVal
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 0f
         activePluginParam != null -> activePluginParam.min
         else -> activeSpec.minVal
     }
     val activeMax = when {
+        kfTextField != null -> kfTextField.maxVal
         pluginDef != null && resolvedPluginKey == PLUGIN_MIX_KEY -> 100f
         activePluginParam != null -> activePluginParam.max
         else -> activeSpec.maxVal
@@ -981,7 +1023,18 @@ fun AmEffectInlineCurvePanel(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            if (pluginDef != null) {
+            if (effect.effectId == "Keyflow_Text_Animator") {
+                ALL_KEYFLOW_TEXT_FIELDS.forEach { field ->
+                    val kfs = effect.customParamFor(field.key, field.defaultVal).keyframes.size
+                    val isSel = (kfTextField?.key ?: ALL_KEYFLOW_TEXT_FIELDS.first().key) == field.key
+                    AmSegmentChip(
+                        label = if (kfs > 0) "${field.label} ◆$kfs" else field.label,
+                        selected = isSel,
+                        compact = true,
+                        onClick = { onSelectPluginParamKey(field.key) }
+                    )
+                }
+            } else if (pluginDef != null) {
                 numericPluginParams.forEach { param ->
                     val kfs = effect.customParamFor(param.key, param.defaultFloat).keyframes.size
                     AmSegmentChip(
@@ -1003,7 +1056,7 @@ fun AmEffectInlineCurvePanel(
                     val kfs = effect.propertyFor(spec.slot).keyframes.size
                     AmSegmentChip(
                         label = if (kfs > 0) "${spec.label} ◆$kfs" else spec.label,
-                        selected = spec.slot == selectedSlot,
+                        selected = spec.slot == selectedSlot && kfTextField == null,
                         compact = true,
                         onClick = { onSelectSlot(spec.slot) }
                     )
@@ -1070,6 +1123,7 @@ fun KeyflowEffectsSplitDrawer(
     onMoveEffectOrder: (String, Boolean) -> Unit,
     onDuplicateEffect: (String) -> Unit,
     onResetEffect: (String) -> Unit,
+    onResetSingleEffectParam: (String, EffectParamSlot?, String?) -> Unit = { _, _, _ -> },
     onRemoveEffectNode: (String) -> Unit,
     onClearAllEffects: (() -> Unit)?,
     onCopyEffects: () -> Unit,
@@ -1078,6 +1132,7 @@ fun KeyflowEffectsSplitDrawer(
     onNavigateTool: (StudioDestination) -> Unit,
     onRequestEyedropper: (EyedropperColorSlot) -> Unit,
     onRequestPluginColorEyedropper: (String) -> Unit,
+    onShowMediaInfo: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val activeExpandedFx = remember(layer.effects, selectedEffectId) {
@@ -1094,6 +1149,15 @@ fun KeyflowEffectsSplitDrawer(
     ) {
         if (!hasActivePropertyContext || activeExpandedFx == null) {
             null
+        } else if (activeExpandedFx.effectId == "Keyflow_Text_Animator") {
+            val field = ALL_KEYFLOW_TEXT_FIELDS.firstOrNull { it.key == selectedPluginParamKey }
+                ?: ALL_KEYFLOW_TEXT_FIELDS.first()
+            activeExpandedFx.customParamFor(field.key, field.defaultVal)
+        } else if (activeExpandedFx.effectId == "Text_Transform" && selectedPluginParamKey != null &&
+            ALL_KEYFLOW_TEXT_FIELDS.any { it.key == selectedPluginParamKey }
+        ) {
+            val field = ALL_KEYFLOW_TEXT_FIELDS.first { it.key == selectedPluginParamKey }
+            activeExpandedFx.customParamFor(field.key, field.defaultVal)
         } else {
             val pDef = PluginPackManager.findPluginEffect(activeExpandedFx.effectId)
             if (pDef != null) {
@@ -1236,6 +1300,15 @@ fun KeyflowEffectsSplitDrawer(
                         expanded = railOverflowOpen,
                         onDismissRequest = { railOverflowOpen = false }
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("Media Info", color = KeyflowBlueBright, fontWeight = FontWeight.SemiBold) },
+                            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null, tint = KeyflowBlueBright) },
+                            onClick = {
+                                railOverflowOpen = false
+                                onShowMediaInfo()
+                            },
+                            modifier = Modifier.testTag("effects_rail_media_info_button")
+                        )
                         DropdownMenuItem(
                             text = { Text("Plugin Packs (.kfpack)", color = KeyflowBlueBright, fontWeight = FontWeight.SemiBold) },
                             leadingIcon = { Icon(Icons.Default.Extension, contentDescription = null, tint = KeyflowBlueBright) },
@@ -1398,6 +1471,7 @@ fun KeyflowEffectsSplitDrawer(
                                 onMoveEffectOrder = { up -> onMoveEffectOrder(fx.id, up) },
                                 onDuplicateEffect = { onDuplicateEffect(fx.id) },
                                 onResetEffect = { onResetEffect(fx.id) },
+                                onResetSingleParam = { slot, key -> onResetSingleEffectParam(fx.id, slot, key) },
                                 onRemoveEffect = { onRemoveEffectNode(fx.id) },
                                 onRequestEyedropper = onRequestEyedropper,
                                 onRequestPluginColorEyedropper = onRequestPluginColorEyedropper
@@ -1436,15 +1510,15 @@ private fun KeyflowAddEffectButton(
         Icon(
             imageVector = Icons.Default.Add,
             contentDescription = "Add Effect",
-            tint = Color(0xFF060912),
+            tint = Color.White,
             modifier = Modifier.size(20.dp)
         )
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = "Add Effect",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF060912)
+            color = Color.White
         )
     }
 }
@@ -1471,6 +1545,7 @@ private fun KeyflowEffectAccordionItem(
     onMoveEffectOrder: (Boolean) -> Unit,
     onDuplicateEffect: () -> Unit,
     onResetEffect: () -> Unit,
+    onResetSingleParam: (EffectParamSlot?, String?) -> Unit = { _, _ -> },
     onRemoveEffect: () -> Unit,
     onRequestEyedropper: (EyedropperColorSlot) -> Unit,
     onRequestPluginColorEyedropper: (String) -> Unit
@@ -1683,6 +1758,7 @@ private fun KeyflowEffectAccordionItem(
                 val resolvedKey = remember(numericParams, selectedPluginParamKey) {
                     when {
                         selectedPluginParamKey == PLUGIN_MIX_KEY -> PLUGIN_MIX_KEY
+                        selectedPluginParamKey == PLUGIN_FEATHER_KEY -> PLUGIN_FEATHER_KEY
                         selectedPluginParamKey != null && numericParams.any { it.key == selectedPluginParamKey } -> selectedPluginParamKey
                         numericParams.isNotEmpty() -> numericParams.first().key
                         else -> PLUGIN_MIX_KEY
@@ -1710,6 +1786,7 @@ private fun KeyflowEffectAccordionItem(
                                     if (!isSel) onSelectPluginParamKey(param.key)
                                     onUpdateCustomPluginParamValue(param.key, next)
                                 },
+                                onReset = { onResetSingleParam(null, param.key) },
                                 labelTestTag = "plugin_param_chip_${param.key}",
                                 scrubberTestTag = "plugin_param_ruler_${param.key}"
                             )
@@ -1748,7 +1825,7 @@ private fun KeyflowEffectAccordionItem(
                                         onUpdateCustomPluginParamValue(param.key, if (checked) 1f else 0f)
                                     },
                                     colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Color(0xFF060912),
+                                        checkedThumbColor = Color.White,
                                         checkedTrackColor = KeyflowBlue
                                     ),
                                     modifier = Modifier.testTag("plugin_bool_switch_${param.key}")
@@ -1802,13 +1879,345 @@ private fun KeyflowEffectAccordionItem(
                     onValueChange = { next ->
                         if (!isMixSel) onSelectPluginParamKey(PLUGIN_MIX_KEY)
                         onUpdateSlotValue(next)
+                    },
+                    onReset = { onResetSingleParam(EffectParamSlot.MIX, null) }
+                )
+
+                // Universal Feather Property Ruler Card on Plugin Effects (Section 3.1)
+                val featherVal = AnimationEvaluator.evaluateProperty(fx.featherProp, playheadMs, audioSpectrum)
+                val isFeatherSel = resolvedKey == PLUGIN_FEATHER_KEY || selectedSlot == EffectParamSlot.FEATHER
+                KeyflowPropertyRulerCard(
+                    label = "Feather",
+                    value = featherVal,
+                    minValue = 0f,
+                    maxValue = 100f,
+                    unit = "px",
+                    selected = isFeatherSel,
+                    keyframeCount = fx.featherProp.keyframes.size,
+                    hasKeyframeAtPlayhead = fx.featherProp.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                    onSelect = {
+                        onSelectSlot(EffectParamSlot.FEATHER)
+                        onSelectPluginParamKey(PLUGIN_FEATHER_KEY)
+                    },
+                    onValueChange = { next ->
+                        onSelectSlot(EffectParamSlot.FEATHER)
+                        onUpdateSlotValue(next)
+                    },
+                    onReset = { onResetSingleParam(EffectParamSlot.FEATHER, null) },
+                    labelTestTag = "effect_slot_chip_FEATHER",
+                    scrubberTestTag = "effect_slot_scrubber_FEATHER"
+                )
+            } else if (fx.effectId == "Keyflow_Text_Animator") {
+                // KEYFLOW BY ANGKIN TEXT ANIMATOR DEDICATED LAYOUT (Range Selector + Per-Unit Transform)
+                val unitModeProp = fx.customParamFor("kf_unit_mode", 0f)
+                val unitModeRaw = AnimationEvaluator.evaluateProperty(unitModeProp, playheadMs, audioSpectrum)
+                val unitIndex = unitModeRaw.toInt().coerceIn(0, 2)
+                val resolvedKfKey = selectedPluginParamKey?.takeIf { key ->
+                    ALL_KEYFLOW_TEXT_FIELDS.any { it.key == key }
+                } ?: ALL_KEYFLOW_TEXT_FIELDS.first().key
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(KeyflowCardSurface)
+                        .border(0.8.dp, KeyflowCardBorder, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                        .testTag("keyflow_text_animator_panel"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "RANGE SELECTOR",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = KeyflowBlueBright
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            listOf("Characters" to 0, "Words" to 1, "Lines" to 2).forEach { (lbl, idx) ->
+                                AmSegmentChip(
+                                    label = lbl,
+                                    selected = unitIndex == idx,
+                                    compact = true,
+                                    onClick = { onUpdateCustomPluginParamValue("kf_unit_mode", idx.toFloat()) },
+                                    testTag = "kf_text_unit_${lbl.lowercase()}"
+                                )
+                            }
+                        }
                     }
+
+                    KEYFLOW_TEXT_RANGE_FIELDS.forEach { field ->
+                        val prop = fx.customParamFor(field.key, field.defaultVal)
+                        val liveVal = AnimationEvaluator.evaluateProperty(prop, playheadMs, audioSpectrum)
+                        val isSel = resolvedKfKey == field.key
+                        KeyflowPropertyRulerCard(
+                            label = field.label,
+                            value = liveVal,
+                            minValue = field.minVal,
+                            maxValue = field.maxVal,
+                            unit = field.unit,
+                            unbounded = field.unbounded,
+                            selected = isSel,
+                            keyframeCount = prop.keyframes.size,
+                            hasKeyframeAtPlayhead = prop.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                            onSelect = { onSelectPluginParamKey(field.key) },
+                            onValueChange = { next ->
+                                if (!isSel) onSelectPluginParamKey(field.key)
+                                onUpdateCustomPluginParamValue(field.key, next)
+                            },
+                            onReset = { onResetSingleParam(null, field.key) },
+                            labelTestTag = "kf_text_chip_${field.key}",
+                            scrubberTestTag = "kf_text_slider_${field.key}"
+                        )
+                    }
+
+                    Text(
+                        text = "UNIT TRANSFORM",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = KeyflowBlueBright,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+
+                    KEYFLOW_TEXT_TRANSFORM_FIELDS.forEach { field ->
+                        val prop = fx.customParamFor(field.key, field.defaultVal)
+                        val liveVal = AnimationEvaluator.evaluateProperty(prop, playheadMs, audioSpectrum)
+                        val isSel = resolvedKfKey == field.key
+                        KeyflowPropertyRulerCard(
+                            label = field.label,
+                            value = liveVal,
+                            minValue = field.minVal,
+                            maxValue = field.maxVal,
+                            unit = field.unit,
+                            unbounded = field.unbounded,
+                            selected = isSel,
+                            keyframeCount = prop.keyframes.size,
+                            hasKeyframeAtPlayhead = prop.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                            onSelect = { onSelectPluginParamKey(field.key) },
+                            onValueChange = { next ->
+                                if (!isSel) onSelectPluginParamKey(field.key)
+                                onUpdateCustomPluginParamValue(field.key, next)
+                            },
+                            onReset = { onResetSingleParam(null, field.key) },
+                            labelTestTag = "kf_text_chip_${field.key}",
+                            scrubberTestTag = "kf_text_slider_${field.key}"
+                        )
+                    }
+
+                    // Universal Feather on Keyflow_Text_Animator (Section 3.1)
+                    val kfFeather = AnimationEvaluator.evaluateProperty(fx.featherProp, playheadMs, audioSpectrum)
+                    KeyflowPropertyRulerCard(
+                        label = "Feather",
+                        value = kfFeather,
+                        minValue = 0f,
+                        maxValue = 100f,
+                        unit = "px",
+                        selected = selectedSlot == EffectParamSlot.FEATHER,
+                        keyframeCount = fx.featherProp.keyframes.size,
+                        hasKeyframeAtPlayhead = fx.featherProp.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                        onSelect = { onSelectSlot(EffectParamSlot.FEATHER) },
+                        onValueChange = { next ->
+                            onSelectSlot(EffectParamSlot.FEATHER)
+                            onUpdateSlotValue(next)
+                        },
+                        onReset = { onResetSingleParam(EffectParamSlot.FEATHER, null) },
+                        labelTestTag = "effect_slot_chip_FEATHER",
+                        scrubberTestTag = "effect_slot_scrubber_FEATHER"
+                    )
+                }
+            } else if (fx.isGenericXmlEffect && (fx.genericParamTypes.isNotEmpty() || fx.customParams.isNotEmpty() || fx.customColors.isNotEmpty())) {
+                // Lossless Generic Alight Motion XML Effect Controls (`float`, `int`, `bool`, `vec2`, `color`) + Universal Feather
+                val paramNames = (fx.genericParamTypes.keys + fx.customColors.keys).distinct()
+                paramNames.forEach { pName ->
+                    when (fx.genericParamTypes[pName]?.lowercase() ?: "float") {
+                        "bool" -> {
+                            val prop = fx.customParamFor(pName, 0f)
+                            val checked = AnimationEvaluator.evaluateProperty(prop, playheadMs, audioSpectrum) >= 0.5f ||
+                                fx.genericStrings[pName]?.equals("true", ignoreCase = true) == true
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(KeyflowCardSurface)
+                                    .border(0.8.dp, KeyflowCardBorder, RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = pName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextPrimary
+                                )
+                                Switch(
+                                    checked = checked,
+                                    onCheckedChange = { next ->
+                                        val updatedProp = prop.copy(baseValue = if (next) 1f else 0f)
+                                        onUpdateEffectNode(
+                                            fx.updateCustomParam(pName, updatedProp).copy(
+                                                genericStrings = fx.genericStrings + (pName to if (next) "true" else "false")
+                                            )
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("xml_effect_bool_$pName")
+                                )
+                            }
+                        }
+                        "vec2" -> {
+                            val propX = fx.customParams["${pName}.x"] ?: fx.customParamFor(pName, 0f)
+                            val propY = fx.customParams["${pName}.y"] ?: AnimatableProperty(0f)
+                            val vx = AnimationEvaluator.evaluateProperty(propX, playheadMs, audioSpectrum)
+                            val vy = AnimationEvaluator.evaluateProperty(propY, playheadMs, audioSpectrum)
+                            KeyflowPropertyRulerCard(
+                                label = "$pName X",
+                                value = vx,
+                                minValue = -2000f,
+                                maxValue = 2000f,
+                                unbounded = true,
+                                selected = selectedPluginParamKey == "${pName}.x",
+                                keyframeCount = propX.keyframes.size,
+                                hasKeyframeAtPlayhead = propX.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                                onSelect = { onSelectPluginParamKey("${pName}.x") },
+                                onValueChange = { next ->
+                                    onUpdateCustomPluginParamValue("${pName}.x", next)
+                                },
+                                onReset = {}
+                            )
+                            KeyflowPropertyRulerCard(
+                                label = "$pName Y",
+                                value = vy,
+                                minValue = -2000f,
+                                maxValue = 2000f,
+                                unbounded = true,
+                                selected = selectedPluginParamKey == "${pName}.y",
+                                keyframeCount = propY.keyframes.size,
+                                hasKeyframeAtPlayhead = propY.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                                onSelect = { onSelectPluginParamKey("${pName}.y") },
+                                onValueChange = { next ->
+                                    onUpdateCustomPluginParamValue("${pName}.y", next)
+                                },
+                                onReset = {}
+                            )
+                        }
+                        "color" -> {
+                            val hex = fx.customColors[pName]?.ifBlank { null } ?: fx.tintColorHex
+                            KeyflowColorPropertyCard(
+                                label = pName,
+                                currentHex = hex,
+                                isWheelOpen = false,
+                                onToggleWheel = {},
+                                onPickSwatch = { picked ->
+                                    onUpdateCustomPluginColor(pName, picked)
+                                },
+                                onEyedropper = { onRequestEyedropper(EyedropperColorSlot.EFFECT_TINT) },
+                                eyedropperTag = "xml_effect_eyedropper_$pName",
+                                wheelToggleTag = "xml_effect_wheel_$pName"
+                            )
+                        }
+                        "int" -> {
+                            val prop = fx.customParamFor(pName, 0f)
+                            val vInt = AnimationEvaluator.evaluateProperty(prop, playheadMs, audioSpectrum)
+                            KeyflowPropertyRulerCard(
+                                label = pName,
+                                value = vInt,
+                                minValue = -100f,
+                                maxValue = 100f,
+                                selected = selectedPluginParamKey == pName,
+                                keyframeCount = prop.keyframes.size,
+                                hasKeyframeAtPlayhead = prop.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                                onSelect = { onSelectPluginParamKey(pName) },
+                                onValueChange = { next ->
+                                    val rounded = kotlin.math.round(next)
+                                    onUpdateCustomPluginParamValue(pName, rounded)
+                                },
+                                onReset = {}
+                            )
+                        }
+                        else -> {
+                            val prop = fx.customParamFor(pName, 0f)
+                            val vf = AnimationEvaluator.evaluateProperty(prop, playheadMs, audioSpectrum)
+                            KeyflowPropertyRulerCard(
+                                label = pName,
+                                value = vf,
+                                minValue = -360f,
+                                maxValue = 360f,
+                                unbounded = true,
+                                selected = selectedPluginParamKey == pName,
+                                keyframeCount = prop.keyframes.size,
+                                hasKeyframeAtPlayhead = prop.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                                onSelect = { onSelectPluginParamKey(pName) },
+                                onValueChange = { next ->
+                                    onUpdateCustomPluginParamValue(pName, next)
+                                },
+                                onReset = {}
+                            )
+                        }
+                    }
+                }
+
+                // Universal Feather on Generic XML Effects (Section 3.1)
+                val xmlFeather = AnimationEvaluator.evaluateProperty(fx.featherProp, playheadMs, audioSpectrum)
+                KeyflowPropertyRulerCard(
+                    label = "Feather",
+                    value = xmlFeather,
+                    minValue = 0f,
+                    maxValue = 100f,
+                    unit = "px",
+                    selected = selectedSlot == EffectParamSlot.FEATHER,
+                    keyframeCount = fx.featherProp.keyframes.size,
+                    hasKeyframeAtPlayhead = fx.featherProp.keyframes.any { abs(it.timeMs - playheadMs) <= 35L },
+                    onSelect = { onSelectSlot(EffectParamSlot.FEATHER) },
+                    onValueChange = { next ->
+                        onSelectSlot(EffectParamSlot.FEATHER)
+                        onUpdateSlotValue(next)
+                    },
+                    onReset = { onResetSingleParam(EffectParamSlot.FEATHER, null) },
+                    labelTestTag = "effect_slot_chip_FEATHER",
+                    scrubberTestTag = "effect_slot_scrubber_FEATHER"
                 )
             } else {
-                // Built-in 5-slot Effect Parameters rendered as individual KeyFlow Property Ruler Cards!
+                // Built-in 5-slot Effect Parameters rendered as individual KeyFlow Left-to-Right Slider Cards!
                 val specs = remember(builtInDef) { builtInDef.paramSpecs() }
                 var showTintWheel by remember(fx.id) {
                     mutableStateOf(fx.effectId == "Chroma_Key" || fx.effectId == "Luma_Key")
+                }
+
+                if (fx.effectId == "Text_Transform") {
+                    val unitModeProp = fx.customParamFor("kf_unit_mode", 0f)
+                    val unitIndex = AnimationEvaluator.evaluateProperty(unitModeProp, playheadMs, audioSpectrum)
+                        .toInt().coerceIn(0, 2)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(KeyflowCardSurface)
+                            .border(0.8.dp, KeyflowCardBorder, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Based On",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextSecondary
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            listOf("Characters" to 0, "Words" to 1, "Lines" to 2).forEach { (lbl, idx) ->
+                                AmSegmentChip(
+                                    label = lbl,
+                                    selected = unitIndex == idx,
+                                    compact = true,
+                                    onClick = { onUpdateCustomPluginParamValue("kf_unit_mode", idx.toFloat()) }
+                                )
+                            }
+                        }
+                    }
                 }
 
                 specs.forEach { spec ->
@@ -1829,6 +2238,7 @@ private fun KeyflowEffectAccordionItem(
                             if (!isSel) onSelectSlot(spec.slot)
                             onUpdateSlotValue(next)
                         },
+                        onReset = { onResetSingleParam(spec.slot, null) },
                         labelTestTag = "effect_slot_chip_${spec.slot.name}",
                         scrubberTestTag = if (isSel) "effect_slot_scrubber" else "effect_slot_scrubber_${spec.slot.name}"
                     )

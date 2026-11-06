@@ -23,6 +23,9 @@ enum class AspectRatioPreset(
     CUSTOM("Custom", 1440, 1440, "Custom W x H")
 }
 
+const val DEFAULT_NEW_TIMELINE_DURATION_MS: Long = 8_750L
+const val DEFAULT_NEW_CLIP_DURATION_MS: Long = 3_500L
+
 enum class LayerType(val label: String) {
     SHAPE("Shape"),
     TEXT("Text"),
@@ -31,7 +34,9 @@ enum class LayerType(val label: String) {
     AUDIO("Audio"),
     CAMERA("Camera"),
     MODEL_3D("3D Object"),
-    NULL_OBJECT("Null Rig")
+    NULL_OBJECT("Null Rig"),
+    GROUP("Group"),
+    DRAWING("Drawing")
 }
 
 enum class Primitive3DType(val label: String) {
@@ -49,18 +54,32 @@ enum class AudioBand(val label: String) {
     TREBLE("Treble (2k-16k Hz)")
 }
 
-enum class PropertyTarget(val label: String, val unit: String, val minVal: Float, val maxVal: Float) {
-    POS_X("Pos X", "px", -1500f, 1500f),
-    POS_Y("Pos Y", "px", -1500f, 1500f),
-    POS_Z("Z Depth", "px", -1000f, 1000f),
-    PIVOT_X("Pivot X", "px", -600f, 600f),
-    PIVOT_Y("Pivot Y", "px", -600f, 600f),
-    SCALE("Scale", "%", 5f, 500f),
-    ROTATION_X("Rot X", "°", -360f, 360f),
-    ROTATION_Y("Rot Y", "°", -360f, 360f),
-    ROTATION_Z("Rotation", "°", -360f, 360f),
-    OPACITY("Opacity", "%", 0f, 100f),
-    TIME_REMAP("Time Remap", "s", 0f, 120f)
+enum class PropertyTarget(
+    val label: String,
+    val unit: String,
+    val minVal: Float,
+    val maxVal: Float,
+    val defaultSliderMin: Float = minVal,
+    val defaultSliderMax: Float = maxVal,
+    val unbounded: Boolean = false
+) {
+    POS_X("Pos X", "px", -100000f, 100000f, -1920f, 1920f, unbounded = true),
+    POS_Y("Pos Y", "px", -100000f, 100000f, -1920f, 1920f, unbounded = true),
+    POS_Z("Z Depth", "px", -50000f, 50000f, -1500f, 1500f, unbounded = true),
+    PIVOT_X("Pivot X", "px", -50000f, 50000f, -960f, 960f, unbounded = true),
+    PIVOT_Y("Pivot Y", "px", -50000f, 50000f, -960f, 960f, unbounded = true),
+    SCALE("Scale", "%", 0f, 5000f, 0f, 400f, unbounded = true),
+    ROTATION_X("Rot X", "°", -36000f, 36000f, -360f, 360f, unbounded = true),
+    ROTATION_Y("Rot Y", "°", -36000f, 36000f, -360f, 360f, unbounded = true),
+    ROTATION_Z("Rotation", "°", -36000f, 36000f, -360f, 360f, unbounded = true),
+    OPACITY("Opacity", "%", 0f, 100f, 0f, 100f, unbounded = false),
+    TIME_REMAP("Time Remap", "s", 0f, 3600f, 0f, 60f, unbounded = true);
+
+    val defaultResetValue: Float
+        get() = when (this) {
+            SCALE, OPACITY -> 100f
+            else -> 0f
+        }
 }
 
 enum class EffectParamSlot {
@@ -68,19 +87,52 @@ enum class EffectParamSlot {
     SECONDARY,
     FREQUENCY,
     ANGLE,
-    MIX
+    MIX,
+    FEATHER
 }
 
 data class Keyframe(
     val id: String = UUID.randomUUID().toString(),
     val timeMs: Long = 0L,
     val value: Float = 0f,
-    // Cubic Bezier control points in normalized [0..1] domain: P1=(x1,y1), P2=(x2,y2)
+    // Cubic Bezier control points in normalized [0..1] domain: P1=(x1,y1), P2=(x2,y2); y1/y2 may exceed [0..1] for overshoot
     val outTangentX: Float = 0.42f,
     val outTangentY: Float = 0.0f,
     val inTangentX: Float = 0.58f,
     val inTangentY: Float = 1.0f,
-    val holdStep: Boolean = false
+    val holdStep: Boolean = false,
+    val rawEasing: String = ""
+)
+
+data class DrawingPoint(
+    val x: Float,
+    val y: Float,
+    val pressure: Float = 1.0f,
+    val inX: Float = 0f,
+    val inY: Float = 0f,
+    val outX: Float = 0f,
+    val outY: Float = 0f
+)
+
+typealias MaskVertex = DrawingPoint
+
+enum class MaskShapeType(val label: String) {
+    RECTANGLE("Rectangle"),
+    ELLIPSE("Ellipse"),
+    PEN("Pen"),
+    ROTO("Roto");
+
+    companion object {
+        fun fromLabel(raw: String): MaskShapeType =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) || it.label.equals(raw, ignoreCase = true) }
+                ?: RECTANGLE
+    }
+}
+
+data class LayerMarker(
+    val timeMs: Long,
+    val comment: String = "",
+    val durationMs: Long = 0L
 )
 
 data class AnimatableProperty(
@@ -102,16 +154,22 @@ data class EffectNode(
     val frequencyParam: Float = 0.35f,
     val angleParam: Float = 0.0f,
     val mixParam: Float = 100.0f,
+    val feather: Float = 0.0f,
     val tintColorHex: String = "#FFFFFF",
     val primaryProp: AnimatableProperty = AnimatableProperty(intensity),
     val secondaryProp: AnimatableProperty = AnimatableProperty(secondaryParam),
     val frequencyProp: AnimatableProperty = AnimatableProperty(frequencyParam),
     val angleProp: AnimatableProperty = AnimatableProperty(angleParam),
     val mixProp: AnimatableProperty = AnimatableProperty(mixParam),
+    val featherProp: AnimatableProperty = AnimatableProperty(feather),
     val audioBoundBand: AudioBand = AudioBand.NONE,
     val audioSensitivity: Float = 1.0f,
     val customParams: Map<String, AnimatableProperty> = emptyMap(),
-    val customColors: Map<String, String> = emptyMap()
+    val customColors: Map<String, String> = emptyMap(),
+    val isGenericXmlEffect: Boolean = false,
+    val genericParamTypes: Map<String, String> = emptyMap(),
+    val genericStrings: Map<String, String> = emptyMap(),
+    val rawAttributes: Map<String, String> = emptyMap()
 ) {
     fun propertyFor(slot: EffectParamSlot): AnimatableProperty = when (slot) {
         EffectParamSlot.PRIMARY -> primaryProp
@@ -119,6 +177,7 @@ data class EffectNode(
         EffectParamSlot.FREQUENCY -> frequencyProp
         EffectParamSlot.ANGLE -> angleProp
         EffectParamSlot.MIX -> mixProp
+        EffectParamSlot.FEATHER -> featherProp
     }
 
     fun updateProperty(slot: EffectParamSlot, updated: AnimatableProperty): EffectNode = when (slot) {
@@ -127,6 +186,7 @@ data class EffectNode(
         EffectParamSlot.FREQUENCY -> copy(frequencyParam = updated.baseValue, frequencyProp = updated)
         EffectParamSlot.ANGLE -> copy(angleParam = updated.baseValue, angleProp = updated)
         EffectParamSlot.MIX -> copy(mixParam = updated.baseValue, mixProp = updated)
+        EffectParamSlot.FEATHER -> copy(feather = updated.baseValue, featherProp = updated)
     }
 
     fun customParamFor(key: String, defaultVal: Float = 0f): AnimatableProperty =
@@ -149,12 +209,34 @@ data class EffectNode(
         .sorted()
 }
 
-data class MaskNode(
+data class LayerMask(
     val id: String = UUID.randomUUID().toString(),
-    val shape: String = "Rectangle",
-    val feather: Float = 12f,
-    val inverted: Boolean = false
-)
+    val name: String = "Mask",
+    val shapeType: MaskShapeType = MaskShapeType.RECTANGLE,
+    val enabled: Boolean = true,
+    val inverted: Boolean = false,
+    val featherPx: AnimatableProperty = AnimatableProperty(0f),
+    val expansionPx: AnimatableProperty = AnimatableProperty(0f),
+    val opacityPct: AnimatableProperty = AnimatableProperty(100f),
+    val vertices: List<MaskVertex> = emptyList(),
+    val closed: Boolean = true,
+    val rotoMode: String = "REMOVE_BACKGROUND",
+    val rotoContourByFrameMs: Map<Long, List<Pair<Float, Float>>> = emptyMap(),
+    val rotoFrameMasksPngBase64: Map<Long, String> = emptyMap()
+) {
+    val type: MaskShapeType get() = shapeType
+    val shape: String get() = shapeType.label
+    val featherProp: AnimatableProperty get() = featherPx
+    val expansionProp: AnimatableProperty get() = expansionPx
+    val opacityProp: AnimatableProperty get() = opacityPct
+    val feather: Float get() = featherPx.baseValue
+    val expansion: Float get() = expansionPx.baseValue
+    val opacity: Float get() = opacityPct.baseValue / 100f
+    val points: List<DrawingPoint> get() = vertices
+    val isRotoMask: Boolean get() = shapeType == MaskShapeType.ROTO
+}
+
+typealias MaskNode = LayerMask
 
 data class Layer(
     val id: String = UUID.randomUUID().toString(),
@@ -162,24 +244,29 @@ data class Layer(
     val type: LayerType = LayerType.SHAPE,
     val visible: Boolean = true,
     val startTimeMs: Long = 0L,
-    val endTimeMs: Long = 10000L,
+    val endTimeMs: Long = DEFAULT_NEW_TIMELINE_DURATION_MS,
     val sourceOffsetMs: Long = 0L,
-    val sourceDurationMs: Long = 10000L,
+    val sourceDurationMs: Long = DEFAULT_NEW_TIMELINE_DURATION_MS,
+    val mediaTrimOutMs: Long = 0L,
+    val isMissingMedia: Boolean = false,
     val mediaWidth: Int = 0,
     val mediaHeight: Int = 0,
     val parentId: String? = null,
-    val colorHex: String = "#00D2A8",
+    val colorHex: String = "#4F7CFF",
     val fillMode: String = "SOLID", // "SOLID", "LINEAR_GRADIENT", "RADIAL_GRADIENT"
-    val gradientEndColorHex: String = "#0094FF",
+    val gradientEndColorHex: String = "#38BDF8",
     val gradientAngleDeg: Float = 45f,
     val shapeKind: String = "Rounded Rect",
     val blendMode: String = "Normal",
     val strokeEnabled: Boolean = false,
     val strokeWidth: Float = 4f,
     val strokeColorHex: String = "#FFFFFF",
+    val strokePosition: String = "CENTER", // "OUTSIDE", "CENTER", "INSIDE"
     val shadowEnabled: Boolean = false,
     val shadowBlur: Float = 16f,
     val shadowColorHex: String = "#000000",
+    val shadowOffsetX: Float = 0f,
+    val shadowOffsetY: Float = 6f,
     val speedMultiplier: Float = 1.0f,
     val reversed: Boolean = false,
     val timeRemapEnabled: Boolean = false,
@@ -203,8 +290,22 @@ data class Layer(
     val locked: Boolean = false,
     val textContent: String = "TEXT",
     val fontFamilyName: String = "Space Grotesk",
+    val textSizeSp: Float = 48f,
+    val textWrapWidth: Int = 512,
+    val textAlign: String = "center",
     val mediaUri: String = "",
     val primitive3D: Primitive3DType = Primitive3DType.CUBE,
+    val drawingPoints: List<DrawingPoint> = emptyList(),
+    val drawingClosed: Boolean = false,
+    val drawingStrokeWidth: Float = 8f,
+    val drawingStrokeColorHex: String = "#FF000000",
+    val drawingStartSize: Float = 1f,
+    val drawingEndSize: Float = 1f,
+    val groupExpanded: Boolean = true,
+    val layerMarkers: List<LayerMarker> = emptyList(),
+    val rawAttributes: Map<String, String> = emptyMap(),
+    val hasSeparateScaleY: Boolean = false,
+    val scaleY: AnimatableProperty = AnimatableProperty(100f),
     val posX: AnimatableProperty = AnimatableProperty(0f),
     val posY: AnimatableProperty = AnimatableProperty(0f),
     val posZ: AnimatableProperty = AnimatableProperty(0f),
@@ -217,7 +318,8 @@ data class Layer(
     val opacity: AnimatableProperty = AnimatableProperty(100f),
     val timeRemap: AnimatableProperty = AnimatableProperty(0f),
     val effects: List<EffectNode> = emptyList(),
-    val masks: List<MaskNode> = emptyList()
+    val masks: List<MaskNode> = emptyList(),
+    val isAdjustmentLayer: Boolean = false
 ) {
     fun propertyFor(target: PropertyTarget): AnimatableProperty = when (target) {
         PropertyTarget.POS_X -> posX
@@ -276,6 +378,7 @@ data class Layer(
             rotationY = shiftProp(rotationY),
             rotationZ = shiftProp(rotationZ),
             opacity = shiftProp(opacity),
+            scaleY = shiftProp(scaleY),
             timeRemap = shiftProp(timeRemap),
             effects = effects.map { fx ->
                 fx.copy(
@@ -284,6 +387,7 @@ data class Layer(
                     frequencyProp = shiftProp(fx.frequencyProp),
                     angleProp = shiftProp(fx.angleProp),
                     mixProp = shiftProp(fx.mixProp),
+                    featherProp = shiftProp(fx.featherProp),
                     customParams = fx.customParams.mapValues { (_, p) -> shiftProp(p) }
                 )
             }
@@ -333,16 +437,70 @@ data class Project(
     val aspectRatioPreset: String = "16:9",
     val width: Int = 1920,
     val height: Int = 1080,
+    val exportWidth: Int = 0,
+    val exportHeight: Int = 0,
     val fps: Int = 60,
-    val durationMs: Long = 10000L,
+    val durationMs: Long = DEFAULT_NEW_TIMELINE_DURATION_MS,
     val codec: String = "H.264",
     val bpm: Int = 128,
     val backgroundColor: String = "Black", // "Black", "Dark Gray", "White", "Transparent"
+    val explicitSceneBgHex: String = "",
+    val rawAttributes: Map<String, String> = emptyMap(),
     val layers: List<Layer> = emptyList(),
     val beatMarkers: List<BeatMarker> = emptyList(),
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
-)
+) {
+    /**
+     * Exact end timestamp of the active edit based on visible layers (or all layers if all hidden),
+     * so exported MP4 videos strictly match the edit length without trailing empty frames.
+     */
+    fun effectiveEditDurationMs(): Long {
+        if (durationMs > 0L && rawAttributes.containsKey("__exactSceneTotalTime")) {
+            return durationMs.coerceAtLeast(100L)
+        }
+        val visibleLayersEnd = layers
+            .filter { it.visible && it.type != LayerType.NULL_OBJECT && it.type != LayerType.GROUP }
+            .maxOfOrNull { it.endTimeMs }
+        val anyLayerEnd = layers.maxOfOrNull { it.endTimeMs }
+        return when {
+            visibleLayersEnd != null && visibleLayersEnd > 0L -> visibleLayersEnd.coerceAtLeast(100L)
+            anyLayerEnd != null && anyLayerEnd > 0L -> anyLayerEnd.coerceAtLeast(100L)
+            else -> durationMs.coerceAtLeast(500L)
+        }
+    }
+
+    /**
+     * Collects all recursive child/descendant layer IDs parented under [rootLayerId].
+     */
+    fun descendantLayerIdsOf(rootLayerId: String): Set<String> {
+        val out = LinkedHashSet<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(rootLayerId)
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            layers.forEach { lyr ->
+                if (lyr.parentId == cur && out.add(lyr.id)) {
+                    queue.add(lyr.id)
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * Dynamic timeline span that expands freely whenever clips or playhead go past the base duration.
+     */
+    fun freeTimelineSpanMs(playheadMs: Long = 0L): Long {
+        val maxLayerEnd = layers.maxOfOrNull { it.endTimeMs } ?: 0L
+        return maxOf(durationMs, maxLayerEnd + 2000L, playheadMs + 1000L, 4000L)
+    }
+
+    companion object {
+        const val DEFAULT_NEW_TIMELINE_DURATION_MS: Long = com.example.data.model.DEFAULT_NEW_TIMELINE_DURATION_MS
+        const val DEFAULT_NEW_CLIP_DURATION_MS: Long = com.example.data.model.DEFAULT_NEW_CLIP_DURATION_MS
+    }
+}
 
 object ProjectPayloadSerializer {
 
@@ -387,9 +545,12 @@ object ProjectPayloadSerializer {
                 put("strokeEnabled", layer.strokeEnabled)
                 put("strokeWidth", layer.strokeWidth.toDouble())
                 put("strokeColorHex", layer.strokeColorHex)
+                put("strokePosition", layer.strokePosition)
                 put("shadowEnabled", layer.shadowEnabled)
                 put("shadowBlur", layer.shadowBlur.toDouble())
                 put("shadowColorHex", layer.shadowColorHex)
+                put("shadowOffsetX", layer.shadowOffsetX.toDouble())
+                put("shadowOffsetY", layer.shadowOffsetY.toDouble())
                 put("speedMultiplier", layer.speedMultiplier.toDouble())
                 put("reversed", layer.reversed)
                 put("timeRemapEnabled", layer.timeRemapEnabled)
@@ -413,8 +574,69 @@ object ProjectPayloadSerializer {
                 put("locked", layer.locked)
                 put("textContent", layer.textContent)
                 put("fontFamilyName", layer.fontFamilyName)
+                put("textSizeSp", layer.textSizeSp.toDouble())
+                put("textWrapWidth", layer.textWrapWidth)
+                put("textAlign", layer.textAlign)
                 put("mediaUri", layer.mediaUri)
+                put("mediaTrimOutMs", layer.mediaTrimOutMs)
+                put("isMissingMedia", layer.isMissingMedia)
                 put("primitive3D", layer.primitive3D.name)
+                put("groupExpanded", layer.groupExpanded)
+                put("hasSeparateScaleY", layer.hasSeparateScaleY)
+                put("scaleY", encodeProp(layer.scaleY))
+                if (layer.drawingPoints.isNotEmpty()) {
+                    put("drawingStrokeWidth", layer.drawingStrokeWidth.toDouble())
+                    put("drawingStrokeColorHex", layer.drawingStrokeColorHex)
+                    put("drawingStartSize", layer.drawingStartSize.toDouble())
+                    put("drawingEndSize", layer.drawingEndSize.toDouble())
+                    val dpArr = JSONArray()
+                    layer.drawingPoints.forEach { pt ->
+                        dpArr.put(JSONObject().apply {
+                            put("x", pt.x.toDouble())
+                            put("y", pt.y.toDouble())
+                            put("p", pt.pressure.toDouble())
+                        })
+                    }
+                    put("drawingPoints", dpArr)
+                }
+                if (layer.masks.isNotEmpty()) {
+                    val mArr = JSONArray()
+                    layer.masks.forEach { m ->
+                        val mpArr = JSONArray()
+                        m.vertices.forEach { pt ->
+                            mpArr.put(JSONObject().apply {
+                                put("x", pt.x.toDouble())
+                                put("y", pt.y.toDouble())
+                                put("p", pt.pressure.toDouble())
+                                if (pt.inX != 0f || pt.inY != 0f || pt.outX != 0f || pt.outY != 0f) {
+                                    put("ix", pt.inX.toDouble())
+                                    put("iy", pt.inY.toDouble())
+                                    put("ox", pt.outX.toDouble())
+                                    put("oy", pt.outY.toDouble())
+                                }
+                            })
+                        }
+                        mArr.put(JSONObject().apply {
+                            put("id", m.id)
+                            put("name", m.name)
+                            put("shape", m.shapeType.name)
+                            put("enabled", m.enabled)
+                            put("closed", m.closed)
+                            put("featherProp", encodeProp(m.featherPx))
+                            put("expansionProp", encodeProp(m.expansionPx))
+                            put("opacityProp", encodeProp(m.opacityPct))
+                            put("inverted", m.inverted)
+                            put("rotoMode", m.rotoMode)
+                            put("points", mpArr)
+                        })
+                    }
+                    put("masks", mArr)
+                }
+                if (layer.rawAttributes.isNotEmpty()) {
+                    val ra = JSONObject()
+                    layer.rawAttributes.forEach { (k, v) -> ra.put(k, v) }
+                    put("rawAttributes", ra)
+                }
                 put("posX", encodeProp(layer.posX))
                 put("posY", encodeProp(layer.posY))
                 put("posZ", encodeProp(layer.posZ))
@@ -465,18 +687,21 @@ object ProjectPayloadSerializer {
                             mediaWidth = obj.optInt("mediaWidth", 0),
                             mediaHeight = obj.optInt("mediaHeight", 0),
                             parentId = rawParent.ifBlank { null },
-                            colorHex = obj.optString("colorHex", "#00D2A8"),
+                            colorHex = obj.optString("colorHex", "#4F7CFF"),
                             fillMode = obj.optString("fillMode", "SOLID"),
-                            gradientEndColorHex = obj.optString("gradientEndColorHex", "#0094FF"),
+                            gradientEndColorHex = obj.optString("gradientEndColorHex", "#38BDF8"),
                             gradientAngleDeg = obj.optDouble("gradientAngleDeg", 45.0).toFloat(),
                             shapeKind = obj.optString("shapeKind", "Rounded Rect"),
                             blendMode = obj.optString("blendMode", "Normal"),
                             strokeEnabled = obj.optBoolean("strokeEnabled", false),
                             strokeWidth = obj.optDouble("strokeWidth", 4.0).toFloat(),
                             strokeColorHex = obj.optString("strokeColorHex", "#FFFFFF"),
+                            strokePosition = obj.optString("strokePosition", "CENTER"),
                             shadowEnabled = obj.optBoolean("shadowEnabled", false),
                             shadowBlur = obj.optDouble("shadowBlur", 16.0).toFloat(),
                             shadowColorHex = obj.optString("shadowColorHex", "#000000"),
+                            shadowOffsetX = obj.optDouble("shadowOffsetX", 0.0).toFloat(),
+                            shadowOffsetY = obj.optDouble("shadowOffsetY", 6.0).toFloat(),
                             speedMultiplier = obj.optDouble("speedMultiplier", 1.0).toFloat(),
                             reversed = obj.optBoolean("reversed", false),
                             timeRemapEnabled = obj.optBoolean("timeRemapEnabled", false),
@@ -500,8 +725,22 @@ object ProjectPayloadSerializer {
                             locked = obj.optBoolean("locked", false),
                             textContent = obj.optString("textContent", "TEXT"),
                             fontFamilyName = obj.optString("fontFamilyName", "Space Grotesk"),
+                            textSizeSp = obj.optDouble("textSizeSp", 48.0).toFloat(),
+                            textWrapWidth = obj.optInt("textWrapWidth", 512),
+                            textAlign = obj.optString("textAlign", "center"),
                             mediaUri = obj.optString("mediaUri", ""),
+                            mediaTrimOutMs = obj.optLong("mediaTrimOutMs", 0L),
+                            isMissingMedia = obj.optBoolean("isMissingMedia", false),
                             primitive3D = runCatching { Primitive3DType.valueOf(obj.optString("primitive3D", "CUBE")) }.getOrDefault(Primitive3DType.CUBE),
+                            drawingPoints = decodeDrawingPoints(obj.optJSONArray("drawingPoints")),
+                            drawingStrokeWidth = obj.optDouble("drawingStrokeWidth", 8.0).toFloat(),
+                            drawingStrokeColorHex = obj.optString("drawingStrokeColorHex", "#FF000000"),
+                            drawingStartSize = obj.optDouble("drawingStartSize", 1.0).toFloat(),
+                            drawingEndSize = obj.optDouble("drawingEndSize", 1.0).toFloat(),
+                            groupExpanded = obj.optBoolean("groupExpanded", false),
+                            rawAttributes = decodeStringMap(obj.optJSONObject("rawAttributes")),
+                            hasSeparateScaleY = obj.optBoolean("hasSeparateScaleY", false),
+                            scaleY = decodeProp(obj.optJSONObject("scaleY"), 100f),
                             posX = decodeProp(obj.optJSONObject("posX"), 0f),
                             posY = decodeProp(obj.optJSONObject("posY"), 0f),
                             posZ = decodeProp(obj.optJSONObject("posZ"), 0f),
@@ -513,7 +752,8 @@ object ProjectPayloadSerializer {
                             rotationZ = decodeProp(obj.optJSONObject("rotationZ"), 0f),
                             opacity = decodeProp(obj.optJSONObject("opacity"), 100f),
                             timeRemap = decodeProp(obj.optJSONObject("timeRemap"), 0f),
-                            effects = decodeEffects(obj.optJSONArray("effects"))
+                            effects = decodeEffects(obj.optJSONArray("effects")),
+                            masks = decodeMasks(obj.optJSONArray("masks"))
                         )
                     )
                 }
@@ -538,14 +778,17 @@ object ProjectPayloadSerializer {
                     put("frequencyParam", fx.frequencyProp.baseValue.toDouble())
                     put("angleParam", fx.angleProp.baseValue.toDouble())
                     put("mixParam", fx.mixProp.baseValue.toDouble())
+                    put("feather", fx.featherProp.baseValue.toDouble())
                     put("tintColorHex", fx.tintColorHex)
                     put("primaryProp", encodeProp(fx.primaryProp))
                     put("secondaryProp", encodeProp(fx.secondaryProp))
                     put("frequencyProp", encodeProp(fx.frequencyProp))
                     put("angleProp", encodeProp(fx.angleProp))
                     put("mixProp", encodeProp(fx.mixProp))
+                    put("featherProp", encodeProp(fx.featherProp))
                     put("audioBoundBand", fx.audioBoundBand.name)
                     put("audioSensitivity", fx.audioSensitivity.toDouble())
+                    put("isGenericXmlEffect", fx.isGenericXmlEffect)
                     if (fx.customParams.isNotEmpty()) {
                         val cpObj = JSONObject()
                         fx.customParams.forEach { (k, prop) -> cpObj.put(k, encodeProp(prop)) }
@@ -555,6 +798,21 @@ object ProjectPayloadSerializer {
                         val ccObj = JSONObject()
                         fx.customColors.forEach { (k, hex) -> ccObj.put(k, hex) }
                         put("customColors", ccObj)
+                    }
+                    if (fx.genericParamTypes.isNotEmpty()) {
+                        val gt = JSONObject()
+                        fx.genericParamTypes.forEach { (k, v) -> gt.put(k, v) }
+                        put("genericParamTypes", gt)
+                    }
+                    if (fx.genericStrings.isNotEmpty()) {
+                        val gs = JSONObject()
+                        fx.genericStrings.forEach { (k, v) -> gs.put(k, v) }
+                        put("genericStrings", gs)
+                    }
+                    if (fx.rawAttributes.isNotEmpty()) {
+                        val ra = JSONObject()
+                        fx.rawAttributes.forEach { (k, v) -> ra.put(k, v) }
+                        put("rawAttributes", ra)
                     }
                 }
             )
@@ -572,11 +830,13 @@ object ProjectPayloadSerializer {
                 val defFreq = o.optDouble("frequencyParam", 0.35).toFloat()
                 val defAng = o.optDouble("angleParam", 0.0).toFloat()
                 val defMix = o.optDouble("mixParam", 100.0).toFloat()
+                val defFeather = o.optDouble("feather", 0.0).toFloat()
                 val p1 = decodeProp(o.optJSONObject("primaryProp"), defInt)
                 val p2 = decodeProp(o.optJSONObject("secondaryProp"), defSec)
                 val p3 = decodeProp(o.optJSONObject("frequencyProp"), defFreq)
                 val p4 = decodeProp(o.optJSONObject("angleProp"), defAng)
                 val p5 = decodeProp(o.optJSONObject("mixProp"), defMix)
+                val pf = decodeProp(o.optJSONObject("featherProp"), defFeather)
                 val customParamsMap = LinkedHashMap<String, AnimatableProperty>()
                 o.optJSONObject("customParams")?.let { cpObj ->
                     val keys = cpObj.keys()
@@ -605,20 +865,78 @@ object ProjectPayloadSerializer {
                         frequencyParam = p3.baseValue,
                         angleParam = p4.baseValue,
                         mixParam = p5.baseValue,
+                        feather = pf.baseValue,
                         tintColorHex = o.optString("tintColorHex", "#FFFFFF"),
                         primaryProp = p1,
                         secondaryProp = p2,
                         frequencyProp = p3,
                         angleProp = p4,
                         mixProp = p5,
+                        featherProp = pf,
                         audioBoundBand = runCatching { AudioBand.valueOf(o.optString("audioBoundBand", "NONE")) }.getOrDefault(AudioBand.NONE),
                         audioSensitivity = o.optDouble("audioSensitivity", 1.0).toFloat(),
                         customParams = customParamsMap,
-                        customColors = customColorsMap
+                        customColors = customColorsMap,
+                        isGenericXmlEffect = o.optBoolean("isGenericXmlEffect", false),
+                        genericParamTypes = decodeStringMap(o.optJSONObject("genericParamTypes")),
+                        genericStrings = decodeStringMap(o.optJSONObject("genericStrings")),
+                        rawAttributes = decodeStringMap(o.optJSONObject("rawAttributes"))
                     )
                 )
             }
         }
+    }
+
+    private fun decodeDrawingPoints(arr: JSONArray?): List<DrawingPoint> {
+        if (arr == null) return emptyList()
+        return List(arr.length()) { idx ->
+            val o = arr.getJSONObject(idx)
+            DrawingPoint(
+                x = o.optDouble("x", 0.0).toFloat(),
+                y = o.optDouble("y", 0.0).toFloat(),
+                pressure = o.optDouble("p", 1.0).toFloat(),
+                inX = o.optDouble("ix", 0.0).toFloat(),
+                inY = o.optDouble("iy", 0.0).toFloat(),
+                outX = o.optDouble("ox", 0.0).toFloat(),
+                outY = o.optDouble("oy", 0.0).toFloat()
+            )
+        }
+    }
+
+    private fun decodeMasks(arr: JSONArray?): List<LayerMask> {
+        if (arr == null) return emptyList()
+        return List(arr.length()) { idx ->
+            val o = arr.getJSONObject(idx)
+            val shapeRaw = o.optString("shape", "RECTANGLE")
+            val shapeType = MaskShapeType.fromLabel(shapeRaw)
+            val featherFallback = o.optDouble("feather", 0.0).toFloat()
+            val expFallback = o.optDouble("expansion", 0.0).toFloat()
+            val opFallback = o.optDouble("opacity", 100.0).toFloat()
+            LayerMask(
+                id = o.optString("id", UUID.randomUUID().toString()),
+                name = o.optString("name", "${shapeType.label} Mask"),
+                shapeType = shapeType,
+                enabled = o.optBoolean("enabled", true),
+                inverted = o.optBoolean("inverted", false),
+                featherPx = decodeProp(o.optJSONObject("featherProp"), featherFallback),
+                expansionPx = decodeProp(o.optJSONObject("expansionProp"), expFallback),
+                opacityPct = decodeProp(o.optJSONObject("opacityProp"), opFallback),
+                vertices = decodeDrawingPoints(o.optJSONArray("points")),
+                closed = o.optBoolean("closed", true),
+                rotoMode = o.optString("rotoMode", "REMOVE_BACKGROUND")
+            )
+        }
+    }
+
+    private fun decodeStringMap(obj: JSONObject?): Map<String, String> {
+        if (obj == null) return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            out[k] = obj.optString(k, "")
+        }
+        return out
     }
 
     fun encodeBeatMarkers(markers: List<BeatMarker>): String {
@@ -669,6 +987,9 @@ object ProjectPayloadSerializer {
                     put("inTangentX", kf.inTangentX.toDouble())
                     put("inTangentY", kf.inTangentY.toDouble())
                     put("holdStep", kf.holdStep)
+                    if (kf.rawEasing.isNotBlank()) {
+                        put("rawEasing", kf.rawEasing)
+                    }
                 }
             )
         }
@@ -697,7 +1018,8 @@ object ProjectPayloadSerializer {
                             outTangentY = k.optDouble("outTangentY", 0.0).toFloat(),
                             inTangentX = k.optDouble("inTangentX", 0.58).toFloat(),
                             inTangentY = k.optDouble("inTangentY", 1.0).toFloat(),
-                            holdStep = k.optBoolean("holdStep", false)
+                            holdStep = k.optBoolean("holdStep", false),
+                            rawEasing = k.optString("rawEasing", "")
                         )
                     )
                 }

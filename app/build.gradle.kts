@@ -14,7 +14,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.framepollution.kxvqpm"
+    applicationId = "com.archyster.chronos"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -84,6 +84,10 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 tasks.withType<Test> {
   failFast = true
   timeout.set(Duration.ofMinutes(2))
+  systemProperty(
+    "robolectric.dependency.repo.url",
+    "https://maven-central.storage-download.googleapis.com/maven2/"
+  )
   testLogging {
     events("passed", "failed", "skipped")
   }
@@ -94,6 +98,9 @@ tasks.withType<Test> {
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
+  implementation(project(":script-engine"))
+  implementation(project(":roto-engine"))
+  implementation(project(":depth-engine"))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -107,7 +114,7 @@ dependencies {
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
-  // implementation(libs.androidx.datastore.preferences)
+  implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -132,11 +139,12 @@ dependencies {
   implementation(libs.androidx.media3.effect)
   implementation(libs.androidx.media3.common)
   implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.ffmpeg.kit)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
-  // implementation(libs.okhttp)
+  implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

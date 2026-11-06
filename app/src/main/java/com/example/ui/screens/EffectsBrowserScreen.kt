@@ -26,8 +26,11 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Extension
@@ -43,6 +47,7 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -50,13 +55,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,8 +72,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -80,16 +89,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.data.model.AudioBand
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.CustomEffectPresetDocument
 import com.example.data.model.EffectNode
 import com.example.data.model.Layer
+import com.example.data.model.LayerType
 import com.example.engine.AudioSpectrumSnapshot
 import com.example.engine.EffectCategory
 import com.example.engine.EffectDefinition
 import com.example.engine.EffectThumbnailPreviewer
 import com.example.engine.EffectsCatalog
+import com.example.engine.InstalledPluginEffect
+import com.example.engine.InstalledPluginSuite
 import com.example.engine.PluginPackManager
+import com.example.engine.UiOptimizationEngine
 import com.example.ui.components.AmPrimaryCtaButton
 import com.example.ui.components.AmSegmentChip
 import com.example.ui.components.AmSquareIconButton
@@ -99,13 +113,27 @@ import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.AudioCyan
 import com.example.ui.theme.DeepBlack
 import com.example.ui.theme.ElectricBlue
+import com.example.ui.theme.KeyflowBlue
+import com.example.ui.theme.KeyflowBlueBright
+import com.example.ui.theme.KeyflowBlueContainer
+import com.example.ui.theme.KeyframeAmber
 import com.example.ui.theme.NeonPink
 import com.example.ui.theme.OutlineSubtle
+import com.example.ui.theme.PanelDark
+import com.example.ui.theme.SurfaceCard
 import com.example.ui.theme.SurfaceDark
+import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.viewmodel.UiState
 import kotlin.math.sin
+
+private data class EffectCategoryGroup(
+    val key: String,
+    val title: String,
+    val isPluginGroup: Boolean,
+    val effects: List<EffectDefinition>
+)
 
 @Composable
 fun EffectsBrowserScreen(
@@ -138,27 +166,108 @@ fun EffectsBrowserScreen(
         }
     }
 
-    val filteredEffects by remember(searchQuery, selectedCategory, selectedPluginSubcategory, pluginSuitesRevision) {
+    val installedSuites by PluginPackManager.installedSuites.collectAsStateWithLifecycle()
+
+    val pluginMapById = remember(installedSuites, pluginSuitesRevision) {
+        installedSuites.flatMap { it.effects }.associateBy { it.id }
+    }
+
+    // Dynamic `effect.json` category list from installed packs + official categories
+    val availablePluginCategories = remember(installedSuites, pluginSuitesRevision) {
+        val dynamicCats = installedSuites
+            .filter { it.enabled }
+            .flatMap { it.effects }
+            .map { it.category.trim().ifBlank { "Custom" } }
+            .distinct()
+        (dynamicCats + PluginPackManager.OFFICIAL_CATEGORIES).distinct()
+    }
+
+    val filteredEffects by remember(
+        searchQuery,
+        selectedCategory,
+        selectedPluginSubcategory,
+        pluginSuitesRevision,
+        installedSuites
+    ) {
         derivedStateOf {
             EffectsCatalog.allEffects.filter { fx ->
                 val matchesCat = selectedCategory == null || fx.category == selectedCategory
-                val matchesPluginSub = if (selectedCategory == EffectCategory.PLUGINS && selectedPluginSubcategory != null) {
-                    val plug = PluginPackManager.findPluginEffect(fx.id)
-                    plug?.category?.equals(selectedPluginSubcategory, ignoreCase = true) == true
+                val plug = pluginMapById[fx.id]
+                val matchesPluginSub = if (selectedPluginSubcategory != null &&
+                    (selectedCategory == null || selectedCategory == EffectCategory.PLUGINS)
+                ) {
+                    if (fx.category == EffectCategory.PLUGINS) {
+                        plug?.category?.equals(selectedPluginSubcategory, ignoreCase = true) == true
+                    } else {
+                        selectedCategory == null && false
+                    }
                 } else {
                     true
                 }
                 val matchesQuery = searchQuery.isBlank() ||
                     fx.name.contains(searchQuery, ignoreCase = true) ||
                     fx.id.contains(searchQuery, ignoreCase = true) ||
-                    fx.summary.contains(searchQuery, ignoreCase = true)
+                    fx.summary.contains(searchQuery, ignoreCase = true) ||
+                    (plug != null && (
+                        plug.suiteName.contains(searchQuery, ignoreCase = true) ||
+                            plug.author.contains(searchQuery, ignoreCase = true) ||
+                            plug.category.contains(searchQuery, ignoreCase = true)
+                        ))
                 matchesCat && matchesPluginSub && matchesQuery
             }
         }
     }
 
+    // Group effects cleanly:
+    // - Plugin effects are ALWAYS grouped by their `effect.json` `category`!
+    // - Built-in effects are grouped by their `EffectCategory.title`.
+    val groupedSections by remember(filteredEffects, pluginMapById) {
+        derivedStateOf {
+            val pluginFx = filteredEffects.filter { it.category == EffectCategory.PLUGINS }
+            val builtInFx = filteredEffects.filter { it.category != EffectCategory.PLUGINS }
+
+            val pluginGroups = pluginFx
+                .groupBy { fx ->
+                    pluginMapById[fx.id]?.category?.trim()?.takeIf { it.isNotEmpty() } ?: "Custom"
+                }
+                .entries
+                .sortedBy { it.key }
+                .map { (catName, list) ->
+                    EffectCategoryGroup(
+                        key = "plugin_cat_$catName",
+                        title = catName,
+                        isPluginGroup = true,
+                        effects = list
+                    )
+                }
+
+            val builtInGroups = builtInFx
+                .groupBy { it.category }
+                .entries
+                .map { (cat, list) ->
+                    EffectCategoryGroup(
+                        key = "builtin_cat_${cat.name}",
+                        title = cat.title,
+                        isPluginGroup = false,
+                        effects = list
+                    )
+                }
+
+            pluginGroups + builtInGroups
+        }
+    }
+
     var highlightedEffect by remember(pluginSuitesRevision) {
-        mutableStateOf(EffectsCatalog.allEffects.first())
+        mutableStateOf(
+            EffectsCatalog.allEffects.firstOrNull() ?: EffectsCatalog.findById("Gaussian_Blur")
+        )
+    }
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(gridState.isScrollInProgress) {
+        UiOptimizationEngine.setListScrolling(gridState.isScrollInProgress)
+    }
+    DisposableEffect(Unit) {
+        onDispose { UiOptimizationEngine.setListScrolling(false) }
     }
     val layerSig = remember(selectedLayer, playheadMs / 100L) {
         EffectThumbnailPreviewer.layerSignature(selectedLayer, playheadMs, audioSpectrum)
@@ -180,17 +289,19 @@ fun EffectsBrowserScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Effects",
+                            text = "Effects Library",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        if (selectedLayer != null) {
-                            Text(
-                                text = selectedLayer.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AmTealBright
-                            )
-                        }
+                        Text(
+                            text = if (selectedLayer != null) {
+                                "Target: ${selectedLayer.name} • ${filteredEffects.size} effects"
+                            } else {
+                                "${filteredEffects.size} effects available"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmTealBright
+                        )
                     }
                 },
                 actions = {
@@ -201,19 +312,19 @@ fun EffectsBrowserScreen(
                     ) {
                         AmSquareIconButton(
                             icon = Icons.Default.FileUpload,
-                            contentDescription = "Import .kfpack / .fppack",
+                            contentDescription = "Import .kfpack / .ffx",
                             tint = AmTealBright,
                             onClick = { importPluginLauncher.launch(arrayOf("*/*")) },
-                            sizeDp = 34.dp,
+                            sizeDp = 36.dp,
                             testTag = "effects_import_kfpack_button"
                         )
                         AmSquareIconButton(
                             icon = Icons.Default.Extension,
-                            contentDescription = "Effect Suites",
+                            contentDescription = "Manage Effect Packs",
                             active = selectedCategory == EffectCategory.PLUGINS,
                             tint = AmTealBright,
                             onClick = onOpenPluginManager,
-                            sizeDp = 34.dp,
+                            sizeDp = 36.dp,
                             testTag = "effects_open_plugins_button"
                         )
                         if (selectedLayer != null && selectedLayer.effects.isNotEmpty()) {
@@ -222,7 +333,7 @@ fun EffectsBrowserScreen(
                                 contentDescription = "Save effect chain to Cloud",
                                 tint = AmTeal,
                                 onClick = { onSaveChainAsPreset("${selectedLayer.name} Stack") },
-                                sizeDp = 34.dp,
+                                sizeDp = 36.dp,
                                 testTag = "save_effect_preset_button"
                             )
                         }
@@ -239,19 +350,33 @@ fun EffectsBrowserScreen(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Alight Motion Dark Search Bar
+            // 1. Sleek Search Input with quick clear
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = onSearchChange,
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AmTeal) },
-                placeholder = { Text("Search") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AmTealBright) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { onSearchChange("") }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search", tint = TextSecondary, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                },
+                placeholder = { Text("Search effects, .kfpack packs, or authors...", color = TextMuted) },
                 singleLine = true,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AmTeal,
+                    unfocusedBorderColor = OutlineSubtle,
+                    focusedContainerColor = SurfaceDark,
+                    unfocusedContainerColor = SurfaceDark
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("effects_search_input")
             )
 
+            // 2. Primary Category Filter Strip
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -260,8 +385,11 @@ fun EffectsBrowserScreen(
             ) {
                 AmSegmentChip(
                     label = "All",
-                    selected = selectedCategory == null,
-                    onClick = { onCategoryChange(null) },
+                    selected = selectedCategory == null && selectedPluginSubcategory == null,
+                    onClick = {
+                        onCategoryChange(null)
+                        onPluginSubcategoryChange(null)
+                    },
                     compact = true
                 )
                 EffectCategory.entries.forEach { cat ->
@@ -275,7 +403,8 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            if (selectedCategory == EffectCategory.PLUGINS) {
+            // 3. `effect.json` Sub-Category Filter Strip when browsing All or Plugins
+            if (selectedCategory == EffectCategory.PLUGINS || selectedPluginSubcategory != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -284,22 +413,15 @@ fun EffectsBrowserScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     AmSegmentChip(
-                        label = "Suites",
-                        selected = false,
-                        compact = true,
-                        onClick = onOpenPluginManager,
-                        testTag = "effects_manage_suites_chip"
-                    )
-                    AmSegmentChip(
-                        label = "All",
+                        label = "All Pack Categories",
                         selected = selectedPluginSubcategory == null,
                         compact = true,
                         onClick = { onPluginSubcategoryChange(null) }
                     )
-                    PluginPackManager.OFFICIAL_CATEGORIES.forEach { kfCat ->
+                    availablePluginCategories.forEach { kfCat ->
                         AmSegmentChip(
                             label = kfCat,
-                            selected = selectedPluginSubcategory == kfCat,
+                            selected = selectedPluginSubcategory.equals(kfCat, ignoreCase = true),
                             compact = true,
                             onClick = { onPluginSubcategoryChange(kfCat) }
                         )
@@ -307,6 +429,28 @@ fun EffectsBrowserScreen(
                 }
             }
 
+            // 4. Installed `.kfpack` Pack Metadata Strip: shows Pack Name, Author, and Version clearly!
+            if (installedSuites.isNotEmpty() && (selectedCategory == null || selectedCategory == EffectCategory.PLUGINS)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .testTag("installed_packs_metadata_strip"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    installedSuites.forEach { suite ->
+                        KfPackMetadataBadgeCard(
+                            suite = suite,
+                            onClick = {
+                                onCategoryChange(EffectCategory.PLUGINS)
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Cloud presets strip if available
             if (cloudPresetsState is UiState.Success && cloudPresetsState.data.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -325,7 +469,7 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            // Alight Motion Active Effect Strip Stack (with direct Delete & Inspect)
+            // Active Effect Stack on Selected Layer
             if (selectedLayer != null && selectedLayer.effects.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -344,13 +488,16 @@ fun EffectsBrowserScreen(
                 }
             }
 
-            // Alight Motion Featured "+ STANDARD SETTINGS" Bar with Selected Layer Live Preview!
+            // Highlighted Effect Preview Header Card (with Pack Name • Author • Version when plugin)
+            val highlightedPlug = pluginMapById[highlightedEffect.id]
+            val highlightedIncompatible = highlightedEffect.isTextOnly &&
+                selectedLayer != null && selectedLayer.type != LayerType.TEXT
             Card(
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, OutlineSubtle, RoundedCornerShape(12.dp))
+                    .border(1.dp, KeyflowBlue.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
             ) {
                 Row(
                     modifier = Modifier
@@ -365,55 +512,232 @@ fun EffectsBrowserScreen(
                         audioSpectrum = audioSpectrum,
                         layerSig = layerSig,
                         effect = highlightedEffect,
-                        accent = AmTealBright,
+                        accent = KeyflowBlueBright,
                         sizeDp = 50.dp
                     )
-                    Text(
-                        text = highlightedEffect.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = AmTealBright,
-                        modifier = Modifier.weight(1f)
-                    )
-                    AmPrimaryCtaButton(
-                        text = "Add",
-                        icon = Icons.Default.Add,
-                        onClick = { onAddEffect(highlightedEffect) },
-                        compact = true
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = highlightedEffect.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val detailLine = when {
+                            highlightedIncompatible -> "Requires a Text layer"
+                            highlightedPlug != null ->
+                                "${highlightedPlug.category} • ${highlightedPlug.suiteName} • by ${highlightedPlug.author} • v${highlightedPlug.version}"
+                            else -> highlightedEffect.summary
+                        }
+                        Text(
+                            text = detailLine,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (highlightedIncompatible) NeonPink else TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (highlightedIncompatible) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(NeonPink.copy(alpha = 0.14f))
+                                .border(1.dp, NeonPink.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("effect_text_only_locked_badge")
+                        ) {
+                            Text(
+                                text = "Text Only",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = NeonPink
+                            )
+                        }
+                    } else {
+                        AmPrimaryCtaButton(
+                            text = "Add",
+                            icon = Icons.Default.Add,
+                            onClick = { onAddEffect(highlightedEffect) },
+                            compact = true
+                        )
+                    }
                 }
             }
 
-            // Alight Motion Adaptive Rounded-Square Effect Icon Grid with Low-Res Layer+Effect Thumbnails
+            // 5. Categorized Effect Grid (grouped by `effect.json` category for packs & built-in category)
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 90.dp),
+                state = gridState,
+                columns = GridCells.Adaptive(minSize = 104.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .testTag("effects_4col_grid"),
-                contentPadding = PaddingValues(vertical = 4.dp),
+                contentPadding = PaddingValues(vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(filteredEffects, key = { it.id }) { fx ->
-                    val existingNode = addedByEffectId[fx.id]
-                    AmEffectGridTile(
-                        effect = fx,
-                        selectedLayer = selectedLayer,
-                        playheadMs = playheadMs,
-                        audioSpectrum = audioSpectrum,
-                        layerSig = layerSig,
-                        isHighlighted = highlightedEffect.id == fx.id,
-                        addedNode = existingNode,
-                        onTap = {
-                            highlightedEffect = fx
-                            onAddEffect(fx)
-                        },
-                        onRemoveAdded = existingNode?.let { node ->
-                            { onRemoveEffectNode(node.id) }
+                groupedSections.forEach { section ->
+                    item(
+                        key = "header_${section.key}",
+                        span = { GridItemSpan(maxLineSpan) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(width = 4.dp, height = 14.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(if (section.isPluginGroup) AmTealBright else KeyflowBlue)
+                                )
+                                Text(
+                                    text = section.title,
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = TextPrimary
+                                )
+                                if (section.isPluginGroup) {
+                                    Surface(
+                                        color = AmTeal.copy(alpha = 0.16f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "Pack Category",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                            color = AmTealBright,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "${section.effects.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
                         }
-                    )
+                    }
+
+                    itemsIndexed(
+                        items = section.effects,
+                        key = { idx, fx -> "${section.key}_${fx.id}_$idx" }
+                    ) { _, fx ->
+                        val existingNode = addedByEffectId[fx.id]
+                        val plugMeta = pluginMapById[fx.id]
+                        val isIncompatibleTextFx = fx.isTextOnly &&
+                            selectedLayer != null && selectedLayer.type != LayerType.TEXT
+                        AmEffectGridTile(
+                            effect = fx,
+                            pluginMeta = plugMeta,
+                            selectedLayer = selectedLayer,
+                            playheadMs = playheadMs,
+                            audioSpectrum = audioSpectrum,
+                            layerSig = layerSig,
+                            isHighlighted = highlightedEffect.id == fx.id,
+                            isDisabledForLayer = isIncompatibleTextFx,
+                            addedNode = existingNode,
+                            onTap = {
+                                highlightedEffect = fx
+                                if (!isIncompatibleTextFx) {
+                                    onAddEffect(fx)
+                                }
+                            },
+                            onRemoveAdded = existingNode?.let { node ->
+                                { onRemoveEffectNode(node.id) }
+                            }
+                        )
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KfPackMetadataBadgeCard(
+    suite: InstalledPluginSuite,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .testTag("pack_badge_${suite.id}"),
+        color = SurfaceCard,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (suite.enabled) AmTeal.copy(alpha = 0.45f) else OutlineSubtle
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(KeyflowBlue.copy(alpha = 0.28f), AmTeal.copy(alpha = 0.22f))
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Extension,
+                    contentDescription = suite.name,
+                    tint = AmTealBright,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = suite.name,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = TextPrimary,
+                        maxLines = 1
+                    )
+                    Surface(
+                        color = KeyflowBlue.copy(alpha = 0.22f),
+                        shape = RoundedCornerShape(5.dp)
+                    ) {
+                        Text(
+                            text = "v${suite.version}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                            color = KeyflowBlueBright,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                    if (suite.skippedEffectsReport.isNotEmpty()) {
+                        Icon(
+                            imageVector = Icons.Default.WarningAmber,
+                            contentDescription = "Skipped broken shader(s)",
+                            tint = KeyframeAmber,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "by ${suite.author} • ${suite.effects.size} FX",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = TextSecondary,
+                    maxLines = 1
+                )
             }
         }
     }
@@ -439,22 +763,24 @@ private fun AmEffectThumbnailBox(
         key2 = effect.id
     ) {
         if (value == null) {
-            value = EffectThumbnailPreviewer.generateLowResEffectThumbnail(
-                context = context,
-                selectedLayer = selectedLayer,
-                effect = effect,
-                playheadMs = playheadMs,
-                audio = audioSpectrum
-            )
+            value = runCatching {
+                EffectThumbnailPreviewer.generateLowResEffectThumbnail(
+                    context = context,
+                    selectedLayer = selectedLayer,
+                    effect = effect,
+                    playheadMs = playheadMs,
+                    audio = audioSpectrum
+                )
+            }.getOrNull()
         }
     }
 
     Box(
         modifier = Modifier
             .size(sizeDp)
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(DeepBlack)
-            .border(0.8.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(9.dp))
+            .border(0.8.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
             .testTag("effect_thumb_${effect.id}"),
         contentAlignment = Alignment.Center
     ) {
@@ -514,40 +840,45 @@ private fun AmEffectThumbnailBox(
 @Composable
 private fun AmEffectGridTile(
     effect: EffectDefinition,
+    pluginMeta: InstalledPluginEffect?,
     selectedLayer: Layer?,
     playheadMs: Long,
     audioSpectrum: AudioSpectrumSnapshot,
     layerSig: String,
     isHighlighted: Boolean,
+    isDisabledForLayer: Boolean = false,
     addedNode: EffectNode?,
     onTap: () -> Unit,
     onRemoveAdded: (() -> Unit)?
 ) {
     val accent = when (effect.category) {
-        EffectCategory.PLUGINS -> AmTealBright
+        EffectCategory.PLUGINS -> KeyflowBlueBright
         EffectCategory.DESKTOP_HOMAGE, EffectCategory.BLUR_OPTICS -> ElectricBlue
         EffectCategory.TRANSITIONS, EffectCategory.PARTICLES_LIGHT -> AudioCyan
-        EffectCategory.ALIGHT_STAPLES, EffectCategory.STYLIZE_EDGES -> AmTeal
+        EffectCategory.ALIGHT_STAPLES, EffectCategory.STYLIZE_EDGES -> KeyflowBlue
         EffectCategory.COLOR_LUTS, EffectCategory.GLITCH_VHS, EffectCategory.CAMERA_SHAKE -> NeonPink
     }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(114.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isHighlighted || addedNode != null) AmTeal.copy(alpha = 0.14f) else SurfaceDark)
+            .height(126.dp)
+            .alpha(if (isDisabledForLayer) 0.46f else 1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (isHighlighted || addedNode != null) KeyflowBlueContainer.copy(alpha = 0.68f) else PanelDark
+            )
             .border(
                 width = 1.dp,
                 color = when {
-                    addedNode != null -> AmTealBright
-                    isHighlighted -> AmTeal
+                    addedNode != null -> KeyflowBlueBright
+                    isHighlighted -> KeyflowBlue
                     else -> OutlineSubtle
                 },
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onTap)
-            .padding(6.dp)
+            .padding(horizontal = 7.dp, vertical = 8.dp)
             .testTag("effect_tile_${effect.id}")
     ) {
         Column(
@@ -555,7 +886,6 @@ private fun AmEffectGridTile(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Live Current-Frame Compressed (RGB_565) Layer + Effect Thumbnail Preview!
             AmEffectThumbnailBox(
                 selectedLayer = selectedLayer,
                 playheadMs = playheadMs,
@@ -566,36 +896,83 @@ private fun AmEffectGridTile(
                 sizeDp = 54.dp
             )
 
-            Text(
-                text = effect.name,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = effect.name,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+                if (pluginMeta != null) {
+                    Text(
+                        text = "${pluginMeta.suiteName} • v${pluginMeta.version}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = AmTealBright,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = pluginMeta.author,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                } else {
+                    Text(
+                        text = effect.category.title,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = TextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
         }
 
-        if (effect.category == EffectCategory.PLUGINS && addedNode == null) {
-            val plug = remember(effect.id) { PluginPackManager.findPluginEffect(effect.id) }
+        if (effect.isTextOnly && addedNode == null) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
+                    .align(Alignment.TopStart)
                     .clip(RoundedCornerShape(4.dp))
-                    .background(AmTealBright.copy(alpha = 0.22f))
+                    .background(
+                        if (isDisabledForLayer) NeonPink.copy(alpha = 0.25f) else KeyflowBlue.copy(alpha = 0.26f)
+                    )
                     .padding(horizontal = 4.dp, vertical = 1.dp)
             ) {
                 Text(
-                    text = if ((plug?.passes?.size ?: 1) > 1) "${plug?.passes?.size}P" else "KF",
-                    style = MaterialTheme.typography.labelSmall,
+                    text = "TEXT",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                     fontWeight = FontWeight.Bold,
-                    color = AmTealBright
+                    color = if (isDisabledForLayer) NeonPink else KeyflowBlueBright
                 )
             }
         }
 
-        // Quick Delete badge when this effect is already stacked on the selected layer
+        if (pluginMeta != null && addedNode == null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(KeyflowBlue.copy(alpha = 0.22f))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = if (pluginMeta.passes.size > 1) "${pluginMeta.passes.size}P" else "KF",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                    fontWeight = FontWeight.Bold,
+                    color = KeyflowBlueBright
+                )
+            }
+        }
+
         if (addedNode != null && onRemoveAdded != null) {
             Row(
                 modifier = Modifier
@@ -618,13 +995,13 @@ private fun AmEffectGridTile(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .clip(CircleShape)
-                    .background(AmTeal)
+                    .background(KeyflowBlue)
                     .padding(3.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = "Effect applied",
-                    tint = DeepBlack,
+                    tint = Color.White,
                     modifier = Modifier.size(11.dp)
                 )
             }
@@ -639,107 +1016,63 @@ private fun AmActiveEffectStripCard(
     onUpdate: (EffectNode) -> Unit,
     onRemove: () -> Unit
 ) {
-    Card(
+    val kfCount = remember(node) { node.allKeyframeTimes().size }
+    Row(
         modifier = Modifier
-            .width(262.dp)
-            .border(1.dp, AmTeal.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
-            .clickable(onClick = onInspect),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark)
+            .height(40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(SurfaceDark)
+            .border(1.dp, KeyflowBlue.copy(alpha = 0.50f), RoundedCornerShape(10.dp))
+            .clickable(onClick = onInspect)
+            .padding(start = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(onClick = onInspect)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DragHandle,
-                        contentDescription = null,
-                        tint = AmTealBright,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = node.displayName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                IconButton(
-                    onClick = { onUpdate(node.copy(enabled = !node.enabled)) },
-                    modifier = Modifier.size(30.dp)
-                ) {
-                    Icon(
-                        imageVector = if (node.enabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                        contentDescription = "Toggle effect visibility",
-                        tint = if (node.enabled) AmTeal else TextSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                IconButton(
-                    onClick = onRemove,
-                    modifier = Modifier
-                        .size(30.dp)
-                        .testTag("browser_delete_effect_${node.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "Delete ${node.displayName}",
-                        tint = NeonPink,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-            }
-
+        Icon(
+            imageVector = Icons.Default.DragHandle,
+            contentDescription = null,
+            tint = KeyflowBlueBright,
+            modifier = Modifier.size(15.dp)
+        )
+        Text(
+            text = node.displayName,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (kfCount > 0) {
             Text(
-                text = "${(node.intensity * 100).toInt()}%",
+                text = "◆$kfCount",
                 style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary
+                fontWeight = FontWeight.Bold,
+                color = KeyflowBlueBright
             )
-            Slider(
-                value = node.intensity,
-                onValueChange = { onUpdate(node.copy(intensity = it)) },
-                valueRange = 0f..1.5f,
-                colors = SliderDefaults.colors(thumbColor = AmTeal, activeTrackColor = AmTeal),
-                modifier = Modifier.height(24.dp)
+        }
+        IconButton(
+            onClick = { onUpdate(node.copy(enabled = !node.enabled)) },
+            modifier = Modifier.size(30.dp)
+        ) {
+            Icon(
+                imageVector = if (node.enabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                contentDescription = "Toggle effect visibility",
+                tint = if (node.enabled) KeyflowBlueBright else TextMuted,
+                modifier = Modifier.size(16.dp)
             )
-
-            Text(
-                text = "${(node.secondaryParam * 100).toInt()}%",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary
+        }
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier
+                .size(30.dp)
+                .testTag("browser_delete_effect_${node.id}")
+        ) {
+            Icon(
+                imageVector = Icons.Default.DeleteOutline,
+                contentDescription = "Delete ${node.displayName}",
+                tint = NeonPink,
+                modifier = Modifier.size(16.dp)
             )
-            Slider(
-                value = node.secondaryParam,
-                onValueChange = { onUpdate(node.copy(secondaryParam = it)) },
-                valueRange = 0f..1f,
-                colors = SliderDefaults.colors(thumbColor = AmTeal, activeTrackColor = AmTeal),
-                modifier = Modifier.height(24.dp)
-            )
-
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                AudioBand.entries.forEach { band ->
-                    AmSegmentChip(
-                        label = if (band == AudioBand.NONE) "Off" else band.name,
-                        selected = node.audioBoundBand == band,
-                        onClick = { onUpdate(node.copy(audioBoundBand = band)) },
-                        compact = true
-                    )
-                }
-            }
         }
     }
 }

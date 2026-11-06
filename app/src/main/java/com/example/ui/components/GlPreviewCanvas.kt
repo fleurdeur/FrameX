@@ -50,6 +50,7 @@ import com.example.engine.AnimationEvaluator
 import com.example.engine.AudioSpectrumSnapshot
 import com.example.engine.FramePollutionGlRenderer
 import com.example.engine.HardwareVideoPreviewEngine
+import com.example.engine.StudioPlaybackClock
 import com.example.ui.theme.AmTeal
 import com.example.ui.theme.AmTealBright
 import com.example.ui.theme.KeyflowBlue
@@ -91,11 +92,20 @@ fun GlPreviewCanvas(
     cameraDistance: Float,
     selectedLayerId: String? = null,
     show3DGridOverlay: Boolean = false,
+    activeCameraPreviewEnabled: Boolean = true,
     onViewportGesture: (zoom: Float, panX: Float, panY: Float) -> Unit,
     onDragSelectedLayer: ((dxProjPx: Float, dyProjPx: Float) -> Unit)? = null,
     onScaleAndRotateSelectedLayer: ((scalePctDelta: Float, rotDegDelta: Float) -> Unit)? = null,
     onSelectLayerOnCanvas: ((layerId: String) -> Unit)? = null,
+    onDeselectLayer: (() -> Unit)? = null,
     previewFrameSampler: PreviewFrameSampler? = null,
+    rotoBrushActive: Boolean = false,
+    rotoBrushRadiusDp: Float = 18f,
+    rotoPreviewStrokesNormalized: List<List<Offset>> = emptyList(),
+    onRotoStrokeCompleted: ((List<Offset>) -> Unit)? = null,
+    penMaskEditActive: Boolean = false,
+    penMaskPointsNormalized: List<Offset> = emptyList(),
+    onPenMaskPointAdded: ((Offset) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -103,27 +113,58 @@ fun GlPreviewCanvas(
 
     val glViewRef = remember { arrayOfNulls<GLSurfaceView>(1) }
     val renderer = remember(context) {
+        val initialLiveMs = if (isPlaying && StudioPlaybackClock.isPlaying()) {
+            StudioPlaybackClock.samplePlayheadMs()
+        } else {
+            playheadMs
+        }
         FramePollutionGlRenderer(
             appContext = context.applicationContext,
             onAsyncMediaReady = {
                 glViewRef[0]?.requestRender()
             }
-        )
+        ).apply {
+            this.currentProject = project
+            this.playheadMs = initialLiveMs
+            this.playbackAnchorMs = initialLiveMs
+            this.playbackAnchorNano = System.nanoTime()
+            this.isPlaying = isPlaying
+            this.isLooping = isLooping
+            this.previewQuality = previewQuality
+            this.previewFpsCap = previewFpsCap
+            this.projectRevision = projectRevision
+            this.usePlaybackCache = usePlaybackCache
+            this.audioSnapshot = audioSnapshot
+            this.cameraYawDeg = cameraYawDeg
+            this.cameraPitchDeg = cameraPitchDeg
+            this.cameraDistance = cameraDistance
+            this.show3DGridOverlay = show3DGridOverlay
+            this.applyCameraInPreview = activeCameraPreviewEnabled
+        }
     }
     val glView = remember(context) {
         GLSurfaceView(context).apply {
             setEGLContextClientVersion(2)
             setEGLConfigChooser(8, 8, 8, 8, 16, 0)
             setRenderer(renderer)
-            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+            renderMode = if (isPlaying) {
+                GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            } else {
+                GLSurfaceView.RENDERMODE_WHEN_DIRTY
+            }
             glViewRef[0] = this
         }
     }
 
-    // Lock VSync playback anchor whenever play/pause state transitions
+    // Lock VSync playback anchor whenever play/pause state transitions without ever resetting to 0
     LaunchedEffect(isPlaying) {
         if (isPlaying) {
-            renderer.playbackAnchorMs = playheadMs
+            val liveMs = if (StudioPlaybackClock.isPlaying()) {
+                StudioPlaybackClock.samplePlayheadMs()
+            } else {
+                playheadMs
+            }
+            renderer.playbackAnchorMs = liveMs
             renderer.playbackAnchorNano = System.nanoTime()
             renderer.isPlaying = true
             glView.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
@@ -166,20 +207,11 @@ fun GlPreviewCanvas(
         renderer.cameraPitchDeg = cameraPitchDeg
         renderer.cameraDistance = cameraDistance
         renderer.show3DGridOverlay = show3DGridOverlay
+        renderer.applyCameraInPreview = activeCameraPreviewEnabled
         previewFrameSampler?.glViewProvider = { glViewRef[0] }
         if (!isPlaying) {
             renderer.playheadMs = playheadMs
             glView.requestRender()
-        } else {
-            // Keep VSync anchor drift-corrected only on genuine loop wraps or scrub jumps (> 300ms)
-            val nowNano = System.nanoTime()
-            val dur = project.durationMs.coerceAtLeast(1L)
-            val rawExpected = renderer.playbackAnchorMs + (nowNano - renderer.playbackAnchorNano) / 1_000_000L
-            val expectedMs = if (isLooping) rawExpected % dur else rawExpected.coerceAtMost(dur)
-            if (abs(expectedMs - playheadMs) > 300L) {
-                renderer.playbackAnchorMs = playheadMs
-                renderer.playbackAnchorNano = nowNano
-            }
         }
     }
 
@@ -207,6 +239,8 @@ fun GlPreviewCanvas(
     val currentDragCallback by rememberUpdatedState(onDragSelectedLayer)
     val currentScaleRotateCallback by rememberUpdatedState(onScaleAndRotateSelectedLayer)
     val currentSelectLayerCallback by rememberUpdatedState(onSelectLayerOnCanvas)
+    val currentDeselectCallback by rememberUpdatedState(onDeselectLayer)
+    val currentActiveCamPreview by rememberUpdatedState(activeCameraPreviewEnabled)
     val currentViewportCallback by rememberUpdatedState(onViewportGesture)
     val currentProjectWidth by rememberUpdatedState(project.width.coerceAtLeast(1))
     val currentZoom by rememberUpdatedState(canvasZoom)
@@ -243,6 +277,8 @@ fun GlPreviewCanvas(
                     awaitEachGesture {
                         var gestureMode = 0 // 0=move, 1=scaleCorner, 2=rotateKnob
                         var totalMoved = 0f
+                        var dragStarted = false
+                        val dragSlopPx = 12f
                         var initialDownPos = Offset.Zero
                         var downRecorded = false
 
@@ -261,13 +297,15 @@ fun GlPreviewCanvas(
                                     val scaleToCanvas = frameWidthPx / projW
                                     val tr = AnimationEvaluator.evaluateWorldTransform(
                                         sel, currentProject.layers, currentPlayheadMs, currentAudioSnapshot,
-                                        applyActiveCamera = sel.type != LayerType.CAMERA
+                                        applyActiveCamera = currentActiveCamPreview && sel.type != LayerType.CAMERA
                                     )
                                     val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
                                     val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
                                     val (bw, bh) = computeLayerProjBounds(sel, projW, projH)
-                                    val hw = (bw * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(16f)
-                                    val hh = (bh * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(14f)
+                                    val foreshortenX = abs(kotlin.math.cos(Math.toRadians(tr.rotY.toDouble()))).toFloat().coerceAtLeast(0.10f)
+                                    val foreshortenY = abs(kotlin.math.cos(Math.toRadians(tr.rotX.toDouble()))).toFloat().coerceAtLeast(0.10f)
+                                    val hw = (bw * 0.5f * scaleToCanvas * tr.scale * foreshortenX).coerceAtLeast(16f)
+                                    val hh = (bh * 0.5f * scaleToCanvas * tr.scale * foreshortenY).coerceAtLeast(14f)
                                     // Inverse-rotate touch point around layer center to check gizmo handles
                                     val rad = -Math.toRadians(tr.rotZ.toDouble())
                                     val dx = initialDownPos.x - cx
@@ -294,6 +332,7 @@ fun GlPreviewCanvas(
                                 val pan = event.calculatePan()
                                 if (zoom != 1f || pan != Offset.Zero) {
                                     totalMoved += pan.getDistance() + abs(zoom - 1f) * 100f
+                                    dragStarted = true
                                     currentViewportCallback(zoom, pan.x, pan.y)
                                     event.changes.forEach { if (it.positionChanged()) it.consume() }
                                 }
@@ -301,8 +340,11 @@ fun GlPreviewCanvas(
                                 val pan = event.calculatePan()
                                 if (pan != Offset.Zero) {
                                     totalMoved += pan.getDistance()
+                                    if (!dragStarted && totalMoved >= dragSlopPx) {
+                                        dragStarted = true
+                                    }
                                     val sel = currentSelected
-                                    if (sel != null && sel.type != LayerType.AUDIO) {
+                                    if (dragStarted && sel != null && sel.type != LayerType.AUDIO && !sel.locked) {
                                         when (gestureMode) {
                                             2 -> {
                                                 // Rotate around layer center
@@ -310,7 +352,7 @@ fun GlPreviewCanvas(
                                                 val scaleToCanvas = frameWidthPx / projW
                                                 val tr = AnimationEvaluator.evaluateWorldTransform(
                                                     sel, currentProject.layers, currentPlayheadMs, currentAudioSnapshot,
-                                                    applyActiveCamera = sel.type != LayerType.CAMERA
+                                                    applyActiveCamera = currentActiveCamPreview && sel.type != LayerType.CAMERA
                                                 )
                                                 val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
                                                 val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
@@ -329,7 +371,7 @@ fun GlPreviewCanvas(
                                                 val scaleToCanvas = frameWidthPx / projW
                                                 val tr = AnimationEvaluator.evaluateWorldTransform(
                                                     sel, currentProject.layers, currentPlayheadMs, currentAudioSnapshot,
-                                                    applyActiveCamera = sel.type != LayerType.CAMERA
+                                                    applyActiveCamera = currentActiveCamPreview && sel.type != LayerType.CAMERA
                                                 )
                                                 val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
                                                 val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
@@ -351,16 +393,21 @@ fun GlPreviewCanvas(
                             }
                         } while (event.changes.any { it.pressed })
 
-                        // Tap-to-Select Layer directly on Canvas when user taps without dragging!
-                        if (downRecorded && totalMoved < 8f && currentSelectLayerCallback != null) {
+                        // Tap-to-Select / Tap-Empty-Space-to-Deselect Layer directly on Canvas!
+                        if (downRecorded && !dragStarted) {
                             val projW = currentProject.width.coerceAtLeast(1).toFloat()
                             val projH = currentProject.height.coerceAtLeast(1).toFloat()
                             val scaleToCanvas = frameWidthPx / projW
                             val hitLayer = currentProject.layers.asReversed().firstOrNull { cand ->
-                                if (!cand.visible || cand.type == LayerType.AUDIO || cand.type == LayerType.CAMERA) return@firstOrNull false
+                                if (!cand.visible || cand.type == LayerType.AUDIO) return@firstOrNull false
+                                if (cand.type == LayerType.CAMERA && currentActiveCamPreview) return@firstOrNull false
                                 if (currentPlayheadMs !in cand.startTimeMs..cand.endTimeMs) return@firstOrNull false
                                 val tr = AnimationEvaluator.evaluateWorldTransform(
-                                    cand, currentProject.layers, currentPlayheadMs, currentAudioSnapshot, applyActiveCamera = true
+                                    cand,
+                                    currentProject.layers,
+                                    currentPlayheadMs,
+                                    currentAudioSnapshot,
+                                    applyActiveCamera = currentActiveCamPreview && cand.type != LayerType.CAMERA
                                 )
                                 val cx = frameWidthPx * 0.5f + tr.posX * scaleToCanvas
                                 val cy = frameHeightPx * 0.5f + tr.posY * scaleToCanvas
@@ -370,7 +417,15 @@ fun GlPreviewCanvas(
                                 abs(initialDownPos.x - cx) <= hw && abs(initialDownPos.y - cy) <= hh
                             }
                             if (hitLayer != null) {
-                                currentSelectLayerCallback?.invoke(hitLayer.id)
+                                if (currentSelected?.id == hitLayer.id) {
+                                    // Unclicking the already-selected layer unloads all white gizmo handles & bottom dock!
+                                    currentDeselectCallback?.invoke() ?: currentSelectLayerCallback?.invoke(hitLayer.id)
+                                } else {
+                                    currentSelectLayerCallback?.invoke(hitLayer.id)
+                                }
+                            } else if (currentSelected != null) {
+                                // Tapping empty canvas space unloads selection completely!
+                                currentDeselectCallback?.invoke()
                             }
                         }
                     }
@@ -384,7 +439,86 @@ fun GlPreviewCanvas(
                 }
             )
 
-            // 1:1 Alight Motion Selected Layer Transform Bounding Box & Snap Guides Overlay (only when visible & spatial)
+            // Custom View (Camera Off) 3D Camera Frustum Wireframe Overlay (matches KeyFlow Reference 1)
+            val activeCamLayer = remember(project.layers, playheadMs, activeCameraPreviewEnabled) {
+                if (!activeCameraPreviewEnabled) {
+                    project.layers.lastOrNull {
+                        it.visible && it.type == LayerType.CAMERA && playheadMs in it.startTimeMs..it.endTimeMs
+                    }
+                } else null
+            }
+            if (activeCamLayer != null) {
+                val camTr = AnimationEvaluator.evaluateWorldTransform(
+                    layer = activeCamLayer,
+                    allLayers = project.layers,
+                    timeMs = playheadMs,
+                    audio = audioSnapshot,
+                    applyActiveCamera = false
+                )
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val projW = project.width.coerceAtLeast(1).toFloat()
+                    val projH = project.height.coerceAtLeast(1).toFloat()
+                    val scaleToCanvas = size.width / projW
+                    val cx = size.width * 0.5f + camTr.posX * scaleToCanvas
+                    val cy = size.height * 0.5f + camTr.posY * scaleToCanvas
+                    val depthFactor = (1f - camTr.posZ / 900f).coerceIn(0.25f, 3.5f)
+                    val fw = (projW * 0.45f * scaleToCanvas * camTr.scale * depthFactor).coerceAtLeast(24f)
+                    val fh = (projH * 0.45f * scaleToCanvas * camTr.scale * depthFactor).coerceAtLeast(24f)
+                    val frustumColor = Color(0xFF6BA6FF)
+
+                    withTransform({
+                        translate(left = cx, top = cy)
+                        rotate(degrees = camTr.rotZ, pivot = Offset.Zero)
+                    }) {
+                        val tl = Offset(-fw, -fh)
+                        val trPt = Offset(fw, -fh)
+                        val br = Offset(fw, fh)
+                        val bl = Offset(-fw, fh)
+                        val apex = Offset(fw * 1.15f, fh * 1.45f)
+
+                        // Camera viewport plane fill + border
+                        drawRect(
+                            color = frustumColor.copy(alpha = 0.08f),
+                            topLeft = tl,
+                            size = Size(fw * 2f, fh * 2f)
+                        )
+                        drawRect(
+                            color = frustumColor,
+                            topLeft = tl,
+                            size = Size(fw * 2f, fh * 2f),
+                            style = Stroke(width = 2.0f)
+                        )
+                        // 4 Frustum rays to 3D camera cube apex
+                        drawLine(frustumColor, tl, apex, strokeWidth = 1.6f)
+                        drawLine(frustumColor, trPt, apex, strokeWidth = 1.6f)
+                        drawLine(frustumColor, br, apex, strokeWidth = 1.6f)
+                        drawLine(frustumColor, bl, apex, strokeWidth = 1.6f)
+
+                        // 3D Isometric Wireframe Camera Cube at apex
+                        val cs = 12.dp.toPx()
+                        val frontOff = Offset(-cs * 0.5f, -cs * 0.5f)
+                        val backOff = Offset(-cs * 0.1f, -cs * 0.85f)
+                        drawRect(
+                            color = frustumColor,
+                            topLeft = apex + frontOff,
+                            size = Size(cs, cs),
+                            style = Stroke(width = 1.7f)
+                        )
+                        drawRect(
+                            color = frustumColor.copy(alpha = 0.85f),
+                            topLeft = apex + backOff,
+                            size = Size(cs, cs),
+                            style = Stroke(width = 1.5f)
+                        )
+                        drawLine(frustumColor, apex + frontOff, apex + backOff, strokeWidth = 1.4f)
+                        drawLine(frustumColor, apex + frontOff + Offset(cs, 0f), apex + backOff + Offset(cs, 0f), strokeWidth = 1.4f)
+                        drawLine(frustumColor, apex + frontOff + Offset(0f, cs), apex + backOff + Offset(0f, cs), strokeWidth = 1.4f)
+                        drawLine(frustumColor, apex + frontOff + Offset(cs, cs), apex + backOff + Offset(cs, cs), strokeWidth = 1.4f)
+                    }
+                }
+            }
+
+            // 1:1 KeyFlow Selected Layer Transform Bounding Box & Snap Guides Overlay (unloaded immediately when deselected!)
             if (!isPlaying && selectedLayer != null && selectedLayer.visible &&
                 selectedLayer.type != LayerType.AUDIO &&
                 playheadMs in selectedLayer.startTimeMs..selectedLayer.endTimeMs
@@ -394,7 +528,7 @@ fun GlPreviewCanvas(
                     allLayers = project.layers,
                     timeMs = playheadMs,
                     audio = audioSnapshot,
-                    applyActiveCamera = selectedLayer.type != LayerType.CAMERA
+                    applyActiveCamera = activeCameraPreviewEnabled && selectedLayer.type != LayerType.CAMERA
                 )
 
                 Canvas(modifier = Modifier.fillMaxSize()) {
@@ -426,13 +560,15 @@ fun GlPreviewCanvas(
                     }
 
                     val (baseProjW, baseProjH) = computeLayerProjBounds(selectedLayer, projW, projH)
-                    val hw = (baseProjW * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(16f)
-                    val hh = (baseProjH * 0.5f * scaleToCanvas * tr.scale).coerceAtLeast(14f)
+                    val foreshortenX = abs(kotlin.math.cos(Math.toRadians(tr.rotY.toDouble()))).toFloat().coerceAtLeast(0.10f)
+                    val foreshortenY = abs(kotlin.math.cos(Math.toRadians(tr.rotX.toDouble()))).toFloat().coerceAtLeast(0.10f)
+                    val hw = (baseProjW * 0.5f * scaleToCanvas * tr.scale * foreshortenX).coerceAtLeast(16f)
+                    val hh = (baseProjH * 0.5f * scaleToCanvas * tr.scaleY * foreshortenY).coerceAtLeast(14f)
                     val gizmoColor = if (selectedLayer.type == LayerType.CAMERA) KeyframeAmber else KeyflowBlue
                     val boxDash = PathEffect.dashPathEffect(floatArrayOf(13f, 10f), 0f)
                     val pivotCanvasOffset = Offset(
                         x = tr.pivotX * scaleToCanvas * tr.scale,
-                        y = tr.pivotY * scaleToCanvas * tr.scale
+                        y = tr.pivotY * scaleToCanvas * tr.scaleY
                     )
 
                     withTransform({
@@ -495,6 +631,126 @@ fun GlPreviewCanvas(
                     }
                 }
             }
+
+            // Preview-ONLY Red Roto Brush & Pen Mask Interactive Overlay (never rendered into export!)
+            if (rotoBrushActive || penMaskEditActive || rotoPreviewStrokesNormalized.isNotEmpty() || penMaskPointsNormalized.isNotEmpty()) {
+                val activeStrokePts = remember { androidx.compose.runtime.mutableStateListOf<Offset>() }
+                val currentOnRotoDone by rememberUpdatedState(onRotoStrokeCompleted)
+                val currentOnPenTap by rememberUpdatedState(onPenMaskPointAdded)
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("roto_pen_preview_overlay")
+                        .then(
+                            if (rotoBrushActive || penMaskEditActive) {
+                                Modifier.pointerInput(rotoBrushActive, penMaskEditActive) {
+                                    awaitEachGesture {
+                                        val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: return@awaitEachGesture
+                                        down.consume()
+                                        val wPx = size.width.toFloat().coerceAtLeast(1f)
+                                        val hPx = size.height.toFloat().coerceAtLeast(1f)
+                                        val normDown = Offset(
+                                            (down.position.x / wPx).coerceIn(0f, 1f),
+                                            (down.position.y / hPx).coerceIn(0f, 1f)
+                                        )
+                                        if (penMaskEditActive && !rotoBrushActive) {
+                                            currentOnPenTap?.invoke(normDown)
+                                            return@awaitEachGesture
+                                        }
+                                        activeStrokePts.clear()
+                                        activeStrokePts.add(normDown)
+                                        while (true) {
+                                            val ev = awaitPointerEvent()
+                                            val pressed = ev.changes.firstOrNull { it.pressed }
+                                            if (pressed == null) break
+                                            if (pressed.positionChanged()) {
+                                                pressed.consume()
+                                                activeStrokePts.add(
+                                                    Offset(
+                                                        (pressed.position.x / wPx).coerceIn(0f, 1f),
+                                                        (pressed.position.y / hPx).coerceIn(0f, 1f)
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        if (activeStrokePts.isNotEmpty()) {
+                                            currentOnRotoDone?.invoke(activeStrokePts.toList())
+                                            activeStrokePts.clear()
+                                        }
+                                    }
+                                }
+                            } else Modifier
+                        )
+                ) {
+                    val strokePx = with(density) { rotoBrushRadiusDp.dp.toPx() * 2f }.coerceAtLeast(8f)
+                    val redBrushColor = Color(0x8CFF2A4B)
+                    val drawNormStroke = { pts: List<Offset> ->
+                        if (pts.size == 1) {
+                            drawCircle(
+                                color = redBrushColor,
+                                radius = strokePx * 0.5f,
+                                center = Offset(pts[0].x * size.width, pts[0].y * size.height)
+                            )
+                        } else if (pts.size >= 2) {
+                            val p = androidx.compose.ui.graphics.Path().apply {
+                                pts.forEachIndexed { idx, pt ->
+                                    val x = pt.x * size.width
+                                    val y = pt.y * size.height
+                                    if (idx == 0) moveTo(x, y) else lineTo(x, y)
+                                }
+                            }
+                            drawPath(
+                                path = p,
+                                color = redBrushColor,
+                                style = Stroke(
+                                    width = strokePx,
+                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
+                    rotoPreviewStrokesNormalized.forEach { drawNormStroke(it) }
+                    if (activeStrokePts.isNotEmpty()) {
+                        drawNormStroke(activeStrokePts)
+                    }
+                    if (penMaskPointsNormalized.isNotEmpty()) {
+                        val penPath = androidx.compose.ui.graphics.Path()
+                        penMaskPointsNormalized.forEachIndexed { idx, pt ->
+                            val px = pt.x * size.width
+                            val py = pt.y * size.height
+                            if (idx == 0) penPath.moveTo(px, py) else penPath.lineTo(px, py)
+                        }
+                        if (penMaskPointsNormalized.size >= 3) {
+                            penPath.close()
+                        }
+                        drawPath(penPath, color = AmTealBright, style = Stroke(width = 2.4f))
+                        penMaskPointsNormalized.forEach { pt ->
+                            val center = Offset(pt.x * size.width, pt.y * size.height)
+                            drawCircle(Color.White, radius = 6f, center = center)
+                            drawCircle(KeyflowBlue, radius = 6f, center = center, style = Stroke(width = 2f))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!activeCameraPreviewEnabled) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xD9090B0F))
+                    .border(0.8.dp, KeyflowBlue.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = "Custom View · not the render",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AmTealBright
+                )
+            }
         }
 
         if (canvasZoom != 1f || canvasPanX != 0f || canvasPanY != 0f) {
@@ -534,9 +790,11 @@ private fun computeLayerProjBounds(layer: Layer, projW: Float, projH: Float): Pa
                 Pair(s, s)
             }
         }
+        LayerType.DRAWING -> Pair(projW * 0.75f, projH * 0.75f)
         LayerType.TEXT -> Pair(projW * 0.72f, minDim * 0.20f)
         LayerType.CAMERA -> Pair(projW * 0.90f, projH * 0.90f)
         LayerType.NULL_OBJECT -> Pair(minDim * 0.16f, minDim * 0.16f)
+        LayerType.GROUP -> Pair(projW * 0.65f, projH * 0.65f)
         LayerType.MODEL_3D -> Pair(minDim * 0.44f, minDim * 0.44f)
         LayerType.AUDIO -> Pair(0f, 0f)
     }

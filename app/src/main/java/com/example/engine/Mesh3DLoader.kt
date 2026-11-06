@@ -202,13 +202,15 @@ object Mesh3DLoader {
         Matrix.perspectiveM(proj, 0, 45f, aspectRatio.coerceAtLeast(0.1f), 0.1f, 100f)
 
         val yawRad = Math.toRadians(camYawDeg.toDouble())
-        val pitchRad = Math.toRadians(camPitchDeg.coerceIn(-80f, 80f).toDouble())
+        val pitchRad = Math.toRadians(camPitchDeg.toDouble())
         val dist = camDistance.coerceIn(1.8f, 18f)
-        val eyeX = (dist * cos(pitchRad) * sin(yawRad)).toFloat()
+        val cosPitch = cos(pitchRad)
+        val eyeX = (dist * cosPitch * sin(yawRad)).toFloat()
         val eyeY = (dist * sin(pitchRad)).toFloat()
-        val eyeZ = (dist * cos(pitchRad) * cos(yawRad)).toFloat()
+        val eyeZ = (dist * cosPitch * cos(yawRad)).toFloat()
+        val upY = if (cosPitch >= 0.0) 1f else -1f
 
-        Matrix.setLookAtM(view, 0, eyeX, eyeY, eyeZ, 0f, 0f, 0f, 0f, 1f, 0f)
+        Matrix.setLookAtM(view, 0, eyeX, eyeY, eyeZ, 0f, 0f, 0f, 0f, upY, 0f)
 
         Matrix.setIdentityM(model, 0)
         Matrix.translateM(model, 0, layerPosX / 500f, -layerPosY / 500f, layerPosZ / 500f)

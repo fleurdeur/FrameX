@@ -34,8 +34,7 @@ class ProjectRepository(private val db: FirebaseFirestore) {
     private val auth = Firebase.auth
 
     private fun requireUserId(): String {
-        return auth.currentUser?.uid
-            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+        return auth.currentUser?.uid ?: "guest_user"
     }
 
     fun observeProjects(userId: String): Flow<List<Project>> {
@@ -103,6 +102,9 @@ class ProjectRepository(private val db: FirebaseFirestore) {
         return try {
             val existingCreatedAt = project.createdAt ?: run {
                 val existingSnap = docRef.get().await()
+                if (!existingSnap.exists()) {
+                    return createProject(project).map { Unit }
+                }
                 existingSnap.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             }
             requireNotNull(existingCreatedAt) { "Project createdAt must not be null for update" }
