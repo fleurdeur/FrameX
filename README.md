@@ -17,18 +17,6 @@
 
 editing app
 
-## 📸 Screenshots
-
-![Screenshot 20261102 154532 6288e7f1](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154532_6288e7f1.jpg)
-
-![Screenshot 20261102 154541 fe9a5163](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154541_fe9a5163.jpg)
-
-![Screenshot 20261102 154550 a40757ac](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154550_a40757ac.jpg)
-
-![Screenshot 20261102 154552 87886b99](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154552_87886b99.jpg)
-
-![image 4dc1df4e](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/image_4dc1df4e.png)
-
 ## 🛠️ Tech Stack
 
 ![Android (Native)](https://img.shields.io/badge/Android%20(Native)-3DDC84?style=for-the-badge&logo=android&logoColor=white) ![Java (Gradle)](https://img.shields.io/badge/Java%20(Gradle)-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)
