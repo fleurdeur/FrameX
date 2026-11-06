@@ -5,6 +5,7 @@
 ## 📑 Table of Contents
 
 - [Description](#description)
+- [Screenshots](#screenshots)
 - [Tech Stack](#tech-stack)
 - [Quick Start](#quick-start)
 - [Project Structure](#project-structure)
@@ -15,6 +16,18 @@
 ## 📝 Description
 
 editing app
+
+## 📸 Screenshots
+
+![Screenshot 20261102 154532 6288e7f1](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154532_6288e7f1.jpg)
+
+![Screenshot 20261102 154541 fe9a5163](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154541_fe9a5163.jpg)
+
+![Screenshot 20261102 154550 a40757ac](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154550_a40757ac.jpg)
+
+![Screenshot 20261102 154552 87886b99](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/Screenshot_20261102-154552_87886b99.jpg)
+
+![image 4dc1df4e](https://raw.githubusercontent.com/fleurdeur/FrameX/main/public/assets/aistudio/image_4dc1df4e.png)
 
 ## 🛠️ Tech Stack
 
@@ -34,6 +47,12 @@ git clone https://github.com/fleurdeur/FrameX.git
 
 ```
 .
+├── .aistudio
+│   └── artifacts
+│       └── brain
+│           └── 590f5abc-e593-4bb6-8295-1f0d39768b04
+│               └── .tempmediaStorage
+│                   └── ...
 ├── .env.example
 ├── app
 │   ├── build.gradle.kts
@@ -74,6 +93,15 @@ git clone https://github.com/fleurdeur/FrameX.git
 │               └── com
 │                   └── ...
 ├── build.gradle.kts
+├── depth-engine
+│   ├── build.gradle.kts
+│   └── src
+│       └── main
+│           ├── cpp
+│           │   └── depth_anything_jni.cpp
+│           └── java
+│               └── com
+│                   └── ...
 ├── firebase-blueprint.json
 ├── firebase.json
 ├── firestore.rules
@@ -84,6 +112,41 @@ git clone https://github.com/fleurdeur/FrameX.git
 │       └── gradle-wrapper.properties
 ├── gradle.properties
 ├── metadata.json
+├── public
+│   └── assets
+│       └── aistudio
+│           ├── KeyEase_38e4fe05.zip
+│           ├── KeyEase_Editor_Upgrade_Agent_Instructions_short_9ac66ef7.txt
+│           ├── New_Project_25_d896cc7c.xml
+│           ├── PLUGIN_MAKER_GUIDE_88f67588.txt
+│           ├── PROMPT_TEMPLATE_FOR_AI_eb3ce931.txt
+│           ├── Screenshot_20261102-154532_6288e7f1.jpg
+│           ├── Screenshot_20261102-154541_fe9a5163.jpg
+│           ├── Screenshot_20261102-154550_a40757ac.jpg
+│           ├── Screenshot_20261102-154552_87886b99.jpg
+│           ├── Textevo_2026.1.0_44c54978.zip
+│           ├── image_4dc1df4e.png
+│           └── rena_-_copines___1__a27650f7.xml
+├── roto-engine
+│   ├── build.gradle.kts
+│   └── src
+│       └── main
+│           ├── cpp
+│           │   └── roto_flow_jni.cpp
+│           └── java
+│               └── com
+│                   └── ...
+├── script-engine
+│   ├── build.gradle.kts
+│   └── src
+│       └── main
+│           ├── assets
+│           │   └── ae_text_animator_mapping.json
+│           ├── cpp
+│           │   └── extendscript_jni_stub.cpp
+│           └── java
+│               └── com
+│                   └── ...
 ├── security_spec.md
 └── settings.gradle.kts
 ```
